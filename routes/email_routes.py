@@ -32,7 +32,7 @@ from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-from fastapi import APIRouter, Query, UploadFile, File, BackgroundTasks, HTTPException, Depends, Request
+from fastapi import APIRouter, Query, UploadFile, File, BackgroundTasks, HTTPException, Depends, Request, Body
 from fastapi.responses import FileResponse
 from src.constants import DATA_DIR
 
@@ -1943,6 +1943,10 @@ def setup_email_routes():
                 if not _store_email_flag(conn, uid, "\\Seen", add=False):
                     return {"success": False, "error": "Email not found"}
             _invalidate_list_cache(account_id, folder)
+            from routes.email_local_store import mirror_imap_read_state
+            await asyncio.to_thread(
+                mirror_imap_read_state, owner, account_id or "", folder, uid, False,
+            )
             return {"success": True}
         except Exception as e:
             logger.error(f"Failed to mark unread {uid}: {e}")
@@ -1973,6 +1977,10 @@ def setup_email_routes():
                 if not _store_email_flag(conn, uid, "\\Seen", add=True):
                     return {"success": False, "error": "Email not found"}
             _invalidate_list_cache(account_id, folder)
+            from routes.email_local_store import mirror_imap_read_state
+            await asyncio.to_thread(
+                mirror_imap_read_state, owner, account_id or "", folder, uid, True,
+            )
             return {"success": True}
         except Exception as e:
             logger.error(f"Failed to mark read {uid}: {e}")
@@ -3666,7 +3674,6 @@ def setup_email_routes():
         access_token = data.get("access_token", "")
         refresh_token = data.get("refresh_token", "")
         expiry = str(int(time.time()) + data.get("expires_in", 3600))
-        # Fetch the email address from userinfo so we can auto-fill imap_user.
         email_addr = ""
         display_name = ""
         try:
@@ -3685,7 +3692,6 @@ def setup_email_routes():
             row = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
             if not row:
                 return _RR("/?section=integrations&email_oauth_error=account_not_found")
-            # SECURITY: verify the account belongs to the initiating user.
             if owner and row.owner and row.owner != owner:
                 logger.warning("OAuth callback owner mismatch — rejecting token write")
                 return _RR("/?section=integrations&email_oauth_error=ownership_error")
@@ -3694,7 +3700,6 @@ def setup_email_routes():
             if refresh_token:
                 row.oauth_refresh_token = _enc(refresh_token)
             row.oauth_token_expiry = expiry
-            # Auto-fill Google IMAP/SMTP settings if not already configured.
             if not row.imap_host:
                 row.imap_host = "imap.gmail.com"
                 row.imap_port = 993
@@ -3717,5 +3722,61 @@ def setup_email_routes():
         finally:
             db.close()
         return _RR("/?section=integrations&email_oauth_success=1")
+
+    # ── Local email store ──────────────────────────────────────────────
+    from routes.email_local_store import (
+        sync_all,
+        query_local_emails,
+        get_local_email,
+        get_sync_status,
+    )
+
+    @router.post("/local/sync")
+    async def sync_local_store(
+        body: dict = Body(default={}),
+        owner: str = Depends(require_owner),
+    ):
+        account_id = body.get("account_id")
+        if account_id:
+            _assert_owns_account(account_id, owner)
+        accounts = [account_id] if account_id else None
+        full = bool(body.get("full"))
+        return await asyncio.to_thread(sync_all, owner, accounts=accounts, full=full)
+
+    @router.get("/local/list")
+    async def list_local_emails(
+        folder: str = Query("INBOX"),
+        limit: int = Query(10, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+        since: float | None = Query(None),
+        until: float | None = Query(None),
+        account_id: str | None = Query(None),
+        owner: str = Depends(require_owner),
+    ):
+        if account_id:
+            _assert_owns_account(account_id, owner)
+        rows = await asyncio.to_thread(
+            query_local_emails,
+            owner, account_id=account_id, folder=folder,
+            limit=limit, offset=offset, since=since, until=until,
+        )
+        return {"emails": rows, "count": len(rows)}
+
+    @router.get("/local/status")
+    async def local_email_status(
+        account_id: str | None = Query(None),
+        owner: str = Depends(require_owner),
+    ):
+        if account_id:
+            _assert_owns_account(account_id, owner)
+        sync_state = await asyncio.to_thread(get_sync_status, owner, account_id=account_id)
+        return {"sync_state": sync_state}
+
+    @router.get("/local/{row_id}")
+    async def read_local_email(row_id: int, owner: str = Depends(require_owner)):
+        row = await asyncio.to_thread(get_local_email, owner, row_id)
+        if not row:
+            raise HTTPException(404, "Email not found")
+        return row
 
     return router

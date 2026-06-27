@@ -1233,7 +1233,9 @@ def _list_attachments_from_msg(msg):
         return attachments
     idx = 0
     for part in msg.walk():
-        cd = str(part.get("Content-Disposition", ""))
+        if part.is_multipart():
+            continue
+        cd = str(part.get("Content-Disposition", "")).lower()
         ct = part.get_content_type()
         is_attached_email = ct == "message/rfc822" and ("attachment" in cd.lower() or part.get_filename())
         if part.is_multipart() and not is_attached_email:

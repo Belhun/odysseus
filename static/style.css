@@ -9416,7 +9416,7 @@ body.fullwidth-chat .chat-history {
   border-radius: 0;
   padding: 10px 14px;
   margin-top: 0;
-  max-height: 300px;
+  max-height: min(70vh, 720px);
   overflow-y: auto;
   font-size: 0.95em;
   color: var(--fg);
