@@ -201,7 +201,7 @@ class McpManager:
 
                 # Discover tools
                 tools_result = await session.list_tools()
-            except Exception:
+            except BaseException:
                 await stack.aclose()
                 raise
             tools = []
@@ -262,7 +262,7 @@ class McpManager:
 
                 # Discover tools
                 tools_result = await session.list_tools()
-            except Exception:
+            except BaseException:
                 await stack.aclose()
                 raise
             tools = []
@@ -394,6 +394,10 @@ class McpManager:
         if stack:
             try:
                 await stack.aclose()
+            except RuntimeError as e:
+                if "cancel scope" not in str(e).lower():
+                    raise
+                logger.warning(f"Error closing MCP server {server_id}: {e}")
             except Exception as e:
                 logger.warning(f"Error closing MCP server {server_id}: {e}")
 

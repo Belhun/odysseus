@@ -123,18 +123,16 @@ class PipeTqdm:
 
 
 def _patch_tqdm():
-    """Replace tqdm everywhere with our pipe-friendly version."""
-    import tqdm as tqdm_mod
+    """Replace tqdm in huggingface_hub with our pipe-friendly version."""
+    try:
+        import tqdm.auto as tqdm_auto
+        tqdm_auto.tqdm = PipeTqdm
+    except (ImportError, AttributeError):
+        pass
 
-    # Replace the main class
-    tqdm_mod.tqdm = PipeTqdm
-    tqdm_mod.auto.tqdm = PipeTqdm
-
-    # huggingface_hub uses tqdm.auto or its own utils.tqdm
     try:
         import huggingface_hub.utils
         huggingface_hub.utils.tqdm = PipeTqdm
-        # Also patch the _tqdm module if it exists
         if hasattr(huggingface_hub.utils, "_tqdm"):
             huggingface_hub.utils._tqdm.tqdm = PipeTqdm
     except (ImportError, AttributeError):
@@ -157,8 +155,6 @@ def main():
         os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
     except ImportError:
         print("HINT pip install hf_transfer for faster downloads", flush=True)
-
-    _patch_tqdm()
 
     from huggingface_hub import snapshot_download
 
