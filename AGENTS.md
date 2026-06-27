@@ -31,6 +31,25 @@ truth. The notes below cover only the non-obvious gotchas for this environment.
   Notes, Documents, or Calendar, which persist data without a model. Configure a
   model under Settings to exercise chat/agent flows.
 
+### LLM providers and restricting OpenRouter to free models
+
+- Providers are added in Settings or via `POST /api/model-endpoints` (admin
+  cookie from `POST /api/auth/login`). Keys are stored encrypted in the
+  gitignored `data/app.db`, so they persist in the VM snapshot but never reach
+  Git. OpenRouter base URL is `https://openrouter.ai/api/v1`.
+- To pin an OpenRouter endpoint to free models only: create it with
+  `endpoint_kind=auto`, `skip_probe=true`, `model_refresh_mode=manual`, and
+  `pinned_models=<comma-separated :free IDs>`. The picker shows
+  `(cached_models − hidden_models) + pinned_models`; with `auto` + `skip_probe`
+  the create-time probe is skipped (an `api`/`proxy` kind force-probes and would
+  cache the full paid catalog), and `manual` blocks the background re-probe, so
+  only the pinned `:free` models stay visible.
+- This only curates the picker. An explicit "refresh/probe models" action still
+  repopulates `cached_models` with every paid model. The real spend guard is
+  OpenRouter-side (only `:free` model IDs cost $0; set a credit limit on the
+  key). Free models are heavily rate-limited (429); `openai/gpt-oss-120b:free`
+  and `google/gemma-4-31b-it:free` were reliable during testing.
+
 ### Lint and test
 
 - "Lint" here is syntax checking, not a style linter:
