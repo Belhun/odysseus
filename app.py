@@ -449,6 +449,16 @@ class _RevalidatingStatic(StaticFiles):
         return resp
 
 
+_finance_static_dir = abs_join(BASE_DIR, "integrations/finance/static")
+if os.path.isdir(_finance_static_dir):
+    # Mount before /static — Starlette matches mounts in order; the broad
+    # /static handler would otherwise swallow /static/plugins/finance/*.
+    app.mount(
+        "/static/plugins/finance",
+        _RevalidatingStatic(directory=_finance_static_dir),
+        name="finance_plugin_static",
+    )
+
 app.mount("/static", _RevalidatingStatic(directory=STATIC_DIR), name="static")
 
 # ========= GENERATED IMAGES =========
@@ -801,13 +811,6 @@ app.include_router(setup_plugin_routes())
 
 from integrations.finance.routes import setup_finance_routes
 app.include_router(setup_finance_routes())
-_finance_static = abs_join(BASE_DIR, "integrations/finance/static")
-if _finance_static.is_dir():
-    app.mount(
-        "/static/plugins/finance",
-        _RevalidatingStatic(directory=str(_finance_static)),
-        name="finance_plugin_static",
-    )
 
 from companion import setup_companion_routes
 app.include_router(setup_companion_routes())
