@@ -415,13 +415,13 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ui_control",
-            "description": "Control the user interface. Actions: toggle (turn tools on/off), open_panel (open a modal: documents/library, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook), open_email_reply (open an email reply draft document; does NOT send), set_mode, switch_model, set_theme (built-in presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute), create_theme (CREATE any custom theme with a name + colors object — pick distinctive, evocative hex colors that match the requested aesthetic, NOT generic defaults. The theme auto-applies after creation). When a user asks for ANY theme not in the built-in preset list, ALWAYS use create_theme.",
+            "description": "Control the user interface. Actions: toggle (turn tools on/off), open_panel (open a modal: documents/library, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook, finance/banking/budget), open_email_reply (open an email reply draft document; does NOT send), set_mode, switch_model, set_theme (built-in presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute), create_theme (CREATE any custom theme with a name + colors object — pick distinctive, evocative hex colors that match the requested aesthetic, NOT generic defaults. The theme auto-applies after creation). When a user asks for ANY theme not in the built-in preset list, ALWAYS use create_theme.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["toggle", "open_panel", "open_email_reply", "set_mode", "switch_model", "set_theme", "create_theme", "get_toggles"],
                                "description": "The UI action. Use set_theme for presets, create_theme to build a custom theme with any hex colors"},
-                    "name": {"type": "string", "description": "For toggle: web, bash, research, incognito, document_editor (aliases: shell, search, deepresearch, documents). For open_panel: documents, gallery, email, sessions, notes, brain/memories, skills, settings, cookbook. For open_email_reply: email UID. For set_theme: a preset theme name. For create_theme: the custom theme name."},
+                    "name": {"type": "string", "description": "For toggle: web, bash, research, incognito, document_editor (aliases: shell, search, deepresearch, documents). For open_panel: documents, gallery, email, sessions, notes, brain/memories, skills, settings, cookbook, finance. For open_email_reply: email UID. For set_theme: a preset theme name. For create_theme: the custom theme name."},
                     "value": {"type": "string", "description": "Value: on/off for toggle, agent/chat for set_mode, model name for switch_model, theme name for set_theme, or folder for open_email_reply"},
                     "uid": {"type": "string", "description": "Email UID for open_email_reply"},
                     "folder": {"type": "string", "description": "Email folder for open_email_reply (default INBOX)"},
@@ -564,6 +564,46 @@ FUNCTION_TOOL_SCHEMAS = [
                 "required": ["action"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_finance",
+            "description": "Read and manage local finance data: accounts, transactions, spending by category, budgets, and trends. Use for spending questions, budget checks, and transaction lookups. Bank CSV/OFX import is UI-only — use ui_control open_panel finance to open the Import tab. Prefer spending_report for 'where did my money go' questions; use list_transactions only when the user needs specific rows (max 50).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "list_accounts",
+                            "list_transactions",
+                            "spending_report",
+                            "budget_status",
+                            "trends",
+                            "list_categories",
+                            "list_import_batches",
+                            "categorize_transaction",
+                            "set_budget",
+                            "create_rule",
+                        ],
+                        "description": "Action to perform",
+                    },
+                    "month": {"type": "string", "description": "YYYY-MM for spending/budget/trends filters"},
+                    "account_id": {"type": "string", "description": "Filter transactions by account id or prefix"},
+                    "category_id": {"type": "string", "description": "Category id or prefix"},
+                    "transaction_id": {"type": "string", "description": "Transaction id or prefix for categorize_transaction"},
+                    "search": {"type": "string", "description": "Payee search text for list_transactions"},
+                    "limit": {"type": "integer", "description": "Max transactions to return (default 25, max 50)"},
+                    "months": {"type": "integer", "description": "Months of history for trends (default 6)"},
+                    "limit_cents": {"type": "integer", "description": "Budget limit in cents for set_budget"},
+                    "limit_dollars": {"type": "number", "description": "Budget limit in dollars for set_budget"},
+                    "pattern": {"type": "string", "description": "Payee match pattern for create_rule"},
+                    "priority": {"type": "integer", "description": "Rule priority for create_rule"},
+                },
+                "required": ["action"],
+            },
+        },
     },
     {
         "type": "function",

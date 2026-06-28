@@ -6,7 +6,14 @@ Finance ships as an **optional Odysseus plugin** (same pattern as the planned Sy
 
 1. Settings → Integrations → **Optional plugins**
 2. Click **Install** on **Banking & Budgeting** (admin only)
-3. Reload the page when prompted
+3. Reload the page (no server restart required)
+
+## AI assistant
+
+The agent uses the `manage_finance` tool to read accounts, spending by category, budgets, trends, and transactions. Ask things like "how much did I spend on groceries this month?" or "show my Amazon transactions."
+
+- Bank CSV/OFX import is UI-only: say "open finance" or use Settings → Integrations after install
+- The agent cannot import files directly; use the Finance panel Import tab
 
 ## Data location
 
