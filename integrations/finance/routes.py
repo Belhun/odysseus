@@ -92,6 +92,17 @@ def _parse_optional_date(raw: Optional[str]) -> Optional[date]:
     return datetime.strptime(raw[:10], "%Y-%m-%d").date()
 
 
+def _require_owned_category(db, user: str, category_id: str | None) -> None:
+    if not category_id:
+        return
+    cat = db.query(FinanceCategory).filter(
+        FinanceCategory.id == category_id,
+        FinanceCategory.owner == user,
+    ).first()
+    if not cat:
+        raise HTTPException(404, "Category not found")
+
+
 def _account_dict(db, account: FinanceAccount) -> dict[str, Any]:
     balance = account_balance_cents(db, account)
     return {
@@ -248,6 +259,7 @@ def setup_finance_routes() -> APIRouter:
         user = require_user(request)
         db = get_session_factory()()
         try:
+            _require_owned_category(db, user, body.parent_id)
             cat = FinanceCategory(
                 id=str(uuid.uuid4()),
                 owner=user,
@@ -292,6 +304,7 @@ def setup_finance_routes() -> APIRouter:
         user = require_user(request)
         db = get_session_factory()()
         try:
+            _require_owned_category(db, user, body.category_id)
             rule = FinanceCategorizationRule(
                 id=str(uuid.uuid4()),
                 owner=user,
@@ -371,6 +384,8 @@ def setup_finance_routes() -> APIRouter:
             if not tx:
                 raise HTTPException(404, "Transaction not found")
             if body.category_id is not None:
+                if body.category_id:
+                    _require_owned_category(db, user, body.category_id)
                 tx.category_id = body.category_id or None
             if body.payee is not None:
                 tx.payee = body.payee[:500]
@@ -486,6 +501,7 @@ def setup_finance_routes() -> APIRouter:
         user = require_user(request)
         db = get_session_factory()()
         try:
+            _require_owned_category(db, user, body.category_id)
             existing = db.query(FinanceCategoryBudget).filter(
                 FinanceCategoryBudget.owner == user,
                 FinanceCategoryBudget.month == body.month,

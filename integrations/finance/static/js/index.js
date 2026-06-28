@@ -7,6 +7,14 @@ import { makeWindowDraggable } from '/static/js/windowDrag.js';
 
 const API = `${window.location.origin}/api/finance`;
 let _open = false;
+
+function _escHtml(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 let _modal = null;
 let _accounts = [];
 let _categories = [];
@@ -122,7 +130,7 @@ async function _renderTransactions() {
     ).join('');
     return `<tr>
       <td>${tx.date || ''}</td>
-      <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(tx.payee || '').replace(/"/g, '&quot;')}">${tx.payee || ''}</td>
+      <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(tx.payee)}">${_escHtml(tx.payee)}</td>
       <td style="${amtClass};text-align:right;">${_fmtMoney(tx.amount_cents)}</td>
       <td><select data-tx-cat="${tx.id}" class="finance-cat-select"><option value="">—</option>${catOpts}</select></td>
     </tr>`;
@@ -200,7 +208,7 @@ async function _runImportPreview() {
     if (status) status.textContent = `${_preview.new_count} new, ${_preview.duplicate_count} duplicates (${_preview.format})`;
     const rows = (_preview.rows || []).slice(0, 100).map((r) =>
       `<tr style="${r.status === 'duplicate' ? 'opacity:0.5' : ''}">
-        <td>${r.date}</td><td>${r.payee}</td><td style="text-align:right;">${_fmtMoney(r.amount_cents)}</td><td>${r.status}</td>
+        <td>${r.date}</td><td>${_escHtml(r.payee)}</td><td style="text-align:right;">${_fmtMoney(r.amount_cents)}</td><td>${_escHtml(r.status)}</td>
       </tr>`
     ).join('');
     previewEl.innerHTML = `

@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from integrations.finance.database import reset_engine_cache
 from src.plugins.registry import (
     plugin_data_dir,
     remove_installed_record,
@@ -16,6 +17,7 @@ from src.plugins.registry import (
 def run_uninstall(*, remove_data: bool = False) -> dict[str, Any]:
     steps: list[dict[str, str]] = []
 
+    reset_engine_cache()
     set_feature_flag("finance", False)
     steps.append({"step": "feature", "status": "ok", "message": "Finance feature disabled"})
 

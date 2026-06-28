@@ -60,7 +60,7 @@ def setup_plugin_routes() -> APIRouter:
             return _run_callable(installer)
         except Exception as exc:
             logger.exception("plugin install failed: %s", plugin_id)
-            raise HTTPException(500, f"Install failed: {exc}") from exc
+            raise HTTPException(500, "Install failed") from exc
 
     @router.post("/{plugin_id}/uninstall")
     def plugin_uninstall(request: Request, plugin_id: str, body: Optional[UninstallBody] = None):
