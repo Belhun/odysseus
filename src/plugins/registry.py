@@ -35,6 +35,20 @@ def is_plugin_installed(plugin_id: str) -> bool:
     return installed_marker_path(plugin_id).is_file()
 
 
+def is_plugin_active(plugin_id: str) -> bool:
+    """True when installed.json exists and the plugin feature flag is enabled."""
+    if not is_plugin_installed(plugin_id):
+        return False
+    try:
+        manifest = load_manifest(plugin_id)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        return False
+    from src.settings import load_features
+
+    flag = manifest.get("feature_flag", plugin_id)
+    return bool(load_features().get(flag))
+
+
 def read_installed_record(plugin_id: str) -> dict[str, Any] | None:
     path = installed_marker_path(plugin_id)
     if not path.is_file():

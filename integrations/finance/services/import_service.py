@@ -83,7 +83,7 @@ def build_import_preview(
         raise ValueError("Account not found")
 
     cleanup_stale_previews(db, owner)
-    fmt, parsed = parse_upload(filename, content, preset)
+    fmt, parsed, parse_errors = parse_upload(filename, content, preset)
     existing = _existing_dedup_keys(db, account_id, owner)
 
     rows: list[dict[str, Any]] = []
@@ -120,6 +120,8 @@ def build_import_preview(
         "row_count": len(rows),
         "new_count": len(rows) - duplicate_count,
         "duplicate_count": duplicate_count,
+        "error_count": len(parse_errors),
+        "errors": [{"row": e.row, "message": e.message} for e in parse_errors],
         "rows": rows,
     }
 

@@ -25,6 +25,7 @@ def finance_client(monkeypatch, tmp_path):
     finance_db.reset_engine_cache()
     db_path = tmp_path / "finance.db"
     monkeypatch.setattr(finance_db, "finance_db_path", lambda: db_path)
+    monkeypatch.setattr("integrations.finance.routes.is_plugin_active", lambda _pid: True)
 
     engine = create_engine(
         f"sqlite:///{db_path}",
@@ -118,3 +119,41 @@ def test_plugin_catalog_lists_finance(monkeypatch):
         assert res.status_code == 200
         ids = [p["id"] for p in res.json().get("plugins", [])]
         assert "finance" in ids
+
+
+@pytest.mark.area_routes
+@pytest.mark.area_security
+def test_plugin_install_and_uninstall_require_admin(monkeypatch):
+    app = FastAPI()
+    app.include_router(setup_plugin_routes())
+
+    def deny(_request):
+        from fastapi import HTTPException
+        raise HTTPException(403, "Admin only")
+
+    monkeypatch.setattr("routes.plugin_routes.require_admin", deny)
+    with TestClient(app) as client:
+        assert client.post("/api/plugins/finance/install").status_code == 403
+        assert client.post("/api/plugins/finance/uninstall", json={}).status_code == 403
+
+
+@pytest.mark.area_routes
+def test_plugin_install_idempotent(monkeypatch, tmp_path):
+    plugins_root = tmp_path / "plugins"
+    monkeypatch.setattr("src.plugins.registry.PLUGINS_DATA_ROOT", plugins_root)
+    monkeypatch.setattr("src.plugins.registry.plugin_data_dir", lambda pid: plugins_root / pid)
+    monkeypatch.setattr(
+        "integrations.finance.database.finance_db_path",
+        lambda: plugins_root / "finance" / "finance.db",
+    )
+    monkeypatch.setattr("src.settings.FEATURES_FILE", str(tmp_path / "features.json"))
+    finance_db.reset_engine_cache()
+
+    first = run_install()
+    assert first["ok"] is True
+    assert first.get("already_installed") is not True
+
+    second = run_install()
+    assert second["ok"] is True
+    assert second.get("already_installed") is True
+    assert second.get("reload_required") is False

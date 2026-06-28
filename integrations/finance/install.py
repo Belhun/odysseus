@@ -6,8 +6,11 @@ from typing import Any
 
 from integrations.finance.database import init_finance_db, write_default_config
 from src.plugins.registry import (
+    is_plugin_active,
+    is_plugin_installed,
     load_manifest,
     plugin_data_dir,
+    read_installed_record,
     set_feature_flag,
     write_installed_record,
 )
@@ -16,6 +19,20 @@ from src.plugins.registry import (
 def run_install() -> dict[str, Any]:
     manifest = load_manifest("finance")
     version = manifest.get("version", "0.1.0")
+
+    if is_plugin_installed("finance"):
+        if not is_plugin_active("finance"):
+            set_feature_flag("finance", True)
+        installed = read_installed_record("finance") or {}
+        return {
+            "ok": True,
+            "plugin_id": "finance",
+            "version": installed.get("version", version),
+            "already_installed": True,
+            "steps": [{"step": "marker", "status": "ok", "message": "Already installed"}],
+            "reload_required": False,
+        }
+
     steps: list[dict[str, str]] = []
 
     data_dir = plugin_data_dir("finance")
@@ -39,5 +56,5 @@ def run_install() -> dict[str, Any]:
         "plugin_id": "finance",
         "version": version,
         "steps": steps,
-        "reload_required": True,
+        "reload_required": False,
     }

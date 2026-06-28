@@ -3604,8 +3604,21 @@ async function initPluginIntegrations() {
             if (!r.ok) throw new Error(body.detail || 'Install failed');
             const restartMsg = body.reload_required
               ? 'Restart the Odysseus server, then reload this page.'
-              : 'Reload this page.';
-            uiModule.showToast(`Installed v${body.version || ''} — ${restartMsg}`, 10000);
+              : 'Reload this page to use the new feature.';
+            const already = body.already_installed ? ' (already installed)' : '';
+            uiModule.showToast(`Installed v${body.version || ''}${already} — ${restartMsg}`, 10000);
+            if (!body.reload_required && body.plugin_id === 'finance') {
+              try {
+                const fr = await fetch('/api/auth/features', { credentials: 'same-origin' });
+                if (fr.ok) {
+                  const features = await fr.json();
+                  ['tool-finance-btn', 'rail-finance'].forEach((id) => {
+                    const node = el(id);
+                    if (node) node.style.display = features.finance === false ? 'none' : '';
+                  });
+                }
+              } catch (_) {}
+            }
             await renderPlugins();
           } catch (err) {
             uiModule.showToast(err.message || String(err), 5000);
