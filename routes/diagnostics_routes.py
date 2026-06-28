@@ -53,6 +53,72 @@ def setup_diagnostics_routes(
             logger.error(f"Diagnostics logs retrieval error: {e}")
             raise HTTPException(500, f"Failed to retrieve logs: {str(e)}")
 
+    @router.get("/api/diagnostics/perf")
+    async def get_perf_events(
+        request: Request,
+        limit: int = 100,
+        event_prefix: str = "",
+    ) -> Dict[str, Any]:
+        """Tail recent performance events from perf.jsonl ring buffer."""
+        require_admin(request)
+        from core.perf_emit import tail_events, read_file_tail, get_sink_path, perf_enabled
+        limit = max(1, min(limit, 1000))
+        prefix = event_prefix.strip() or None
+        events = tail_events(limit, event_prefix=prefix)
+        if not events:
+            events = read_file_tail(limit)
+            if prefix:
+                events = [e for e in events if str(e.get("event", "")).startswith(prefix)]
+        return {
+            "status": "success",
+            "enabled": perf_enabled(),
+            "sink_path": get_sink_path(),
+            "count": len(events),
+            "events": events,
+        }
+
+    @router.get("/api/diagnostics/subprocesses")
+    async def get_subprocess_diagnostics(request: Request) -> Dict[str, Any]:
+        """Running background jobs and recent subprocess events."""
+        require_admin(request)
+        from core.perf_emit import tail_events
+        from src.bg_jobs import refresh
+        jobs_map = refresh()
+        running = [j for j in jobs_map.values() if j.get("status") == "running"]
+        recent = tail_events(50, event_prefix="subprocess.")
+        return {"status": "success", "bg_jobs_running": running, "recent_subprocess_events": recent}
+
+    @router.get("/api/diagnostics/containers")
+    async def get_container_diagnostics(request: Request) -> Dict[str, Any]:
+        """Latest Docker container stats samples."""
+        require_admin(request)
+        from core.container_stats import get_latest_container_samples
+        from core.perf_emit import tail_events
+        samples = get_latest_container_samples()
+        if not samples:
+            samples = [
+                e for e in tail_events(100, event_prefix="container.")
+            ]
+        return {"status": "success", "samples": samples}
+
+    @router.get("/api/diagnostics/gpu")
+    async def get_gpu_diagnostics(request: Request) -> Dict[str, Any]:
+        """Latest GPU and Ollama /api/ps snapshots."""
+        require_admin(request)
+        from core.gpu_sampler import get_latest_gpu_sample, get_latest_ollama_ps
+        return {
+            "status": "success",
+            "gpu": get_latest_gpu_sample(),
+            "ollama_ps": get_latest_ollama_ps(),
+        }
+
+    @router.get("/api/diagnostics/system-snapshot")
+    async def get_system_snapshot(request: Request) -> Dict[str, Any]:
+        """Current in-process system snapshot from the perf sampler."""
+        require_admin(request)
+        from core.process_sampler import get_system_snapshot
+        return {"status": "success", "snapshot": get_system_snapshot()}
+
     @router.get("/api/db/stats")
     async def get_database_stats(request: Request) -> Dict[str, Any]:
         require_admin(request)

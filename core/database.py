@@ -660,6 +660,7 @@ class TaskRun(Base):
     error       = Column(Text, nullable=True)
     tokens_used = Column(Integer, nullable=True)
     steps       = Column(Text, nullable=True)             # JSON log of agent tool calls
+    metrics_json = Column(Text, nullable=True)            # JSON perf aggregates for the run
     model       = Column(String, nullable=True)           # model that actually ran (resolved at execution)
 
     task = relationship("ScheduledTask", backref=backref("runs", cascade="all, delete-orphan",
@@ -974,6 +975,30 @@ def _migrate_add_task_run_model_column():
             conn.close()
         except Exception:
             pass
+
+def _migrate_add_task_run_metrics_json_column():
+    """Add metrics_json column to task_runs for performance aggregates."""
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("PRAGMA table_info(task_runs)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if columns and "metrics_json" not in columns:
+            conn.execute("ALTER TABLE task_runs ADD COLUMN metrics_json TEXT")
+            conn.commit()
+            logging.getLogger(__name__).info("Migrated: added 'metrics_json' column to task_runs")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"task_runs metrics_json migration failed: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 
 def _migrate_add_supports_tools_column():
     """Add supports_tools column to model_endpoints if it doesn't exist."""
@@ -1804,6 +1829,7 @@ def init_db():
     _migrate_add_provider_auth_id_column()
     _migrate_add_supports_tools_column()
     _migrate_add_task_run_model_column()
+    _migrate_add_task_run_metrics_json_column()
     _migrate_add_owner_column()
     _migrate_add_document_archived_column()
     _migrate_add_last_message_at_column()
