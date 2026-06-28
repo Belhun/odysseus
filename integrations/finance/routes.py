@@ -7,7 +7,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from integrations.finance.database import get_session_factory
@@ -27,7 +27,13 @@ from integrations.finance.services.import_service import (
 )
 from integrations.finance.services.reports import month_key, monthly_trends, spending_by_category
 from src.auth_helpers import require_user
+from src.plugins.registry import is_plugin_active
 from src.upload_limits import FINANCE_IMPORT_MAX_BYTES, read_upload_limited
+
+
+def _require_finance_plugin(_request: Request) -> None:
+    if not is_plugin_active("finance"):
+        raise HTTPException(404, "Finance plugin is not installed")
 
 ACCOUNT_TYPES = ("checking", "savings", "credit_card", "loan", "cash", "other")
 
@@ -140,7 +146,11 @@ def _transaction_dict(tx: FinanceTransaction, category_name: str | None = None) 
 
 
 def setup_finance_routes() -> APIRouter:
-    router = APIRouter(prefix="/api/finance", tags=["finance"])
+    router = APIRouter(
+        prefix="/api/finance",
+        tags=["finance"],
+        dependencies=[Depends(_require_finance_plugin)],
+    )
 
     @router.get("/accounts")
     def list_accounts(request: Request, include_closed: bool = False):

@@ -8,6 +8,7 @@ from typing import Any
 
 from integrations.finance.database import reset_engine_cache
 from src.plugins.registry import (
+    is_plugin_installed,
     plugin_data_dir,
     remove_installed_record,
     set_feature_flag,
@@ -15,6 +16,15 @@ from src.plugins.registry import (
 
 
 def run_uninstall(*, remove_data: bool = False) -> dict[str, Any]:
+    if not is_plugin_installed("finance"):
+        return {
+            "ok": True,
+            "plugin_id": "finance",
+            "already_uninstalled": True,
+            "steps": [{"step": "marker", "status": "ok", "message": "Already uninstalled"}],
+            "reload_required": False,
+        }
+
     steps: list[dict[str, str]] = []
 
     reset_engine_cache()
@@ -36,5 +46,5 @@ def run_uninstall(*, remove_data: bool = False) -> dict[str, Any]:
         "ok": True,
         "plugin_id": "finance",
         "steps": steps,
-        "reload_required": True,
+        "reload_required": False,
     }

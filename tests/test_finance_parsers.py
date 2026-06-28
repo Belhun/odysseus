@@ -27,33 +27,51 @@ def test_detect_navy_federal_format():
 
 @pytest.mark.area_routes
 def test_parse_wells_fargo_signed_amounts():
-    rows = parse_wells_fargo_csv(WELLS_FARGO_SAMPLE)
+    result = parse_wells_fargo_csv(WELLS_FARGO_SAMPLE)
+    rows = result.transactions
     assert len(rows) == 2
     assert rows[0].amount_cents == -985
     assert rows[1].amount_cents == 150000
+    assert result.errors == []
 
 
 @pytest.mark.area_routes
 def test_parse_navy_federal_debit_credit_indicator():
-    rows = parse_navy_federal_csv(NAVY_FEDERAL_SAMPLE)
+    result = parse_navy_federal_csv(NAVY_FEDERAL_SAMPLE)
+    rows = result.transactions
     assert len(rows) == 2
     assert rows[0].amount_cents == -3119
     assert rows[1].amount_cents == 2800
 
 
 @pytest.mark.area_routes
+def test_csv_parser_skips_bad_rows_and_reports_errors():
+    csv_text = """DATE,AMOUNT,DESCRIPTION
+01/15/2024,-9.85,GROCERY
+bad-date,10.00,BROKEN
+01/16/2024,1500.00,PAYCHECK
+"""
+    result = parse_wells_fargo_csv(csv_text)
+    assert len(result.transactions) == 2
+    assert len(result.errors) == 1
+    assert result.errors[0].row == 2
+
+
+@pytest.mark.area_routes
 @pytest.mark.skipif(not (PRIVATE_DIR / "wells_fargo_Checking_e719.csv").exists(), reason="private fixture missing")
 def test_parse_real_wells_fargo_export():
     content = (PRIVATE_DIR / "wells_fargo_Checking_e719.csv").read_bytes()
-    fmt, rows = parse_upload("wells_fargo.csv", content)
+    fmt, rows, errors = parse_upload("wells_fargo.csv", content)
     assert fmt == "csv_wells_fargo"
     assert len(rows) > 100
+    assert errors == []
 
 
 @pytest.mark.area_routes
 @pytest.mark.skipif(not (PRIVATE_DIR / "Navy_fed_Main_bussness_transactions_167a.csv").exists(), reason="private fixture missing")
 def test_parse_real_navy_federal_export():
     content = (PRIVATE_DIR / "Navy_fed_Main_bussness_transactions_167a.csv").read_bytes()
-    fmt, rows = parse_upload("nfcu.csv", content)
+    fmt, rows, errors = parse_upload("nfcu.csv", content)
     assert fmt == "csv_navy_federal"
     assert len(rows) > 10
+    assert errors == []

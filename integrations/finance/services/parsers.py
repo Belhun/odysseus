@@ -16,6 +16,18 @@ FINANCE_IMPORT_MAX_ROWS = 50_000
 
 
 @dataclass
+class RowParseError:
+    row: int
+    message: str
+
+
+@dataclass
+class ParseResult:
+    transactions: list["ParsedTransaction"]
+    errors: list[RowParseError] = field(default_factory=list)
+
+
+@dataclass
 class ParsedTransaction:
     date: date
     amount_cents: int
@@ -110,32 +122,37 @@ def detect_csv_format(content: str) -> str:
     return "csv_generic"
 
 
-def parse_wells_fargo_csv(content: str) -> list[ParsedTransaction]:
+def parse_wells_fargo_csv(content: str) -> ParseResult:
     rows = _read_csv_dicts(content)
     out: list[ParsedTransaction] = []
-    for row in rows:
+    errors: list[RowParseError] = []
+    for i, row in enumerate(rows, start=1):
         date_raw = _get_col(row, "DATE", "Date")
         amount_raw = _get_col(row, "AMOUNT", "Amount")
         payee = _get_col(row, "DESCRIPTION", "Description", "Memo")
         check_no = _get_col(row, "CHECK #", "Check Number", "Check #") or None
         if not date_raw and not amount_raw:
             continue
-        tx = ParsedTransaction(
-            date=_parse_date(date_raw),
-            amount_cents=_parse_decimal_amount(amount_raw),
-            payee=payee,
-            check_number=check_no,
-            raw=dict(row),
-        )
-        tx.finalize()
-        out.append(tx)
-    return out
+        try:
+            tx = ParsedTransaction(
+                date=_parse_date(date_raw),
+                amount_cents=_parse_decimal_amount(amount_raw),
+                payee=payee,
+                check_number=check_no,
+                raw=dict(row),
+            )
+            tx.finalize()
+            out.append(tx)
+        except ValueError as exc:
+            errors.append(RowParseError(row=i, message=str(exc)))
+    return ParseResult(transactions=out, errors=errors)
 
 
-def parse_navy_federal_csv(content: str) -> list[ParsedTransaction]:
+def parse_navy_federal_csv(content: str) -> ParseResult:
     rows = _read_csv_dicts(content)
     out: list[ParsedTransaction] = []
-    for row in rows:
+    errors: list[RowParseError] = []
+    for i, row in enumerate(rows, start=1):
         date_raw = _get_col(row, "Posting Date", "Transaction Date", "Date")
         amount_raw = _get_col(row, "Amount")
         indicator = _get_col(row, "Credit Debit Indicator").lower()
@@ -143,34 +160,38 @@ def parse_navy_federal_csv(content: str) -> list[ParsedTransaction]:
         bank_cat = _get_col(row, "Category") or None
         if not date_raw and not amount_raw:
             continue
-        cents = _parse_decimal_amount(amount_raw)
-        if indicator == "debit":
-            cents = -abs(cents)
-        elif indicator == "credit":
-            cents = abs(cents)
-        elif cents > 0 and indicator:
-            pass
-        tx = ParsedTransaction(
-            date=_parse_date(date_raw),
-            amount_cents=cents,
-            payee=payee,
-            bank_category=bank_cat,
-            raw=dict(row),
-        )
-        tx.finalize()
-        out.append(tx)
-    return out
+        try:
+            cents = _parse_decimal_amount(amount_raw)
+            if indicator == "debit":
+                cents = -abs(cents)
+            elif indicator == "credit":
+                cents = abs(cents)
+            elif cents > 0 and indicator:
+                pass
+            tx = ParsedTransaction(
+                date=_parse_date(date_raw),
+                amount_cents=cents,
+                payee=payee,
+                bank_category=bank_cat,
+                raw=dict(row),
+            )
+            tx.finalize()
+            out.append(tx)
+        except ValueError as exc:
+            errors.append(RowParseError(row=i, message=str(exc)))
+    return ParseResult(transactions=out, errors=errors)
 
 
-def parse_generic_csv(content: str, mapping: dict[str, str] | None = None) -> list[ParsedTransaction]:
+def parse_generic_csv(content: str, mapping: dict[str, str] | None = None) -> ParseResult:
     rows = _read_csv_dicts(content)
     if not rows:
-        return []
+        return ParseResult(transactions=[], errors=[])
     mapping = mapping or {}
     header_lower = _header_map(rows[0])
 
     out: list[ParsedTransaction] = []
-    for row in rows:
+    errors: list[RowParseError] = []
+    for i, row in enumerate(rows, start=1):
         date_raw = ""
         for key in (mapping.get("date"),):
             if key and key in row and row[key]:
@@ -215,25 +236,28 @@ def parse_generic_csv(content: str, mapping: dict[str, str] | None = None) -> li
         if not date_raw and not amount_raw and not debit_raw and not credit_raw:
             continue
 
-        if amount_raw:
-            cents = _parse_decimal_amount(amount_raw)
-        else:
-            debit = _parse_decimal_amount(debit_raw) if debit_raw else 0
-            credit = _parse_decimal_amount(credit_raw) if credit_raw else 0
-            cents = credit - debit
+        try:
+            if amount_raw:
+                cents = _parse_decimal_amount(amount_raw)
+            else:
+                debit = _parse_decimal_amount(debit_raw) if debit_raw else 0
+                credit = _parse_decimal_amount(credit_raw) if credit_raw else 0
+                cents = credit - debit
 
-        tx = ParsedTransaction(
-            date=_parse_date(date_raw),
-            amount_cents=cents,
-            payee=payee,
-            raw=dict(row),
-        )
-        tx.finalize()
-        out.append(tx)
-    return out
+            tx = ParsedTransaction(
+                date=_parse_date(date_raw),
+                amount_cents=cents,
+                payee=payee,
+                raw=dict(row),
+            )
+            tx.finalize()
+            out.append(tx)
+        except ValueError as exc:
+            errors.append(RowParseError(row=i, message=str(exc)))
+    return ParseResult(transactions=out, errors=errors)
 
 
-def parse_csv(content: str, preset: str | None = None, mapping: dict[str, str] | None = None) -> list[ParsedTransaction]:
+def parse_csv(content: str, preset: str | None = None, mapping: dict[str, str] | None = None) -> ParseResult:
     preset = preset or detect_csv_format(content)
     if preset == "csv_wells_fargo":
         return parse_wells_fargo_csv(content)
@@ -297,10 +321,15 @@ def detect_file_format(filename: str, content: bytes) -> str:
     return detect_csv_format(content.decode("utf-8", errors="replace"))
 
 
-def parse_upload(filename: str, content: bytes, preset: str | None = None) -> tuple[str, list[ParsedTransaction]]:
+def parse_upload(
+    filename: str,
+    content: bytes,
+    preset: str | None = None,
+) -> tuple[str, list[ParsedTransaction], list[RowParseError]]:
     fmt = detect_file_format(filename, content)
     if fmt == "ofx":
-        return "ofx", parse_ofx_qfx(content)
+        return "ofx", parse_ofx_qfx(content), []
     text = content.decode("utf-8", errors="replace")
     csv_preset = preset or fmt
-    return csv_preset, parse_csv(text, csv_preset)
+    result = parse_csv(text, csv_preset)
+    return csv_preset, result.transactions, result.errors
