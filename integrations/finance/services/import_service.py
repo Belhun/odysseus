@@ -8,15 +8,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from core.database import (
+from integrations.finance.models import (
     FinanceAccount,
     FinanceImportBatch,
     FinanceImportPreview,
     FinanceTransaction,
     utcnow_naive,
 )
-from services.finance.categories import apply_rules_to_transactions
-from services.finance.parsers import ParsedTransaction, parse_upload
+from integrations.finance.services.categories import apply_rules_to_transactions
+from integrations.finance.services.parsers import ParsedTransaction, parse_upload
 
 
 PREVIEW_TTL_HOURS = 2

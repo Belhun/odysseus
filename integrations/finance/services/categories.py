@@ -7,7 +7,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from core.database import FinanceCategory, FinanceCategorizationRule, FinanceTransaction
+from integrations.finance.models import FinanceCategory, FinanceCategorizationRule, FinanceTransaction
 
 
 DEFAULT_CATEGORIES = [

@@ -796,8 +796,29 @@ app.include_router(setup_vault_routes())
 from routes.contacts_routes import setup_contacts_routes
 app.include_router(setup_contacts_routes())
 
-from routes.finance_routes import setup_finance_routes
-app.include_router(setup_finance_routes())
+from routes.plugin_routes import setup_plugin_routes
+app.include_router(setup_plugin_routes())
+
+
+def _maybe_mount_plugins(app):
+    """Mount optional plugin routers when installed.json exists."""
+    from pathlib import Path
+    from src.constants import DATA_DIR
+    from src.plugins.registry import is_plugin_installed
+
+    if is_plugin_installed("finance"):
+        from integrations.finance.routes import setup_finance_routes
+        app.include_router(setup_finance_routes())
+        finance_static = Path(__file__).resolve().parent / "integrations" / "finance" / "static"
+        if finance_static.is_dir():
+            app.mount(
+                "/static/plugins/finance",
+                _RevalidatingStatic(directory=str(finance_static)),
+                name="finance_plugin_static",
+            )
+
+
+_maybe_mount_plugins(app)
 
 from companion import setup_companion_routes
 app.include_router(setup_companion_routes())

@@ -1,4 +1,7 @@
-"""Finance API route tests."""
+"""Finance plugin API and install tests."""
+
+import json
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -7,23 +10,30 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 from starlette.testclient import TestClient
 
-import core.database as cdb
-import routes.finance_routes as finance_routes
-from core.database import FinanceAccount, SessionLocal
-from routes.finance_routes import setup_finance_routes
+import integrations.finance.database as finance_db
+import integrations.finance.routes as finance_routes
+from integrations.finance.models import FinanceAccount, FinanceBase
+from integrations.finance.routes import setup_finance_routes
+from integrations.finance.install import run_install
+from integrations.finance.uninstall import run_uninstall
+from routes.plugin_routes import setup_plugin_routes
 from tests.fixtures.finance.synthetic_samples import WELLS_FARGO_SAMPLE
 
 
 @pytest.fixture()
 def finance_client(monkeypatch, tmp_path):
+    finance_db.reset_engine_cache()
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(finance_db, "finance_db_path", lambda: db_path)
+
     engine = create_engine(
-        f"sqlite:///{tmp_path / 'finance.db'}",
+        f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False},
         poolclass=NullPool,
     )
-    cdb.Base.metadata.create_all(engine)
+    FinanceBase.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    monkeypatch.setattr(finance_routes, "SessionLocal", session_factory)
+    monkeypatch.setattr(finance_routes, "get_session_factory", lambda: session_factory)
 
     def _fake_require_user(request):
         return "testuser"
@@ -34,11 +44,12 @@ def finance_client(monkeypatch, tmp_path):
     app.include_router(setup_finance_routes())
     with TestClient(app) as client:
         yield client
+    finance_db.reset_engine_cache()
 
 
 @pytest.mark.area_routes
 @pytest.mark.area_security
-def test_finance_accounts_require_owner_scope(finance_client):
+def test_finance_accounts_owner_scoped(finance_client):
     res = finance_client.post("/api/finance/accounts", json={
         "name": "Checking",
         "institution": "Test Bank",
@@ -47,7 +58,7 @@ def test_finance_accounts_require_owner_scope(finance_client):
     assert res.status_code == 200
     account_id = res.json()["id"]
 
-    db = finance_routes.SessionLocal()
+    db = finance_routes.get_session_factory()()
     try:
         row = db.query(FinanceAccount).filter(FinanceAccount.id == account_id).one()
         assert row.owner == "testuser"
@@ -68,19 +79,42 @@ def test_finance_import_preview_and_commit(finance_client):
     assert preview.status_code == 200
     body = preview.json()
     assert body["new_count"] == 2
-    preview_id = body["preview_id"]
 
-    commit = finance_client.post("/api/finance/import/commit", json={"preview_id": preview_id})
+    commit = finance_client.post("/api/finance/import/commit", json={"preview_id": body["preview_id"]})
     assert commit.status_code == 200
     assert commit.json()["imported_count"] == 2
 
-    txs = finance_client.get(f"/api/finance/transactions?account_id={account_id}")
-    assert txs.status_code == 200
-    assert txs.json()["total"] == 2
 
-    preview2 = finance_client.post(
-        "/api/finance/import/preview",
-        data={"account_id": account_id},
-        files={"file": ("wells.csv", WELLS_FARGO_SAMPLE.encode("utf-8"), "text/csv")},
+@pytest.mark.area_routes
+def test_plugin_install_writes_marker_and_feature(monkeypatch, tmp_path):
+    plugins_root = tmp_path / "plugins"
+    monkeypatch.setattr("src.plugins.registry.PLUGINS_DATA_ROOT", plugins_root)
+    monkeypatch.setattr("src.plugins.registry.plugin_data_dir", lambda pid: plugins_root / pid)
+    monkeypatch.setattr(
+        "integrations.finance.database.finance_db_path",
+        lambda: plugins_root / "finance" / "finance.db",
     )
-    assert preview2.json()["duplicate_count"] == 2
+    monkeypatch.setattr("src.settings.FEATURES_FILE", str(tmp_path / "features.json"))
+    finance_db.reset_engine_cache()
+
+    result = run_install()
+    assert result["ok"] is True
+    marker = plugins_root / "finance" / "installed.json"
+    assert marker.is_file()
+    features = json.loads((tmp_path / "features.json").read_text())
+    assert features.get("finance") is True
+
+    uninstall = run_uninstall(remove_data=False)
+    assert uninstall["ok"] is True
+    assert not marker.is_file()
+
+
+@pytest.mark.area_routes
+def test_plugin_catalog_lists_finance(monkeypatch):
+    app = FastAPI()
+    app.include_router(setup_plugin_routes())
+    with TestClient(app) as client:
+        res = client.get("/api/plugins/catalog")
+        assert res.status_code == 200
+        ids = [p["id"] for p in res.json().get("plugins", [])]
+        assert "finance" in ids

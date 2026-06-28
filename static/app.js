@@ -24,9 +24,21 @@ import censorModule from './js/censor.js';
 import galleryModule from './js/gallery.js';
 import tasksModule from './js/tasks.js';
 import calendarModule from './js/calendar.js';
-import financeModule from './js/finance.js';
 import notesModule from './js/notes.js';
 import adminModule from './js/admin.js';
+
+let financeModule = null;
+
+async function _loadFinanceModule() {
+  if (financeModule) return financeModule;
+  try {
+    const mod = await import('/static/plugins/finance/js/index.js');
+    financeModule = mod.default || mod;
+    return financeModule;
+  } catch (_) {
+    return null;
+  }
+}
 import settingsModule from './js/settings.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
 import './js/modalManager.js';
@@ -868,11 +880,12 @@ function initializeEventListeners() {
   const toolFinanceBtn = el('tool-finance-btn');
   if (toolFinanceBtn) {
     toolFinanceBtn.addEventListener('click', async () => {
-      if (!financeModule) return;
+      const mod = await _loadFinanceModule();
+      if (!mod) return;
       const Modals = await import('./js/modalManager.js');
       if (!Modals.toggle('finance-modal')) {
-        if (financeModule.isFinanceOpen()) financeModule.closeFinance();
-        else financeModule.openFinance();
+        if (mod.isFinanceOpen()) mod.closeFinance();
+        else mod.openFinance();
       }
     });
   }
@@ -1057,7 +1070,7 @@ function initializeEventListeners() {
     },
     '/memory':   () => document.getElementById('tool-memory-btn')?.click(),
     '/gallery':  () => document.getElementById('tool-gallery-btn')?.click(),
-    '/finance':  () => document.getElementById('tool-finance-btn')?.click(),
+    '/finance':  async () => { const b = el('tool-finance-btn'); if (b) b.click(); },
     '/tasks':    () => document.getElementById('tool-tasks-btn')?.click(),
     '/library':  () => sessionModule && sessionModule.openLibrary && sessionModule.openLibrary(),
   };
@@ -1338,10 +1351,13 @@ function initializeEventListeners() {
         deep_research:   ['research-toggle-btn', 'tool-research-btn', 'overflow-research-btn', 'rail-research'],
         document_editor: ['overflow-doc-btn', 'rail-documents'],
         gallery:         ['tool-gallery-btn', 'rail-gallery'],
+        finance:         ['tool-finance-btn', 'rail-finance'],
       };
       Object.entries(map).forEach(([key, ids]) => {
         if (features[key] === false) {
           ids.forEach(id => { const e = el(id); if (e) e.style.display = 'none'; });
+        } else if (features[key] === true) {
+          ids.forEach(id => { const e = el(id); if (e) e.style.display = ''; });
         }
       });
       // Re-apply the user's Appearance UI-vis preferences after the
