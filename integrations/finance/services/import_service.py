@@ -97,6 +97,10 @@ def build_import_preview(
         elif tx.dedup_hash in existing:
             status = "duplicate"
             duplicate_count += 1
+        else:
+            existing.add(tx.dedup_hash)
+            if tx.fitid:
+                existing.add(f"fitid:{tx.fitid}")
         rows.append(_tx_to_preview_dict(tx, status))
 
     preview_id = str(uuid.uuid4())

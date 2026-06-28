@@ -3602,7 +3602,10 @@ async function initPluginIntegrations() {
             const r = await fetch(`/api/plugins/${pluginId}/install`, { method: 'POST', credentials: 'same-origin' });
             const body = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(body.detail || 'Install failed');
-            uiModule.showToast(`${body.version ? 'Installed' : 'Done'} — reload the page to enable ${pluginId}.`, 8000);
+            const restartMsg = body.reload_required
+              ? 'Restart the Odysseus server, then reload this page.'
+              : 'Reload this page.';
+            uiModule.showToast(`Installed v${body.version || ''} — ${restartMsg}`, 10000);
             await renderPlugins();
           } catch (err) {
             uiModule.showToast(err.message || String(err), 5000);
@@ -3626,7 +3629,9 @@ async function initPluginIntegrations() {
             uiModule.showToast(body.detail || 'Uninstall failed', 5000);
             return;
           }
-          uiModule.showToast('Uninstalled — reload the page.', 6000);
+          uiModule.showToast(body.reload_required
+            ? 'Uninstalled — restart the Odysseus server, then reload this page.'
+            : 'Uninstalled — reload this page.', 8000);
           await renderPlugins();
         });
       });
