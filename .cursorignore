@@ -1,0 +1,2 @@
+# Playground sync script is gitignored locally; keep it visible to Cursor.
+!scripts/sync-playground.ps1

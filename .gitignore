@@ -97,6 +97,9 @@ dev-docs/
 # Windows-port working docs (local only, not for public repo)
 docs/windows-port/
 
+# Personal playground sync (belhun/playground only; see scripts/sync-playground.ps1)
+scripts/sync-playground.ps1
+
 # Local config
 compound.config.json
 *.error.log
