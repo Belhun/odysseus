@@ -799,6 +799,21 @@ class TaskScheduler:
             # previous llm/research run's model. The executors set it once the
             # model is resolved.
             self._last_run_model = None
+            import time as _perf_time
+            from core.perf_context import workload_context
+            from core.perf_workload import emit_task_lifecycle
+            _perf_t0 = _perf_time.perf_counter()
+            _trigger = task.trigger_type or "schedule"
+            with workload_context("scheduler", f"task:{task.name}", run_id=run_id, task_id=task_id):
+                emit_task_lifecycle(
+                    "started",
+                    run_id=run_id,
+                    task_id=task_id,
+                    task_name=task.name,
+                    task_type=task_type,
+                    action=task.action or "",
+                    trigger=_trigger,
+                )
             try:
                 if task_type == "action":
                     result, success = await self._execute_action(task, run_id=run_id)
@@ -905,6 +920,26 @@ class TaskScheduler:
 
             db.commit()
             logger.info(f"Task '{task.name}' completed (run {run_id})")
+            try:
+                import json as _json
+                from core.perf_workload import emit_task_lifecycle
+                emit_task_lifecycle(
+                    "completed",
+                    run_id=run_id,
+                    task_id=task_id,
+                    task_name=task.name,
+                    task_type=task_type,
+                    action=task.action or "",
+                    trigger=_trigger,
+                    duration_ms=round((_perf_time.perf_counter() - _perf_t0) * 1000, 2),
+                )
+                run.metrics_json = _json.dumps({
+                    "duration_ms": round((_perf_time.perf_counter() - _perf_t0) * 1000, 2),
+                    "status": run.status,
+                })
+                db.commit()
+            except Exception:
+                pass
             output = task.output_target or "session"
             # Per-task notification gate. Default True (notifications_enabled
             # defaults to True at column level), but skip when the user has
