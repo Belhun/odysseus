@@ -796,6 +796,9 @@ app.include_router(setup_vault_routes())
 from routes.contacts_routes import setup_contacts_routes
 app.include_router(setup_contacts_routes())
 
+from routes.finance_routes import setup_finance_routes
+app.include_router(setup_finance_routes())
+
 from companion import setup_companion_routes
 app.include_router(setup_companion_routes())
 
@@ -839,6 +842,10 @@ async def serve_memory(request: Request):
 
 @app.get("/gallery")
 async def serve_gallery(request: Request):
+    return await serve_index(request)
+
+@app.get("/finance")
+async def serve_finance(request: Request):
     return await serve_index(request)
 
 @app.get("/tasks")

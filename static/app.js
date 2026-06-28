@@ -24,6 +24,7 @@ import censorModule from './js/censor.js';
 import galleryModule from './js/gallery.js';
 import tasksModule from './js/tasks.js';
 import calendarModule from './js/calendar.js';
+import financeModule from './js/finance.js';
 import notesModule from './js/notes.js';
 import adminModule from './js/admin.js';
 import settingsModule from './js/settings.js';
@@ -863,6 +864,19 @@ function initializeEventListeners() {
     });
   }
 
+  // Finance tool button
+  const toolFinanceBtn = el('tool-finance-btn');
+  if (toolFinanceBtn) {
+    toolFinanceBtn.addEventListener('click', async () => {
+      if (!financeModule) return;
+      const Modals = await import('./js/modalManager.js');
+      if (!Modals.toggle('finance-modal')) {
+        if (financeModule.isFinanceOpen()) financeModule.closeFinance();
+        else financeModule.openFinance();
+      }
+    });
+  }
+
   // Gallery tool button
   const toolGalleryBtn = el('tool-gallery-btn');
   if (toolGalleryBtn) {
@@ -1043,6 +1057,7 @@ function initializeEventListeners() {
     },
     '/memory':   () => document.getElementById('tool-memory-btn')?.click(),
     '/gallery':  () => document.getElementById('tool-gallery-btn')?.click(),
+    '/finance':  () => document.getElementById('tool-finance-btn')?.click(),
     '/tasks':    () => document.getElementById('tool-tasks-btn')?.click(),
     '/library':  () => sessionModule && sessionModule.openLibrary && sessionModule.openLibrary(),
   };
@@ -2394,6 +2409,7 @@ function initializeEventListeners() {
     'tool-compare':        '#tool-compare-btn',
     'tool-cookbook':       '#tool-cookbook-btn',
     'tool-research':       '#tool-research-btn',
+    'tool-finance':        '#tool-finance-btn',
     'tool-gallery':        '#tool-gallery-btn',
     'tool-library':        '#tool-library-btn',
     'tool-memory':         '#tool-memory-btn',
@@ -3420,6 +3436,7 @@ function startOdysseusApp() {
     'rail-memory':    'tool-memory-btn',
     'rail-theme':     'tool-theme-btn',
     'rail-email':     'email-section-title',
+    'rail-finance':   'tool-finance-btn',
   };
   Object.entries(_railToolMap).forEach(([railId, toolId]) => {
     const railBtn = el(railId);
