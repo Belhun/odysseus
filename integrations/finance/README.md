@@ -35,7 +35,7 @@ integrations/finance/
 
 ## API
 
-Mounted only after install + server reload: `/api/finance/*`
+Routes are always registered; requests return 404 until the plugin is installed and the `finance` feature flag is on: `/api/finance/*`
 
 Plugin lifecycle: `/api/plugins/finance/install|uninstall|status`
 
