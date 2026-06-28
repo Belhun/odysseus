@@ -2,8 +2,8 @@
  * Finance — manual bank import, accounts, budgets, spending reports.
  */
 
-import { makeWindowDraggable } from './windowDrag.js';
-import { bindMenuDismiss } from './escMenuStack.js';
+import { makeWindowDraggable } from '/static/js/windowDrag.js';
+// bindMenuDismiss reserved for future esc-menu wiring
 
 const API = `${window.location.origin}/api/finance`;
 let _open = false;

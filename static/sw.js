@@ -34,7 +34,6 @@ const PRECACHE = [
   '/static/js/tts-ai.js',
   '/static/js/document.js',
   '/static/js/gallery.js',
-  '/static/js/finance.js',
   '/static/js/chatRenderer.js',
   '/static/js/codeRunner.js',
   '/static/js/chatStream.js',

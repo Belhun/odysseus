@@ -3,7 +3,7 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from sqlalchemy import event, create_engine, Column, String, Text, Boolean, DateTime, Date, Integer, ForeignKey, JSON, Index, func, text
+from sqlalchemy import event, create_engine, Column, String, Text, Boolean, DateTime, Integer, ForeignKey, JSON, Index, func, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.ext.declarative import declarative_base, declared_attr
@@ -1700,120 +1700,6 @@ class CalendarDeletedEvent(TimestampMixin, Base):
     last_error = Column(Text, nullable=True)
 
 
-class FinanceAccount(TimestampMixin, Base):
-    """Manual financial account (checking, savings, credit card, etc.)."""
-    __tablename__ = "finance_accounts"
-
-    id = Column(String, primary_key=True, index=True)
-    owner = Column(String, nullable=False, index=True)
-    name = Column(String, nullable=False)
-    institution = Column(String, default="")
-    account_type = Column(String, nullable=False, default="checking")
-    currency = Column(String, default="USD")
-    mask_last4 = Column(String, nullable=True)
-    opening_balance_cents = Column(Integer, default=0)
-    opening_balance_date = Column(Date, nullable=True)
-    credit_limit_cents = Column(Integer, nullable=True)
-    is_closed = Column(Boolean, default=False)
-    display_order = Column(Integer, default=0)
-
-    transactions = relationship(
-        "FinanceTransaction",
-        back_populates="account",
-        cascade="all, delete-orphan",
-    )
-
-
-class FinanceCategory(TimestampMixin, Base):
-    """Spending/income category for transactions and budgets."""
-    __tablename__ = "finance_categories"
-
-    id = Column(String, primary_key=True, index=True)
-    owner = Column(String, nullable=False, index=True)
-    name = Column(String, nullable=False)
-    parent_id = Column(String, ForeignKey("finance_categories.id"), nullable=True)
-    is_income = Column(Boolean, default=False)
-    display_order = Column(Integer, default=0)
-    color = Column(String, default="#5b8abf")
-
-
-class FinanceImportBatch(TimestampMixin, Base):
-    """Record of a committed transaction import."""
-    __tablename__ = "finance_import_batches"
-
-    id = Column(String, primary_key=True, index=True)
-    owner = Column(String, nullable=False, index=True)
-    account_id = Column(String, ForeignKey("finance_accounts.id"), nullable=False, index=True)
-    filename = Column(String, default="")
-    format = Column(String, default="csv_generic")
-    row_count = Column(Integer, default=0)
-    imported_count = Column(Integer, default=0)
-    duplicate_count = Column(Integer, default=0)
-
-
-class FinanceImportPreview(TimestampMixin, Base):
-    """Short-lived server-side import preview (cleared after commit or expiry)."""
-    __tablename__ = "finance_import_previews"
-
-    id = Column(String, primary_key=True, index=True)
-    owner = Column(String, nullable=False, index=True)
-    account_id = Column(String, ForeignKey("finance_accounts.id"), nullable=True)
-    filename = Column(String, default="")
-    format = Column(String, default="csv_generic")
-    payload = Column(JSON, nullable=False)
-
-
-class FinanceTransaction(TimestampMixin, Base):
-    """Imported or manual financial transaction."""
-    __tablename__ = "finance_transactions"
-    __table_args__ = (
-        Index("ix_finance_tx_account_dedup", "account_id", "dedup_hash"),
-        Index("ix_finance_tx_owner_date", "owner", "date"),
-    )
-
-    id = Column(String, primary_key=True, index=True)
-    owner = Column(String, nullable=False, index=True)
-    account_id = Column(String, ForeignKey("finance_accounts.id"), nullable=False, index=True)
-    import_batch_id = Column(String, ForeignKey("finance_import_batches.id"), nullable=True, index=True)
-    date = Column(Date, nullable=False)
-    amount_cents = Column(Integer, nullable=False)
-    payee = Column(String, default="")
-    memo = Column(String, default="")
-    check_number = Column(String, nullable=True)
-    fitid = Column(String, nullable=True)
-    dedup_hash = Column(String, nullable=False)
-    category_id = Column(String, ForeignKey("finance_categories.id"), nullable=True, index=True)
-    status = Column(String, default="cleared")
-    bank_category = Column(String, nullable=True)
-
-    account = relationship("FinanceAccount", back_populates="transactions")
-
-
-class FinanceCategorizationRule(TimestampMixin, Base):
-    """Payee pattern → category rule applied on import."""
-    __tablename__ = "finance_categorization_rules"
-
-    id = Column(String, primary_key=True, index=True)
-    owner = Column(String, nullable=False, index=True)
-    pattern = Column(String, nullable=False)
-    category_id = Column(String, ForeignKey("finance_categories.id"), nullable=False)
-    priority = Column(Integer, default=0)
-
-
-class FinanceCategoryBudget(TimestampMixin, Base):
-    """Monthly spending limit per category."""
-    __tablename__ = "finance_category_budgets"
-    __table_args__ = (
-        Index("ix_finance_budget_owner_month_cat", "owner", "month", "category_id", unique=True),
-    )
-
-    id = Column(String, primary_key=True, index=True)
-    owner = Column(String, nullable=False, index=True)
-    category_id = Column(String, ForeignKey("finance_categories.id"), nullable=False)
-    month = Column(String, nullable=False)  # YYYY-MM
-    limit_cents = Column(Integer, nullable=False, default=0)
-
-
 class Integration(TimestampMixin, Base):
     """An external service connection (email, RSS, webhook, etc.)."""
     __tablename__ = "integrations"
@@ -1952,30 +1838,6 @@ def init_db():
     _migrate_encrypt_signatures()
     _migrate_encrypt_endpoint_keys()
     _migrate_backfill_task_folders()
-    _migrate_finance_indexes()
-
-
-def _migrate_finance_indexes():
-    """Ensure finance transaction indexes exist on upgraded databases."""
-    if not DATABASE_URL.startswith("sqlite"):
-        return
-    try:
-        with engine.connect() as conn:
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_finance_tx_account_dedup "
-                "ON finance_transactions (account_id, dedup_hash)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_finance_tx_owner_date "
-                "ON finance_transactions (owner, date)"
-            ))
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ix_finance_budget_owner_month_cat "
-                "ON finance_category_budgets (owner, month, category_id)"
-            ))
-            conn.commit()
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"finance index migration: {e}")
 
 
 def _migrate_backfill_task_folders():

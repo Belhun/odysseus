@@ -8,7 +8,7 @@ from datetime import date, datetime
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from core.database import FinanceCategory, FinanceCategoryBudget, FinanceTransaction
+from integrations.finance.models import FinanceCategory, FinanceCategoryBudget, FinanceTransaction
 
 
 def month_key(d: date) -> str:
