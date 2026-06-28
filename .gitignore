@@ -34,8 +34,8 @@ logs/
 *.sqlite
 *.sqlite3
 
-# Node
-node_modules/
+# Finance dev fixtures (real bank exports — never commit)
+tests/fixtures/finance/private/
 services/node_modules/
 services/data/
 
