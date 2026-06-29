@@ -8,7 +8,8 @@ from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-from integrations.finance.models import FinanceBase
+from integrations.finance.models import FinanceBase, FinanceCategory
+from integrations.finance.services.categories import dedupe_categories
 from src.plugins.registry import plugin_data_dir
 
 
@@ -57,6 +58,13 @@ def get_session_factory():
 def init_finance_db() -> None:
     """Create plugin tables if missing."""
     FinanceBase.metadata.create_all(bind=get_engine())
+    db = get_session_factory()()
+    try:
+        owners = [row[0] for row in db.query(FinanceCategory.owner).distinct().all()]
+        for owner in owners:
+            dedupe_categories(db, owner)
+    finally:
+        db.close()
 
 
 def write_default_config() -> None:

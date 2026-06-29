@@ -184,21 +184,51 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
                 )
             return {"response": "\n".join(lines), "exit_code": 0}
 
+        if action == "apply_rules":
+            from integrations.finance.services.categories import apply_rules_to_transactions
+            q = db.query(FinanceTransaction).filter(
+                FinanceTransaction.owner == user,
+                FinanceTransaction.category_id.is_(None),
+            )
+            if args.get("account_id"):
+                q = q.filter(FinanceTransaction.account_id == args["account_id"])
+            limit = min(int(args.get("limit") or 500), 500)
+            txs = q.order_by(FinanceTransaction.date.desc()).limit(limit).all()
+            if not txs:
+                return {"response": "No uncategorized transactions to process.", "exit_code": 0}
+            count = apply_rules_to_transactions(db, user, txs)
+            db.commit()
+            return {
+                "response": f"Applied categorization rules to {count} of {len(txs)} uncategorized transaction(s).",
+                "exit_code": 0,
+            }
+
         if action == "categorize_transaction":
             tx_id = (args.get("transaction_id") or args.get("id") or "").strip()
             category_id = args.get("category_id")
-            if not tx_id or not category_id:
-                return {"error": "categorize_transaction requires transaction_id and category_id", "exit_code": 1}
+            category_name = (args.get("category_name") or args.get("category") or "").strip()
+            if not tx_id or (not category_id and not category_name):
+                return {
+                    "error": "categorize_transaction requires transaction_id and category_id or category_name",
+                    "exit_code": 1,
+                }
             tx = db.query(FinanceTransaction).filter(
                 FinanceTransaction.owner == user,
                 FinanceTransaction.id.startswith(tx_id),
             ).first()
             if not tx:
                 return {"error": "Transaction not found", "exit_code": 1}
-            cat = db.query(FinanceCategory).filter(
-                FinanceCategory.owner == user,
-                FinanceCategory.id == category_id,
-            ).first()
+            cat = None
+            if category_id:
+                cat = db.query(FinanceCategory).filter(
+                    FinanceCategory.owner == user,
+                    FinanceCategory.id.startswith(str(category_id)),
+                ).first()
+            elif category_name:
+                cat = db.query(FinanceCategory).filter(
+                    FinanceCategory.owner == user,
+                    FinanceCategory.name.ilike(category_name),
+                ).first()
             if not cat:
                 return {"error": "Category not found", "exit_code": 1}
             tx.category_id = cat.id
@@ -272,7 +302,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
             "error": (
                 f"Unknown action '{action}'. Valid: list_accounts, list_transactions, "
                 "spending_report, budget_status, trends, list_categories, list_import_batches, "
-                "categorize_transaction, set_budget, create_rule."
+                "apply_rules, categorize_transaction, set_budget, create_rule."
             ),
             "exit_code": 1,
         }

@@ -109,6 +109,22 @@ async function _promptNewAccount() {
   _renderPanel();
 }
 
+function _categoryOptions(selectedId) {
+  const income = _categories.filter((c) => c.is_income);
+  const expense = _categories.filter((c) => !c.is_income);
+  const render = (list) => list.map((c) =>
+    `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${c.name}</option>`
+  ).join('');
+  let html = '<option value="">—</option>';
+  if (income.length) {
+    html += `<optgroup label="Income">${render(income)}</optgroup>`;
+  }
+  if (expense.length) {
+    html += `<optgroup label="Spending">${render(expense)}</optgroup>`;
+  }
+  return html;
+}
+
 function _tabStyle(tab) {
   return _activeTab === tab ? 'font-weight:600;text-decoration:underline;' : '';
 }
@@ -125,14 +141,12 @@ async function _renderTransactions() {
   const data = await _api(`/transactions?account_id=${encodeURIComponent(_activeAccountId)}&limit=200&search=${encodeURIComponent(search)}`);
   const rows = (data.transactions || []).map((tx) => {
     const amtClass = tx.amount_cents < 0 ? 'color:var(--danger,#e74c3c)' : 'color:var(--success,#2ecc71)';
-    const catOpts = _categories.map((c) =>
-      `<option value="${c.id}" ${c.id === tx.category_id ? 'selected' : ''}>${c.name}</option>`
-    ).join('');
+    const catOpts = _categoryOptions(tx.category_id);
     return `<tr>
       <td>${tx.date || ''}</td>
       <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(tx.payee)}">${_escHtml(tx.payee)}</td>
       <td style="${amtClass};text-align:right;">${_fmtMoney(tx.amount_cents)}</td>
-      <td><select data-tx-cat="${tx.id}" class="finance-cat-select"><option value="">—</option>${catOpts}</select></td>
+      <td><select data-tx-cat="${tx.id}" class="finance-cat-select">${catOpts}</select></td>
     </tr>`;
   }).join('');
   panel.innerHTML = `
@@ -330,7 +344,8 @@ export async function openFinance() {
   _open = true;
   _modal.style.display = 'flex';
   try {
-    await Promise.all([_loadAccounts(), _loadCategories()]);
+    await _loadAccounts();
+    await _loadCategories();
     await _renderPanel();
   } catch (err) {
     const panel = _el('finance-panel');

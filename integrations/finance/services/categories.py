@@ -7,7 +7,12 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from integrations.finance.models import FinanceCategory, FinanceCategorizationRule, FinanceTransaction
+from integrations.finance.models import (
+    FinanceCategory,
+    FinanceCategoryBudget,
+    FinanceCategorizationRule,
+    FinanceTransaction,
+)
 
 
 DEFAULT_CATEGORIES = [
@@ -26,11 +31,61 @@ DEFAULT_CATEGORIES = [
 ]
 
 
+def dedupe_categories(db: Session, owner: str) -> int:
+    """Merge duplicate category names for an owner; returns rows removed."""
+    cats = (
+        db.query(FinanceCategory)
+        .filter(FinanceCategory.owner == owner)
+        .order_by(FinanceCategory.display_order, FinanceCategory.created_at, FinanceCategory.id)
+        .all()
+    )
+    canonical_by_name: dict[str, FinanceCategory] = {}
+    removed = 0
+    for cat in cats:
+        key = (cat.name or "").strip().lower()
+        if not key:
+            continue
+        if key not in canonical_by_name:
+            canonical_by_name[key] = cat
+            continue
+        canonical = canonical_by_name[key]
+        duplicate = cat
+        db.query(FinanceTransaction).filter(
+            FinanceTransaction.category_id == duplicate.id,
+        ).update({FinanceTransaction.category_id: canonical.id}, synchronize_session=False)
+        db.query(FinanceCategorizationRule).filter(
+            FinanceCategorizationRule.category_id == duplicate.id,
+        ).update({FinanceCategorizationRule.category_id: canonical.id}, synchronize_session=False)
+        for budget in db.query(FinanceCategoryBudget).filter(
+            FinanceCategoryBudget.category_id == duplicate.id,
+        ).all():
+            existing = db.query(FinanceCategoryBudget).filter(
+                FinanceCategoryBudget.owner == owner,
+                FinanceCategoryBudget.month == budget.month,
+                FinanceCategoryBudget.category_id == canonical.id,
+            ).first()
+            if existing:
+                existing.limit_cents = max(int(existing.limit_cents or 0), int(budget.limit_cents or 0))
+                db.delete(budget)
+            else:
+                budget.category_id = canonical.id
+        db.delete(duplicate)
+        removed += 1
+    if removed:
+        db.commit()
+    return removed
+
+
 def ensure_default_categories(db: Session, owner: str) -> None:
-    existing = db.query(FinanceCategory).filter(FinanceCategory.owner == owner).count()
-    if existing:
-        return
+    dedupe_categories(db, owner)
+    existing_names = {
+        (c.name or "").strip().lower()
+        for c in db.query(FinanceCategory).filter(FinanceCategory.owner == owner).all()
+    }
+    added = False
     for i, (name, is_income, color) in enumerate(DEFAULT_CATEGORIES):
+        if name.strip().lower() in existing_names:
+            continue
         db.add(FinanceCategory(
             id=str(uuid.uuid4()),
             owner=owner,
@@ -39,7 +94,9 @@ def ensure_default_categories(db: Session, owner: str) -> None:
             display_order=i,
             color=color,
         ))
-    db.commit()
+        added = True
+    if added:
+        db.commit()
 
 
 def apply_rules_to_transactions(db: Session, owner: str, transactions: list[FinanceTransaction]) -> int:

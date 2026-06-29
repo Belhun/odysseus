@@ -569,7 +569,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "manage_finance",
-            "description": "Read and manage local finance data: accounts, transactions, spending by category, budgets, and trends. Use for spending questions, budget checks, and transaction lookups. Bank CSV/OFX import is UI-only — use ui_control open_panel finance to open the Import tab. Prefer spending_report for 'where did my money go' questions; use list_transactions only when the user needs specific rows (max 50).",
+            "description": "Read and manage local finance data: accounts, transactions, spending by category, budgets, and trends. Categorize with categorize_transaction (by category_name) or bulk-apply payee rules via apply_rules after create_rule. Bank CSV/OFX import is UI-only — use ui_control open_panel finance. Prefer spending_report for totals; list_transactions for specific rows (max 50).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -583,6 +583,7 @@ FUNCTION_TOOL_SCHEMAS = [
                             "trends",
                             "list_categories",
                             "list_import_batches",
+                            "apply_rules",
                             "categorize_transaction",
                             "set_budget",
                             "create_rule",
@@ -592,6 +593,7 @@ FUNCTION_TOOL_SCHEMAS = [
                     "month": {"type": "string", "description": "YYYY-MM for spending/budget/trends filters"},
                     "account_id": {"type": "string", "description": "Filter transactions by account id or prefix"},
                     "category_id": {"type": "string", "description": "Category id or prefix"},
+                    "category_name": {"type": "string", "description": "Category name for categorize_transaction (e.g. Groceries)"},
                     "transaction_id": {"type": "string", "description": "Transaction id or prefix for categorize_transaction"},
                     "search": {"type": "string", "description": "Payee search text for list_transactions"},
                     "limit": {"type": "integer", "description": "Max transactions to return (default 25, max 50)"},
