@@ -118,14 +118,18 @@ async def register_builtin_servers(mcp_manager):
         except BaseException as e:
             logger.warning(f"Built-in MCP server {name} error: {type(e).__name__}: {e}")
 
+    python_tasks = []
     for server_id, (script, name) in _BUILTIN_SERVERS.items():
         script_path = os.path.join(base_dir, script)
         if not os.path.exists(script_path):
             logger.warning(f"Built-in MCP server script not found: {script_path}")
             continue
-        asyncio.create_task(_connect_python_server(server_id, script_path, name))
+        python_tasks.append(_connect_python_server(server_id, script_path, name))
 
-    # Register NPX-based servers in the background (they take longer to start)
+    if python_tasks:
+        await asyncio.gather(*python_tasks, return_exceptions=True)
+
+    # NPX-based servers take longer to start; run after Python builtins.
     npx_path = _find_npx()
     logger.info(f"NPX binary resolved to: {npx_path}")
 
@@ -175,7 +179,7 @@ async def register_builtin_servers(mcp_manager):
             except BaseException as e:
                 logger.warning(f"Built-in NPX server {cfg['name']} error: {type(e).__name__}: {e}")
 
-    asyncio.create_task(_start_npx_servers())
+    await _start_npx_servers()
 
 
 def _npx_package_from_args(args):

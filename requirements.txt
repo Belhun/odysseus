@@ -41,6 +41,7 @@ mcp
 pyotp
 qrcode[pil]
 croniter
+ofxparse
 pytest
 pytest-asyncio
 # starlette.testclient prefers httpx2 since Starlette 1.2.0 and warns on every

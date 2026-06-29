@@ -38,6 +38,8 @@ NON_ADMIN_BLOCKED_TOOLS = {
     "reply_to_email",
     "list_emails",
     "read_email",
+    "read_local_emails",
+    "sync_local_emails",
     "resolve_contact",
     "manage_contact",
     "manage_calendar",

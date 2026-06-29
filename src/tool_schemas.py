@@ -415,13 +415,13 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ui_control",
-            "description": "Control the user interface. Actions: toggle (turn tools on/off), open_panel (open a modal: documents/library, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook), open_email_reply (open an email reply draft document; does NOT send), set_mode, switch_model, set_theme (built-in presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute), create_theme (CREATE any custom theme with a name + colors object — pick distinctive, evocative hex colors that match the requested aesthetic, NOT generic defaults. The theme auto-applies after creation). When a user asks for ANY theme not in the built-in preset list, ALWAYS use create_theme.",
+            "description": "Control the user interface. Actions: toggle (turn tools on/off), open_panel (open a modal: documents/library, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook, finance/banking/budget), open_email_reply (open an email reply draft document; does NOT send), set_mode, switch_model, set_theme (built-in presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute), create_theme (CREATE any custom theme with a name + colors object — pick distinctive, evocative hex colors that match the requested aesthetic, NOT generic defaults. The theme auto-applies after creation). When a user asks for ANY theme not in the built-in preset list, ALWAYS use create_theme.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["toggle", "open_panel", "open_email_reply", "set_mode", "switch_model", "set_theme", "create_theme", "get_toggles"],
                                "description": "The UI action. Use set_theme for presets, create_theme to build a custom theme with any hex colors"},
-                    "name": {"type": "string", "description": "For toggle: web, bash, research, incognito, document_editor (aliases: shell, search, deepresearch, documents). For open_panel: documents, gallery, email, sessions, notes, brain/memories, skills, settings, cookbook. For open_email_reply: email UID. For set_theme: a preset theme name. For create_theme: the custom theme name."},
+                    "name": {"type": "string", "description": "For toggle: web, bash, research, incognito, document_editor (aliases: shell, search, deepresearch, documents). For open_panel: documents, gallery, email, sessions, notes, brain/memories, skills, settings, cookbook, finance. For open_email_reply: email UID. For set_theme: a preset theme name. For create_theme: the custom theme name."},
                     "value": {"type": "string", "description": "Value: on/off for toggle, agent/chat for set_mode, model name for switch_model, theme name for set_theme, or folder for open_email_reply"},
                     "uid": {"type": "string", "description": "Email UID for open_email_reply"},
                     "folder": {"type": "string", "description": "Email folder for open_email_reply (default INBOX)"},
@@ -564,6 +564,130 @@ FUNCTION_TOOL_SCHEMAS = [
                 "required": ["action"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_finance",
+            "description": (
+                "Read and manage the user's local Finance plugin data (bank accounts, imported transactions, budgets). "
+                "Requires Finance installed in Settings → Integrations. NOT for email — use list_emails for mail.\n\n"
+                "ACTIONS (always pass action):\n"
+                "• list_accounts — balances and account types. No other params. Start here for 'show my Wells Fargo / bank accounts'.\n"
+                "• list_transactions — find specific rows. Params: search (payee text), month (YYYY-MM), account_id, limit (max 50). "
+                "Each row ends with [8-char id] — copy that id for categorize_transaction.\n"
+                "• list_categories — category names (Income, Groceries, …). Use category_name from this list; ids are optional.\n"
+                "• categorize_transaction — tag ONE transaction. REQUIRED: transaction_id (8-char prefix from list_transactions) "
+                "AND category_name (e.g. 'Income', 'Groceries'). PREFER category_name over category_id. "
+                "WRONG: category_id='Income'. RIGHT: category_name='Income'.\n"
+                "• create_rule — auto-categorize by payee pattern. Params: pattern (substring/regex, e.g. 'ATM CASH DEPOSIT'), "
+                "category_name. apply_existing defaults true — updates existing uncategorized matches immediately.\n"
+                "• apply_rules — run all payee rules on uncategorized transactions (up to 500). Use after bulk rule setup.\n"
+                "• spending_report — monthly EXPENSES by category (debits only). Params: month (YYYY-MM).\n"
+                "• income_report — monthly INCOME/deposits by category (credits only). Use when user asks about deposits, paychecks, or marking something as income.\n"
+                "• budget_status — same data as spending_report with budget limits.\n"
+                "• set_budget — set monthly limit. Params: category_id OR category_name, month, limit_dollars or limit_cents.\n"
+                "• trends — multi-month income vs spending summary. Params: months (default 6).\n"
+                "• list_import_batches — recent CSV import history.\n\n"
+                "TYPICAL FLOWS:\n"
+                "Recategorize one deposit as Income: list_transactions(search='ATM') → categorize_transaction(transaction_id='c522e957', category_name='Income') → income_report(month='2026-06').\n"
+                "Auto-categorize all ATM deposits: create_rule(pattern='ATM CASH DEPOSIT', category_name='Income').\n"
+                "How much did I spend: spending_report(month='2026-06').\n"
+                "Import bank CSV: no tool — ui_control open_panel finance.\n\n"
+                "IDs are 8-character prefixes of full UUIDs shown in [brackets]. Prefix matching works; full UUID not required."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "list_accounts",
+                            "list_transactions",
+                            "spending_report",
+                            "budget_status",
+                            "trends",
+                            "list_categories",
+                            "list_import_batches",
+                            "apply_rules",
+                            "categorize_transaction",
+                            "set_budget",
+                            "create_rule",
+                            "income_report",
+                        ],
+                        "description": (
+                            "What to do. See tool description for when to use each action. "
+                            "Read: list_accounts, list_transactions, list_categories, spending_report, income_report, budget_status, trends. "
+                            "Write: categorize_transaction, create_rule, apply_rules, set_budget."
+                        ),
+                    },
+                    "month": {
+                        "type": "string",
+                        "description": "Filter month as YYYY-MM (e.g. 2026-06). Used by spending_report, income_report, budget_status, list_transactions.",
+                    },
+                    "account_id": {
+                        "type": "string",
+                        "description": "Optional 8-char account id prefix from list_accounts. Filters list_transactions.",
+                    },
+                    "category_id": {
+                        "type": "string",
+                        "description": (
+                            "Optional 8-char category id prefix from list_categories. "
+                            "Only use when category_name is unknown. For categorize_transaction prefer category_name='Income' etc."
+                        ),
+                    },
+                    "category_name": {
+                        "type": "string",
+                        "description": (
+                            "Category label — REQUIRED for categorize_transaction (preferred over category_id). "
+                            "Examples: Income, Groceries, Dining, Transfers. Also used by create_rule and set_budget."
+                        ),
+                    },
+                    "transaction_id": {
+                        "type": "string",
+                        "description": (
+                            "REQUIRED for categorize_transaction. 8-char id prefix from the [brackets] at end of a list_transactions row."
+                        ),
+                    },
+                    "search": {
+                        "type": "string",
+                        "description": "Payee/description substring for list_transactions (e.g. 'ATM CASH DEPOSIT', 'AMAZON').",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max rows for list_transactions (default 25, max 50).",
+                    },
+                    "months": {
+                        "type": "integer",
+                        "description": "Number of months for trends (default 6, max 24).",
+                    },
+                    "limit_cents": {
+                        "type": "integer",
+                        "description": "Monthly budget cap in cents for set_budget.",
+                    },
+                    "limit_dollars": {
+                        "type": "number",
+                        "description": "Monthly budget cap in dollars for set_budget (easier than limit_cents).",
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": (
+                            "REQUIRED for create_rule. Payee text to match (case-insensitive regex), "
+                            "e.g. 'ATM CASH DEPOSIT', 'AMAZON', 'NETFLIX'."
+                        ),
+                    },
+                    "priority": {
+                        "type": "integer",
+                        "description": "Optional rule priority for create_rule (higher runs first, default 0).",
+                    },
+                    "apply_existing": {
+                        "type": "boolean",
+                        "description": "For create_rule only. If true (default), immediately categorize matching uncategorized transactions.",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
     },
     {
         "type": "function",
@@ -1099,6 +1223,40 @@ FUNCTION_TOOL_SCHEMAS = [
                     "account": {"type": "string", "description": "Optional account name/email/id from list_email_accounts, especially when the UID came from a non-default mailbox"},
                 },
                 "required": ["uid"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_local_emails",
+            "description": "Read emails from the local mirror (fast, full history, offline). List with limit/offset (offset-from-latest paging) or since/until date range. Use full=true with id for one message body + attachment local paths. Prefer over list_emails for browsing; use list_emails only when you need live freshness.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "folder": {"type": "string", "description": "Folder (default INBOX)"},
+                    "account": {"type": "string", "description": "Account name/email/id from list_email_accounts"},
+                    "limit": {"type": "integer", "description": "Max rows (default 10)"},
+                    "offset": {"type": "integer", "description": "Skip N newest rows for paging (default 0)"},
+                    "since": {"type": "string", "description": "Optional start date (natural language or ISO)"},
+                    "until": {"type": "string", "description": "Optional end date (natural language or ISO)"},
+                    "full": {"type": "boolean", "description": "Fetch full body for one message"},
+                    "id": {"type": "integer", "description": "Local row id when full=true"},
+                },
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sync_local_emails",
+            "description": "Sync the local email mirror now (INBOX + Sent). Returns per-folder summary. Background task keeps it fresh; use for on-demand catch-up.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Optional account name/email/id"},
+                    "full": {"type": "boolean", "description": "Backfill full history in one run (default true for manual sync)"},
+                },
             }
         }
     },

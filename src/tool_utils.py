@@ -6,7 +6,7 @@ will reintroduce the circular dependency that this module exists to break.
 
 import json
 
-from src.constants import MAX_OUTPUT_CHARS
+from src.constants import MAX_OUTPUT_CHARS, TOOL_UI_DISPLAY_CHARS
 
 _mcp_manager = None
 
@@ -38,6 +38,15 @@ def _truncate(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
         text = "" if text is None else str(text)
     if len(text) > limit:
         return text[:limit] + f"\n... (truncated, {len(text)} chars total)"
+    return text
+
+
+def clip_tool_ui_display(text: str, limit: int = TOOL_UI_DISPLAY_CHARS) -> str:
+    """Cap tool output shown in the chat UI (live stream + saved history)."""
+    if not isinstance(text, str):
+        text = "" if text is None else str(text)
+    if len(text) > limit:
+        return text[:limit] + f"\n... (truncated for display, {len(text)} chars total)"
     return text
 
 

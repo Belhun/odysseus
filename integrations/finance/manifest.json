@@ -1,0 +1,8 @@
+{
+  "id": "finance",
+  "name": "Banking & Budgeting",
+  "description": "Manual bank CSV/OFX import, accounts, budgets, and spending reports. Data stays on your server.",
+  "version": "0.1.0",
+  "min_odysseus_version": "1.0.0",
+  "feature_flag": "finance"
+}
