@@ -462,16 +462,27 @@ When **`python.exe` @ 100%**:
 
 ## 10. Next actions (recommended order)
 
-1. Create `core/perf_emit.py`, `core/perf_context.py`, `core/perf_middleware.py`
-2. Wire middleware + sampler in `app.py` lifespan
-3. Add `to_thread` wrapper at highest-traffic call sites (`email_local_store`, `tool_index`, auth)
-4. Wrap `_execute_task_locked` + name startup tasks
-5. Thread `request_id` through chat → agent → subprocess
-6. Add `GET /api/diagnostics/perf`
-7. Layer embedding/email/LLM events
-8. Add docker stats + Ollama `/api/ps` + gpu.sample
+1. ~~Create `core/perf_emit.py`, `core/perf_context.py`, `core/perf_middleware.py`~~ **Done**
+2. ~~Wire middleware + sampler in `app.py` lifespan~~ **Done**
+3. ~~Add `to_thread` wrapper at highest-traffic call sites~~ **Done** (`core/async_thread.py`)
+4. ~~Wrap `_execute_task_locked` + name startup tasks~~ **Done**
+5. ~~Thread `request_id` through chat → agent → subprocess~~ **Done**
+6. ~~Add `GET /api/diagnostics/perf`~~ **Done**
+7. ~~Layer embedding/email/LLM events~~ **Done**
+8. ~~Add docker stats + Ollama `/api/ps` + gpu.sample~~ **Done**
 9. Instrument MCP children per `processes/02-builtin-mcp.md` (PID logging, `_do_call` latency)
+
+### Per-task resource sampling (implemented)
+
+See **`06-per-task-performance-plan.md`** for the full design. Shipped on this branch:
+
+- `core/perf_runs.py` — active-run registry + peak/avg aggregates
+- `core/cpu_meter.py` — CPU% via psutil (optional) or `os.times` fallback
+- `core/process_sampler.py` — adaptive 2s/30s cadence, `task.run.resource_sample` events
+- `src/task_scheduler.py` — `run_id` context for full execution; `metrics_json` on all exit paths
+- `routes/task_routes.py` — `metrics` on run APIs; `GET .../runs/{run_id}/samples`
+- `static/js/tasks.js` — Activity + run history perf badge + sparkline
 
 ---
 
-*This roadmap synthesizes all `Performance tracking/` investigation docs on branch `feat/performance-tracking`. Implementation tracked separately; no code changes until Phase 1 kickoff.*
+*This roadmap synthesizes all `Performance tracking/` investigation docs on branch `feat/performance-tracking`. Phases 1–4 base tracking and per-task sampling are implemented.*

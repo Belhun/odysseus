@@ -1165,7 +1165,8 @@ async def _startup_event():
         from core.container_stats import start_container_sampler
         from core.gpu_sampler import start_gpu_ollama_sampler
         _perf_interval = float(os.getenv("ODYSSEUS_PERF_SAMPLE_INTERVAL", "30"))
-        _startup_tasks.append(start_process_sampler(_perf_interval))
+        _perf_task_interval = float(os.getenv("ODYSSEUS_PERF_TASK_INTERVAL", "2"))
+        _startup_tasks.append(start_process_sampler(_perf_interval, _perf_task_interval))
         ct = start_container_sampler(max(_perf_interval, 60.0))
         if ct:
             _startup_tasks.append(ct)

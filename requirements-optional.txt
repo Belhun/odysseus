@@ -12,6 +12,13 @@
 # GPU-accelerated transcription — it's auto-detected, CPU is used otherwise.
 faster-whisper
 
+# Per-task performance tracking (CPU%, RAM, child-process attribution). The
+# performance-tracking feature works without it — it falls back to os.times()
+# for process CPU% and /proc for RAM — but psutil gives accurate cross-platform
+# CPU%, RSS, and recursive child-process rollup for tasks that spawn
+# subprocesses. Lazy-imported in core/cpu_meter.py.
+psutil
+
 # DuckDuckGo as a search provider option.
 # Install if you want DDG in the search-provider dropdown.
 # Alternatives: SearXNG, Brave, Tavily, Serper, Google PSE.

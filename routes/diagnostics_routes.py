@@ -119,6 +119,13 @@ def setup_diagnostics_routes(
         from core.process_sampler import get_system_snapshot
         return {"status": "success", "snapshot": get_system_snapshot()}
 
+    @router.get("/api/diagnostics/active-runs")
+    async def get_active_runs(request: Request) -> Dict[str, Any]:
+        """Currently executing task runs with live resource peaks."""
+        require_admin(request)
+        from core.perf_runs import active_run_summaries
+        return {"status": "success", "active_runs": active_run_summaries()}
+
     @router.get("/api/db/stats")
     async def get_database_stats(request: Request) -> Dict[str, Any]:
         require_admin(request)
