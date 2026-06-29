@@ -31,6 +31,8 @@ def _load_module(name: str, rel_path: str):
 perf_context = _load_module("perf_context_test", "core/perf_context.py")
 sys.modules["core.perf_context"] = perf_context
 perf_emit = _load_module("perf_emit_test", "core/perf_emit.py")
+perf_runs = _load_module("perf_runs_test", "core/perf_runs.py")
+cpu_meter = _load_module("cpu_meter_test", "core/cpu_meter.py")
 
 get_correlation = perf_context.get_correlation
 request_id_var = perf_context.request_id_var
@@ -86,6 +88,51 @@ class PerfContextTests(unittest.TestCase):
         self.assertEqual(corr.get("workload_kind"), "bg_loop")
         self.assertEqual(corr.get("workload_name"), "email.poller")
         self.assertNotIn("workload_kind", get_correlation())
+
+
+class PerfRunsTests(unittest.TestCase):
+    def test_register_record_complete(self):
+        perf_runs.register("run-1", task_name="Email Sync", task_type="action")
+        perf_runs.record_sample(
+            "run-1", cpu_pct=50.0, cpu_pct_normalized=6.0, rss_mb=1000.0, cpu_source="psutil"
+        )
+        perf_runs.record_sample(
+            "run-1", cpu_pct=90.0, cpu_pct_normalized=11.0, rss_mb=2048.0, cpu_source="psutil"
+        )
+        self.assertEqual(perf_runs.active_count(), 1)
+        agg = perf_runs.complete("run-1", duration_ms=12000.0, status="success")
+        self.assertEqual(agg["status"], "success")
+        self.assertEqual(agg["samples"], 2)
+        self.assertEqual(agg["cpu_pct_peak"], 90.0)
+        self.assertEqual(agg["cpu_pct_avg"], 70.0)
+        self.assertEqual(agg["rss_mb_peak"], 2048.0)
+        self.assertEqual(perf_runs.active_count(), 0)
+
+    def test_complete_unknown_run(self):
+        self.assertIsNone(perf_runs.complete("missing", 1.0, "success"))
+
+    def test_gpu_peak_tracked(self):
+        perf_runs.register("run-gpu")
+        perf_runs.record_sample(
+            "run-gpu", cpu_pct=10.0, gpu=[{"util_pct": 41, "mem_used_mb": 8192}]
+        )
+        agg = perf_runs.complete("run-gpu", 1000.0, "success")
+        self.assertEqual(agg["gpu_util_peak"], 41.0)
+        self.assertEqual(agg["gpu_mem_mb_peak"], 8192.0)
+
+
+class CpuMeterTests(unittest.TestCase):
+    def test_sample_process_returns_fields(self):
+        # Call twice so a delta-based source can produce cpu_pct.
+        cpu_meter.sample_process_cpu()
+        sample = cpu_meter.sample_process_cpu()
+        self.assertIn("pid", sample)
+        self.assertIn("source", sample)
+        self.assertIn(sample["source"], ("psutil", "os.times"))
+
+    def test_system_sample(self):
+        sysd = cpu_meter.sample_system()
+        self.assertIsInstance(sysd, dict)
 
 
 if __name__ == "__main__":
