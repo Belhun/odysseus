@@ -69,6 +69,42 @@ def spending_by_category(db: Session, owner: str, month: str) -> list[dict]:
     return out
 
 
+def income_by_category(db: Session, owner: str, month: str) -> list[dict]:
+    """Positive inflows grouped by category (deposits, paychecks, etc.)."""
+    start, end = month_bounds(month)
+    rows = (
+        db.query(
+            FinanceTransaction.category_id,
+            func.sum(FinanceTransaction.amount_cents).label("total"),
+            func.count(FinanceTransaction.id).label("count"),
+        )
+        .filter(
+            FinanceTransaction.owner == owner,
+            FinanceTransaction.date >= start,
+            FinanceTransaction.date <= end,
+            FinanceTransaction.amount_cents > 0,
+        )
+        .group_by(FinanceTransaction.category_id)
+        .all()
+    )
+    cats = {
+        c.id: c
+        for c in db.query(FinanceCategory).filter(FinanceCategory.owner == owner).all()
+    }
+    out = []
+    for category_id, total, count in rows:
+        cat = cats.get(category_id)
+        out.append({
+            "category_id": category_id,
+            "category_name": cat.name if cat else "Uncategorized",
+            "income_cents": int(total or 0),
+            "transaction_count": int(count or 0),
+            "is_income_category": bool(cat.is_income) if cat else False,
+        })
+    out.sort(key=lambda r: r["income_cents"], reverse=True)
+    return out
+
+
 def monthly_trends(db: Session, owner: str, months: int = 6) -> list[dict]:
     today = date.today()
     results = []

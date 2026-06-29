@@ -35,6 +35,84 @@ def _require_owner(owner: Optional[str]) -> str:
     return owner
 
 
+def _resolve_category(db, user: str, *, category_id: str | None = None, category_name: str | None = None):
+    """Match category by full id, id prefix (8-char display ids), or name."""
+    from integrations.finance.models import FinanceCategory
+    from integrations.finance.services.categories import dedupe_categories
+
+    dedupe_categories(db, user)
+    if category_id:
+        cid = str(category_id).strip()
+        if not cid:
+            return None
+        exact = db.query(FinanceCategory).filter(
+            FinanceCategory.owner == user,
+            FinanceCategory.id == cid,
+        ).first()
+        if exact:
+            return exact
+        matches = (
+            db.query(FinanceCategory)
+            .filter(FinanceCategory.owner == user, FinanceCategory.id.startswith(cid))
+            .order_by(FinanceCategory.display_order, FinanceCategory.created_at)
+            .all()
+        )
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return matches[0]
+        for match in matches:
+            if match.id[:8] == cid[:8]:
+                return match
+        return matches[0]
+    if category_name:
+        name = str(category_name).strip()
+        if not name:
+            return None
+        matches = (
+            db.query(FinanceCategory)
+            .filter(FinanceCategory.owner == user, FinanceCategory.name.ilike(name))
+            .order_by(FinanceCategory.display_order, FinanceCategory.created_at)
+            .all()
+        )
+        if not matches:
+            return None
+        if name.lower() == "income":
+            income_cats = [m for m in matches if m.is_income]
+            if income_cats:
+                return income_cats[0]
+        return matches[0]
+    return None
+
+
+def _resolve_transaction(db, user: str, tx_id: str):
+    from integrations.finance.models import FinanceTransaction
+
+    tid = (tx_id or "").strip()
+    if not tid:
+        return None
+    exact = db.query(FinanceTransaction).filter(
+        FinanceTransaction.owner == user,
+        FinanceTransaction.id == tid,
+    ).first()
+    if exact:
+        return exact
+    matches = (
+        db.query(FinanceTransaction)
+        .filter(FinanceTransaction.owner == user, FinanceTransaction.id.startswith(tid))
+        .order_by(FinanceTransaction.date.desc(), FinanceTransaction.created_at.desc())
+        .all()
+    )
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    for match in matches:
+        if match.id[:8] == tid[:8]:
+            return match
+    return matches[0]
+
+
 async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
     """Read and update local finance data (accounts, transactions, budgets)."""
     from src.plugins.registry import is_plugin_active
@@ -58,6 +136,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
         "categories": "list_categories",
         "imports": "list_import_batches",
         "categorize": "categorize_transaction",
+        "income": "income_report",
     }
     action = _ALIASES.get(action, action)
 
@@ -72,7 +151,13 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
     )
     from integrations.finance.services.categories import ensure_default_categories
     from integrations.finance.services.import_service import account_balance_cents
-    from integrations.finance.services.reports import month_bounds, month_key, monthly_trends, spending_by_category
+    from integrations.finance.services.reports import (
+        income_by_category,
+        month_bounds,
+        month_key,
+        monthly_trends,
+        spending_by_category,
+    )
 
     user = _require_owner(owner)
     db = get_session_factory()()
@@ -145,6 +230,20 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
                 lines.append(line)
             return {"response": "\n".join(lines), "exit_code": 0}
 
+        if action == "income_report":
+            month = (args.get("month") or month_key(date.today()))[:7]
+            ensure_default_categories(db, user)
+            rows = income_by_category(db, user, month)
+            if not rows:
+                return {"response": f"No income recorded for {month}.", "exit_code": 0}
+            lines = [f"Income for {month}:"]
+            for row in rows:
+                lines.append(
+                    f"- {row['category_name']}: {_fmt_cents(row['income_cents'])} "
+                    f"({row['transaction_count']} tx)"
+                )
+            return {"response": "\n".join(lines), "exit_code": 0}
+
         if action == "trends":
             months = min(int(args.get("months") or 6), 24)
             trends = monthly_trends(db, user, months)
@@ -163,12 +262,15 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
             cats = (
                 db.query(FinanceCategory)
                 .filter(FinanceCategory.owner == user)
-                .order_by(FinanceCategory.name)
+                .order_by(FinanceCategory.is_income.desc(), FinanceCategory.display_order, FinanceCategory.name)
                 .all()
             )
             if not cats:
                 return {"response": "No categories.", "exit_code": 0}
-            lines = [f"- [{c.id[:8]}] {c.name}" + (" (income)" if c.is_income else "") for c in cats]
+            lines = []
+            for c in cats:
+                tag = " (income)" if c.is_income else ""
+                lines.append(f"- [{c.id[:8]}] {c.name}{tag}")
             return {"response": "Categories:\n" + "\n".join(lines), "exit_code": 0}
 
         if action == "list_import_batches":
@@ -207,34 +309,35 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
             tx_id = (args.get("transaction_id") or args.get("id") or "").strip()
             category_id = args.get("category_id")
             category_name = (args.get("category_name") or args.get("category") or "").strip()
+            if category_id and not category_name and str(category_id).strip().lower() in {
+                "income", "groceries", "dining", "shopping", "transfers", "other",
+            }:
+                category_name = str(category_id).strip()
+                category_id = None
             if not tx_id or (not category_id and not category_name):
                 return {
-                    "error": "categorize_transaction requires transaction_id and category_id or category_name",
+                    "error": (
+                        "categorize_transaction requires transaction_id and category_name "
+                        "(preferred, e.g. 'Income') or category_id prefix from list_categories"
+                    ),
                     "exit_code": 1,
                 }
-            tx = db.query(FinanceTransaction).filter(
-                FinanceTransaction.owner == user,
-                FinanceTransaction.id.startswith(tx_id),
-            ).first()
+            tx = _resolve_transaction(db, user, tx_id)
             if not tx:
                 return {"error": "Transaction not found", "exit_code": 1}
-            cat = None
-            if category_id:
-                cat = db.query(FinanceCategory).filter(
-                    FinanceCategory.owner == user,
-                    FinanceCategory.id.startswith(str(category_id)),
-                ).first()
-            elif category_name:
-                cat = db.query(FinanceCategory).filter(
-                    FinanceCategory.owner == user,
-                    FinanceCategory.name.ilike(category_name),
-                ).first()
+            cat = _resolve_category(db, user, category_id=category_id, category_name=category_name)
             if not cat:
-                return {"error": "Category not found", "exit_code": 1}
+                return {
+                    "error": "Category not found — use list_categories, then category_name like 'Income'",
+                    "exit_code": 1,
+                }
             tx.category_id = cat.id
             db.commit()
             return {
-                "response": f"Categorized {tx.payee or tx.id[:8]} as {cat.name}.",
+                "response": (
+                    f"Categorized {tx.date} {_fmt_cents(tx.amount_cents)} "
+                    f"{(tx.payee or '')[:40]} as {cat.name}."
+                ),
                 "exit_code": 0,
             }
 
@@ -246,10 +349,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
                 limit_cents = int(round(float(args["limit_dollars"]) * 100))
             if not category_id or limit_cents is None:
                 return {"error": "set_budget requires category_id and limit_cents (or limit_dollars)", "exit_code": 1}
-            cat = db.query(FinanceCategory).filter(
-                FinanceCategory.owner == user,
-                FinanceCategory.id.startswith(str(category_id)),
-            ).first()
+            cat = _resolve_category(db, user, category_id=str(category_id))
             if not cat:
                 return {"error": "Category not found", "exit_code": 1}
             existing = db.query(FinanceCategoryBudget).filter(
@@ -274,14 +374,21 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
             }
 
         if action == "create_rule":
+            from integrations.finance.services.categories import apply_rules_to_transactions
+
             pattern = (args.get("pattern") or "").strip()
             category_id = args.get("category_id")
-            if not pattern or not category_id:
-                return {"error": "create_rule requires pattern and category_id", "exit_code": 1}
-            cat = db.query(FinanceCategory).filter(
-                FinanceCategory.owner == user,
-                FinanceCategory.id.startswith(str(category_id)),
-            ).first()
+            category_name = (args.get("category_name") or args.get("category") or "").strip()
+            if not pattern or (not category_id and not category_name):
+                return {
+                    "error": "create_rule requires pattern and category_id or category_name",
+                    "exit_code": 1,
+                }
+            cat = _resolve_category(
+                db, user,
+                category_id=str(category_id) if category_id else None,
+                category_name=category_name or None,
+            )
             if not cat:
                 return {"error": "Category not found", "exit_code": 1}
             rule = FinanceCategorizationRule(
@@ -293,16 +400,32 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
             )
             db.add(rule)
             db.commit()
-            return {
-                "response": f"Rule added: payee matching '{pattern}' → {cat.name}.",
-                "exit_code": 0,
-            }
+            applied = 0
+            if args.get("apply_existing", True) is not False:
+                txs = (
+                    db.query(FinanceTransaction)
+                    .filter(
+                        FinanceTransaction.owner == user,
+                        FinanceTransaction.category_id.is_(None),
+                    )
+                    .order_by(FinanceTransaction.date.desc())
+                    .limit(500)
+                    .all()
+                )
+                applied = apply_rules_to_transactions(db, user, txs)
+                db.commit()
+            msg = f"Rule added: payee matching '{pattern}' → {cat.name}."
+            if applied:
+                msg += f" Categorized {applied} existing transaction(s)."
+            else:
+                msg += " Call apply_rules to run rules on uncategorized transactions."
+            return {"response": msg, "exit_code": 0}
 
         return {
             "error": (
                 f"Unknown action '{action}'. Valid: list_accounts, list_transactions, "
                 "spending_report, budget_status, trends, list_categories, list_import_batches, "
-                "apply_rules, categorize_transaction, set_budget, create_rule."
+                "apply_rules, categorize_transaction, set_budget, create_rule, income_report."
             ),
             "exit_code": 1,
         }

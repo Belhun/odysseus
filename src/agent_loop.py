@@ -483,13 +483,13 @@ If the user asks for a reminder/alarm before the event, pass `reminder_minutes` 
 `calendar` accepts a name ("Main") or short-id prefix.""",
     "manage_finance": """\
 ```manage_finance
-{"action": "spending_report", "month": "2026-06"}
+{"action": "categorize_transaction", "transaction_id": "c522e957", "category_name": "Income"}
 ```
-Local finance plugin: accounts, spending by category, budgets, trends, transaction search. \
-Actions: `list_accounts`, `list_transactions`, `spending_report`, `budget_status`, `trends`, `list_categories`, `list_import_batches`, `categorize_transaction`, `set_budget`, `create_rule`. \
-For "how much did I spend on groceries" use `spending_report` (defaults to current month). \
-For specific payees use `list_transactions` with `search` (max 50 rows). \
-Bank CSV/OFX import has no tool path — `ui_control open_panel finance` opens the Import UI.""",
+Local finance plugin: accounts, spending, income, budgets, trends, transaction search. \
+**Categorize one transaction:** `list_transactions` with `search` → copy the 8-char id in brackets → `categorize_transaction` with `category_name` (NOT category_id) e.g. `"Income"`. \
+**Bulk categorize:** `create_rule` with `pattern` + `category_name` — rules auto-apply to existing uncategorized matches. Or `apply_rules` afterward. \
+**Reports:** `spending_report` = expenses only; `income_report` = deposits/income by category. \
+Bank CSV import: `ui_control open_panel finance`.""",
     "create_session": "- ```create_session``` — Create a new chat. Line 1 = chat name, line 2 = model name. Use for background/parallel work.",
     "list_sessions": "- ```list_sessions``` — List chats sorted MOST-RECENT FIRST (the UI calls them 'chats') with clickable chat-title links. Output includes a relative \"last active\" timestamp per row, so the first row is the user's most recent chat. Content = optional filter keyword (matches chat name). When answering, preserve the `[title](#session-id)` links exactly; do not convert them into plain text.",
     "send_to_session": "- ```send_to_session``` — Send a message to another session. Line 1 = session_id, rest = message. Use for orchestrating work across sessions.",

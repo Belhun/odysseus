@@ -129,6 +129,92 @@ async def test_manage_finance_owner_scoped(finance_tool_env):
 
 @pytest.mark.asyncio
 @pytest.mark.area_routes
+async def test_categorize_transaction_with_prefix_ids(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        acct = FinanceAccount(
+            id="dd8bb9fa-1111-2222-3333-444455556666",
+            owner=owner,
+            name="Wells",
+            account_type="checking",
+        )
+        income = FinanceCategory(
+            id="f3d20a4e-aaaa-bbbb-cccc-ddddeeeeffff",
+            owner=owner,
+            name="Income",
+            is_income=True,
+        )
+        db.add_all([acct, income])
+        db.add(FinanceTransaction(
+            id="c522e957-bbbb-cccc-dddd-eeeeffff0000",
+            owner=owner,
+            account_id=acct.id,
+            date=__import__("datetime").date(2026, 6, 26),
+            amount_cents=6000,
+            payee="ATM CASH DEPOSIT ON 06/26",
+            dedup_hash="dep1",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    result = await do_manage_finance(json.dumps({
+        "action": "categorize_transaction",
+        "transaction_id": "c522e957",
+        "category_name": "Income",
+    }), owner=owner)
+    assert result.get("exit_code") == 0, result
+    assert "Income" in result.get("response", "")
+
+    db = finance_tool_env["session_factory"]()
+    try:
+        tx = db.query(FinanceTransaction).filter(FinanceTransaction.id.startswith("c522e957")).one()
+        assert tx.category_id == "f3d20a4e-aaaa-bbbb-cccc-ddddeeeeffff"
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_create_rule_applies_to_existing_transactions(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        acct = FinanceAccount(id="acct-1", owner=owner, name="Checking", account_type="checking")
+        income = FinanceCategory(id="inc-1", owner=owner, name="Income", is_income=True)
+        db.add_all([acct, income])
+        db.add(FinanceTransaction(
+            id="tx-atm",
+            owner=owner,
+            account_id=acct.id,
+            date=__import__("datetime").date(2026, 6, 26),
+            amount_cents=6000,
+            payee="ATM CASH DEPOSIT",
+            dedup_hash="atm1",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    result = await do_manage_finance(json.dumps({
+        "action": "create_rule",
+        "pattern": "ATM CASH DEPOSIT",
+        "category_name": "Income",
+    }), owner=owner)
+    assert result.get("exit_code") == 0
+    assert "Categorized 1" in result.get("response", "")
+
+    db = finance_tool_env["session_factory"]()
+    try:
+        tx = db.query(FinanceTransaction).filter(FinanceTransaction.id == "tx-atm").one()
+        assert tx.category_id == "inc-1"
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
 async def test_app_api_blocks_finance_paths():
     from src.tools.system import do_app_api
 
