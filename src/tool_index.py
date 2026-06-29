@@ -122,7 +122,14 @@ BUILTIN_TOOL_DESCRIPTIONS: Dict[str, str] = {
     "manage_contact": "Save / update / delete / list address-book contacts (CardDAV). Use for info about ANOTHER person — name, email, phone, postal address. Args: action=list|add|update|delete, name, email, phones, address, uid (from list). For 'save this for <person>' / address pastes / phone numbers next to a name, this is the right tool — NOT manage_memory. Do NOT use for facts about the USER ('my name is X'); those are manage_memory.",
     "manage_notes": "Create and manage notes and checklists (Google Keep-style). ALWAYS use this for note/todo/checklist/reminder creation — NEVER hit /api/notes via app_api. Accepts natural-language `due_date` like 'tomorrow at 9am' or '11pm today' (parsed in the USER'S timezone). The due_date IS the reminder — it fires a notification at that time, so do NOT also create a calendar event for the same reminder. Set colors, labels, pin, archive. Do NOT use manage_memory for note content.",
     "manage_calendar": "Calendar event management: list, create, update, delete. Each event can carry a tag/category (event_type — work/personal/health/travel/meal/social/admin/other) and importance (low/normal/high/critical). Resolve today/tomorrow using the Current date and time context, then use ISO datetimes in the user's local wall time; supports all-day events. For event reminders/alarms, pass reminder_minutes; this creates the Notes reminder, so do not also call manage_notes for the same reminder.",
-    "manage_finance": "Local finance and budgeting: list accounts and balances, spending by category, budget status, monthly trends, and transaction search. Use for 'how much did I spend', 'am I over budget', 'show my transactions at Amazon'. Prefer spending_report for category totals; list_transactions only when specific rows are needed (max 50). CSV/OFX bank import is UI-only — open_panel finance for imports. NOT for email — use list_emails for mail.",
+    "manage_finance": (
+        "Local Finance plugin (Wells Fargo / bank CSV data on this server). ALWAYS use for accounts, transactions, spending, budgets — NEVER app_api /api/finance. "
+        "list_accounts = bank balances. list_transactions(search=payee) returns rows with [8-char id] at the end. "
+        "categorize_transaction: REQUIRED transaction_id (from brackets) + category_name ('Income', 'Groceries') — NEVER put category name in category_id. "
+        "create_rule(pattern, category_name) auto-categorizes existing matching transactions. "
+        "spending_report = expenses/debits only; income_report = deposits/credits — use income_report after marking deposits as Income. "
+        "Bank CSV import has no tool: ui_control open_panel finance. NOT email (list_emails is separate)."
+    ),
     "download_model": "Download a HuggingFace model to a local or remote server. Specify repo_id (e.g. 'Qwen/Qwen3-8B'), optional server host, and optional include filter for specific files.",
     "serve_model": "Start serving a model with vLLM, SGLang, llama.cpp, Ollama, or Diffusers. cmd MUST start with the binary directly — e.g. `vllm serve /mnt/HADES/models/Qwen3.5-397B-A17B-AWQ --port 8003 --tensor-parallel-size 8 …`. NEVER prefix with `cd …`, `source …`, or chain with `&&`/`||` — those get rejected by the validator. The venv activation (env_prefix) and CUDA env are added automatically from the target host's saved settings. For image/inpainting/diffusion use python3 scripts/diffusion_server.py --model <repo> --port 8100. After launch, call list_served_models for readiness/errors and retry suggestions. If serve_model fails with 'Invalid characters in cmd', simplify to the bare binary + args.",
     "list_served_models": "List currently running model servers in the Cookbook — shows status (loading, ready, idle, error), model name, port, throughput, and serve failure diagnosis/retry suggestions. Use when the user asks 'what's running', 'show my cookbook', 'which models are up', 'what's serving'.",
@@ -355,7 +362,8 @@ class ToolIndex:
         frozenset({"calendar", "event", "meeting", "schedule", "appointment"}):
             {"manage_calendar"},
         frozenset({"finance", "budget", "budgets", "spending", "transaction", "transactions",
-                   "bank", "banking", "expense", "expenses", "overspend", "checking", "savings"}):
+                   "bank", "banking", "expense", "expenses", "overspend", "checking", "savings",
+                   "wells fargo", "wells", "deposit", "income", "atm"}):
             {"manage_finance", "ui_control"},
         # Detached background `bash` jobs (#!bg): check on / read output / kill.
         frozenset({"background job", "background jobs", "bg job", "bg jobs",

@@ -569,7 +569,33 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "manage_finance",
-            "description": "Read and manage local finance data. To recategorize one transaction use categorize_transaction with category_name (e.g. Income) and the 8-char transaction_id from list_transactions — do NOT pass category names in category_id. create_rule auto-applies to existing uncategorized matches; use apply_rules for a full sweep. income_report shows deposits by category; spending_report shows expenses only.",
+            "description": (
+                "Read and manage the user's local Finance plugin data (bank accounts, imported transactions, budgets). "
+                "Requires Finance installed in Settings → Integrations. NOT for email — use list_emails for mail.\n\n"
+                "ACTIONS (always pass action):\n"
+                "• list_accounts — balances and account types. No other params. Start here for 'show my Wells Fargo / bank accounts'.\n"
+                "• list_transactions — find specific rows. Params: search (payee text), month (YYYY-MM), account_id, limit (max 50). "
+                "Each row ends with [8-char id] — copy that id for categorize_transaction.\n"
+                "• list_categories — category names (Income, Groceries, …). Use category_name from this list; ids are optional.\n"
+                "• categorize_transaction — tag ONE transaction. REQUIRED: transaction_id (8-char prefix from list_transactions) "
+                "AND category_name (e.g. 'Income', 'Groceries'). PREFER category_name over category_id. "
+                "WRONG: category_id='Income'. RIGHT: category_name='Income'.\n"
+                "• create_rule — auto-categorize by payee pattern. Params: pattern (substring/regex, e.g. 'ATM CASH DEPOSIT'), "
+                "category_name. apply_existing defaults true — updates existing uncategorized matches immediately.\n"
+                "• apply_rules — run all payee rules on uncategorized transactions (up to 500). Use after bulk rule setup.\n"
+                "• spending_report — monthly EXPENSES by category (debits only). Params: month (YYYY-MM).\n"
+                "• income_report — monthly INCOME/deposits by category (credits only). Use when user asks about deposits, paychecks, or marking something as income.\n"
+                "• budget_status — same data as spending_report with budget limits.\n"
+                "• set_budget — set monthly limit. Params: category_id OR category_name, month, limit_dollars or limit_cents.\n"
+                "• trends — multi-month income vs spending summary. Params: months (default 6).\n"
+                "• list_import_batches — recent CSV import history.\n\n"
+                "TYPICAL FLOWS:\n"
+                "Recategorize one deposit as Income: list_transactions(search='ATM') → categorize_transaction(transaction_id='c522e957', category_name='Income') → income_report(month='2026-06').\n"
+                "Auto-categorize all ATM deposits: create_rule(pattern='ATM CASH DEPOSIT', category_name='Income').\n"
+                "How much did I spend: spending_report(month='2026-06').\n"
+                "Import bank CSV: no tool — ui_control open_panel finance.\n\n"
+                "IDs are 8-character prefixes of full UUIDs shown in [brackets]. Prefix matching works; full UUID not required."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -589,21 +615,75 @@ FUNCTION_TOOL_SCHEMAS = [
                             "create_rule",
                             "income_report",
                         ],
-                        "description": "Action to perform",
+                        "description": (
+                            "What to do. See tool description for when to use each action. "
+                            "Read: list_accounts, list_transactions, list_categories, spending_report, income_report, budget_status, trends. "
+                            "Write: categorize_transaction, create_rule, apply_rules, set_budget."
+                        ),
                     },
-                    "month": {"type": "string", "description": "YYYY-MM for spending/budget/trends/income filters"},
-                    "account_id": {"type": "string", "description": "Filter transactions by account id or prefix"},
-                    "category_id": {"type": "string", "description": "Category id prefix from list_categories (8 chars). Prefer category_name."},
-                    "category_name": {"type": "string", "description": "Category name — preferred for categorize_transaction and create_rule (e.g. Income, Groceries)"},
-                    "transaction_id": {"type": "string", "description": "Transaction id prefix from list_transactions (8 chars)"},
-                    "search": {"type": "string", "description": "Payee search text for list_transactions"},
-                    "limit": {"type": "integer", "description": "Max transactions to return (default 25, max 50)"},
-                    "months": {"type": "integer", "description": "Months of history for trends (default 6)"},
-                    "limit_cents": {"type": "integer", "description": "Budget limit in cents for set_budget"},
-                    "limit_dollars": {"type": "number", "description": "Budget limit in dollars for set_budget"},
-                    "pattern": {"type": "string", "description": "Payee regex/substring for create_rule (e.g. ATM CASH DEPOSIT)"},
-                    "priority": {"type": "integer", "description": "Rule priority for create_rule"},
-                    "apply_existing": {"type": "boolean", "description": "For create_rule: run rule on existing uncategorized txs (default true)"},
+                    "month": {
+                        "type": "string",
+                        "description": "Filter month as YYYY-MM (e.g. 2026-06). Used by spending_report, income_report, budget_status, list_transactions.",
+                    },
+                    "account_id": {
+                        "type": "string",
+                        "description": "Optional 8-char account id prefix from list_accounts. Filters list_transactions.",
+                    },
+                    "category_id": {
+                        "type": "string",
+                        "description": (
+                            "Optional 8-char category id prefix from list_categories. "
+                            "Only use when category_name is unknown. For categorize_transaction prefer category_name='Income' etc."
+                        ),
+                    },
+                    "category_name": {
+                        "type": "string",
+                        "description": (
+                            "Category label — REQUIRED for categorize_transaction (preferred over category_id). "
+                            "Examples: Income, Groceries, Dining, Transfers. Also used by create_rule and set_budget."
+                        ),
+                    },
+                    "transaction_id": {
+                        "type": "string",
+                        "description": (
+                            "REQUIRED for categorize_transaction. 8-char id prefix from the [brackets] at end of a list_transactions row."
+                        ),
+                    },
+                    "search": {
+                        "type": "string",
+                        "description": "Payee/description substring for list_transactions (e.g. 'ATM CASH DEPOSIT', 'AMAZON').",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max rows for list_transactions (default 25, max 50).",
+                    },
+                    "months": {
+                        "type": "integer",
+                        "description": "Number of months for trends (default 6, max 24).",
+                    },
+                    "limit_cents": {
+                        "type": "integer",
+                        "description": "Monthly budget cap in cents for set_budget.",
+                    },
+                    "limit_dollars": {
+                        "type": "number",
+                        "description": "Monthly budget cap in dollars for set_budget (easier than limit_cents).",
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": (
+                            "REQUIRED for create_rule. Payee text to match (case-insensitive regex), "
+                            "e.g. 'ATM CASH DEPOSIT', 'AMAZON', 'NETFLIX'."
+                        ),
+                    },
+                    "priority": {
+                        "type": "integer",
+                        "description": "Optional rule priority for create_rule (higher runs first, default 0).",
+                    },
+                    "apply_existing": {
+                        "type": "boolean",
+                        "description": "For create_rule only. If true (default), immediately categorize matching uncategorized transactions.",
+                    },
                 },
                 "required": ["action"],
             },

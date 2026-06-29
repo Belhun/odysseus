@@ -244,6 +244,15 @@ _DOMAIN_RULES = {
 - Notes/todos/reminders use `manage_notes`, not memory.
 - Calendar create/update/delete should call `manage_calendar` with `action=list_calendars` first.
 - Recurring/automatic/scheduled requests create a `manage_tasks` task; do not just perform the action once.""",
+    "finance": """\
+## Finance rules
+- Bank/finance data uses `manage_finance` only — never app_api for /api/finance.
+- Start with `list_accounts` for balances; `list_transactions` with `search` to find a specific payee.
+- Row ids are 8 characters in [brackets]. Pass that prefix as `transaction_id`.
+- To categorize: use `category_name` (Income, Groceries, …). Do not pass category names in `category_id`.
+- `spending_report` = expenses. `income_report` = deposits/credits. After marking a deposit as Income, confirm with income_report.
+- Bulk payee rules: `create_rule` with `pattern` + `category_name` (auto-applies to existing rows).
+- Bank CSV import: `ui_control open_panel finance` — this tool cannot upload files.""",
     "ui": """\
 ## UI rules
 - "Open/show <panel>" uses `ui_control open_panel <name>`.
@@ -485,11 +494,28 @@ If the user asks for a reminder/alarm before the event, pass `reminder_minutes` 
 ```manage_finance
 {"action": "categorize_transaction", "transaction_id": "c522e957", "category_name": "Income"}
 ```
-Local finance plugin: accounts, spending, income, budgets, trends, transaction search. \
-**Categorize one transaction:** `list_transactions` with `search` → copy the 8-char id in brackets → `categorize_transaction` with `category_name` (NOT category_id) e.g. `"Income"`. \
-**Bulk categorize:** `create_rule` with `pattern` + `category_name` — rules auto-apply to existing uncategorized matches. Or `apply_rules` afterward. \
-**Reports:** `spending_report` = expenses only; `income_report` = deposits/income by category. \
-Bank CSV import: `ui_control open_panel finance`.""",
+Local Finance plugin — bank accounts and imported transactions (Wells Fargo, Navy Federal, etc.). NEVER use app_api for /api/finance.
+
+**Read actions**
+- `list_accounts` — balances; no extra args
+- `list_transactions` — params: `search` (payee), `month` (YYYY-MM), `limit`. Each row ends with `[8-char id]` for categorize_transaction
+- `list_categories` — names like Income, Groceries (use `category_name`, not category_id)
+- `spending_report` — monthly **expenses** (debits). Param: `month`
+- `income_report` — monthly **deposits/income** (credits). Use after categorizing ATM deposits as Income
+- `budget_status` / `trends` — budgets and multi-month summary
+
+**Write actions**
+- `categorize_transaction` — tag one row. REQUIRED: `transaction_id` (8 chars from list_transactions) + `category_name` (e.g. `"Income"`). WRONG: `category_id: "Income"`. RIGHT: `category_name: "Income"`
+- `create_rule` — `pattern` (payee match, e.g. `ATM CASH DEPOSIT`) + `category_name`. Auto-applies to existing uncategorized matches
+- `apply_rules` — run all rules on uncategorized transactions
+- `set_budget` — `category_name` or category_id, `month`, `limit_dollars`
+
+**Example: user wants a $60 ATM deposit as Income**
+1. `list_transactions` with `search: "ATM CASH DEPOSIT"` and `month: "2026-06"`
+2. `categorize_transaction` with `transaction_id: "c522e957"`, `category_name: "Income"`
+3. Confirm with `income_report` for that month
+
+**CSV import:** `ui_control open_panel finance` (no file upload in this tool).""",
     "create_session": "- ```create_session``` — Create a new chat. Line 1 = chat name, line 2 = model name. Use for background/parallel work.",
     "list_sessions": "- ```list_sessions``` — List chats sorted MOST-RECENT FIRST (the UI calls them 'chats') with clickable chat-title links. Output includes a relative \"last active\" timestamp per row, so the first row is the user's most recent chat. Content = optional filter keyword (matches chat name). When answering, preserve the `[title](#session-id)` links exactly; do not convert them into plain text.",
     "send_to_session": "- ```send_to_session``` — Send a message to another session. Line 1 = session_id, rest = message. Use for orchestrating work across sessions.",
