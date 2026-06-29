@@ -644,6 +644,17 @@ def setup_calendar_routes() -> APIRouter:
         from src.caldav_sync import _load_caldav_accounts
         return _load_caldav_accounts(owner)
 
+    def _disabled_caldav_account_ids(owner: str) -> set:
+        return {
+            acc.get("id")
+            for acc in _get_caldav_accounts(owner)
+            if acc.get("id") and acc.get("enabled") is False
+        }
+
+    def _calendar_visible(cal, disabled_account_ids: set) -> bool:
+        account_id = getattr(cal, "account_id", None) or ""
+        return not account_id or account_id not in disabled_account_ids
+
     def _save_caldav_accounts(owner: str, accounts: list) -> None:
         from routes.prefs_routes import _load_for_user, _save_for_user
         prefs = _load_for_user(owner) or {}
@@ -731,6 +742,7 @@ def setup_calendar_routes() -> APIRouter:
                 "url": acc.get("url", "") or "",
                 "username": acc.get("username", "") or "",
                 "has_password": has_pw,
+                "enabled": acc.get("enabled", True) is not False,
             })
         return {"accounts": safe}
 
@@ -757,6 +769,7 @@ def setup_calendar_routes() -> APIRouter:
             "url": url,
             "username": (body.get("username") or "").strip(),
             "password": encrypt(body["password"]),
+            "enabled": body.get("enabled", True) is not False,
         }
         accounts = _get_caldav_accounts(owner)
         accounts.append(new_acc)
@@ -789,6 +802,8 @@ def setup_calendar_routes() -> APIRouter:
         if body.get("password"):
             from src.secret_storage import encrypt
             acc["password"] = encrypt(body["password"])
+        if "enabled" in body:
+            acc["enabled"] = bool(body["enabled"])
         accounts[idx] = acc
         _save_caldav_accounts(owner, accounts)
         return {"ok": True}
@@ -926,7 +941,9 @@ def setup_calendar_routes() -> APIRouter:
         db = SessionLocal()
         try:
             _ensure_default_calendar(db, owner)
+            disabled_ids = _disabled_caldav_account_ids(owner)
             cals = db.query(CalendarCal).filter(CalendarCal.owner == owner).all()
+            cals = [c for c in cals if _calendar_visible(c, disabled_ids)]
             return {"calendars": [
                 {"name": c.name, "href": c.id, "color": c.color, "source": c.source}
                 for c in cals
@@ -953,15 +970,21 @@ def setup_calendar_routes() -> APIRouter:
             return {"events": []}
         db = SessionLocal()
         try:
+            disabled_ids = _disabled_caldav_account_ids(owner)
             # Scope events to calendars owned by the caller.
-            # Non-recurring events must overlap the query window; recurring
-            # events (with RRULE) whose base dtstart is before the window end
-            # are fetched so their actual occurrences can be expanded
-            # server-side and appear in every year they repeat, not just the
-            # DTSTART year.
             q = db.query(CalendarEvent).join(CalendarCal).filter(
                 CalendarEvent.status != "cancelled",
                 CalendarCal.owner == owner,
+            )
+            if disabled_ids:
+                q = q.filter(
+                    or_(
+                        CalendarCal.account_id.is_(None),
+                        CalendarCal.account_id == "",
+                        ~CalendarCal.account_id.in_(list(disabled_ids)),
+                    )
+                )
+            q = q.filter(
                 or_(
                     # Non-recurring: event times must overlap the query window
                     and_(
