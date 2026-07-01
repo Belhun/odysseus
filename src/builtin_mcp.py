@@ -89,6 +89,21 @@ _BUILTIN_NPX_SERVERS = {
 MCP_DISABLED = os.environ.get("ODYSSEUS_DISABLE_MCP", "").lower() in ("1", "true", "yes")
 
 
+# Strong references to the fire-and-forget startup tasks scheduled below.
+# asyncio only keeps weak references to tasks created via create_task, so
+# without this the GC can collect a task mid-execution and the server
+# registration silently never runs. Mirrors _spawn_bg in routes/chat_helpers.py.
+_BG_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_bg(coro) -> asyncio.Task:
+    """Schedule a background task and hold a strong reference until it finishes."""
+    task = asyncio.create_task(coro)
+    _BG_TASKS.add(task)
+    task.add_done_callback(_BG_TASKS.discard)
+    return task
+
+
 async def register_builtin_servers(mcp_manager):
     """Connect all built-in MCP servers to the manager."""
     if MCP_DISABLED:
@@ -118,18 +133,14 @@ async def register_builtin_servers(mcp_manager):
         except BaseException as e:
             logger.warning(f"Built-in MCP server {name} error: {type(e).__name__}: {e}")
 
-    python_tasks = []
     for server_id, (script, name) in _BUILTIN_SERVERS.items():
         script_path = os.path.join(base_dir, script)
         if not os.path.exists(script_path):
             logger.warning(f"Built-in MCP server script not found: {script_path}")
             continue
-        python_tasks.append(_connect_python_server(server_id, script_path, name))
+        _spawn_bg(_connect_python_server(server_id, script_path, name))
 
-    if python_tasks:
-        await asyncio.gather(*python_tasks, return_exceptions=True)
-
-    # NPX-based servers take longer to start; run after Python builtins.
+    # Register NPX-based servers in the background (they take longer to start)
     npx_path = _find_npx()
     logger.info(f"NPX binary resolved to: {npx_path}")
 
@@ -179,7 +190,7 @@ async def register_builtin_servers(mcp_manager):
             except BaseException as e:
                 logger.warning(f"Built-in NPX server {cfg['name']} error: {type(e).__name__}: {e}")
 
-    await _start_npx_servers()
+    _spawn_bg(_start_npx_servers())
 
 
 def _npx_package_from_args(args):
@@ -237,6 +248,15 @@ async def _is_npx_package_cached(npx_path, package_spec, timeout_s=5):
         except Exception:
             pass
         return False
+    except asyncio.CancelledError:
+        # The probe was cancelled (e.g. app shutdown). Reap the child so it
+        # isn't orphaned, then propagate the cancellation.
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        raise
     return proc.returncode == 0 and bool(stdout.strip())
 
 
