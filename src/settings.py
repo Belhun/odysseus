@@ -212,6 +212,7 @@ DEFAULT_FEATURES = {
     "rag": True,
     "sensitive_filter": True,
     "gallery": True,
+    "finance": False,
 }
 
 

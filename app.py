@@ -457,6 +457,16 @@ class _RevalidatingStatic(StaticFiles):
         return resp
 
 
+_finance_static_dir = abs_join(BASE_DIR, "integrations/finance/static")
+if os.path.isdir(_finance_static_dir):
+    # Mount before /static — Starlette matches mounts in order; the broad
+    # /static handler would otherwise swallow /static/plugins/finance/*.
+    app.mount(
+        "/static/plugins/finance",
+        _RevalidatingStatic(directory=_finance_static_dir),
+        name="finance_plugin_static",
+    )
+
 app.mount("/static", _RevalidatingStatic(directory=STATIC_DIR), name="static")
 
 # ========= GENERATED IMAGES =========
@@ -804,6 +814,12 @@ app.include_router(setup_vault_routes())
 from routes.contacts_routes import setup_contacts_routes
 app.include_router(setup_contacts_routes())
 
+from routes.plugin_routes import setup_plugin_routes
+app.include_router(setup_plugin_routes())
+
+from integrations.finance.routes import setup_finance_routes
+app.include_router(setup_finance_routes())
+
 from companion import setup_companion_routes
 app.include_router(setup_companion_routes())
 
@@ -847,6 +863,10 @@ async def serve_memory(request: Request):
 
 @app.get("/gallery")
 async def serve_gallery(request: Request):
+    return await serve_index(request)
+
+@app.get("/finance")
+async def serve_finance(request: Request):
     return await serve_index(request)
 
 @app.get("/tasks")
