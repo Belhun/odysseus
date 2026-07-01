@@ -754,7 +754,7 @@ async function _prewarmDefaultEmailView() {
     const accountsRes = await fetch(`${API_BASE}/api/email/accounts`, { credentials: 'same-origin' });
     if (accountsRes.ok) {
       const accountsData = await accountsRes.json().catch(() => ({}));
-      if (Array.isArray(accountsData.accounts)) state._libAccounts = accountsData.accounts;
+      if (Array.isArray(accountsData.accounts)) state._libAccounts = accountsData.accounts.filter(a => a.enabled !== false);
     }
   } catch (_) {}
 
@@ -1418,7 +1418,7 @@ async function _loadAccounts() {
     const r = await fetch(`${API_BASE}/api/email/accounts`);
     if (!r.ok) return;
     const d = await r.json();
-    state._libAccounts = d.accounts || [];
+    state._libAccounts = (d.accounts || []).filter(a => a.enabled !== false);
   } catch (_) { state._libAccounts = []; }
   // The 'Default' chip is gone — pick an explicit account so the email
   // list and any per-email actions (open in new tab, mark read, etc.)

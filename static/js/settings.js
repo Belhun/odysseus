@@ -2434,7 +2434,7 @@ async function initReminderSettings() {
     const res = await fetch('/api/email/accounts', { credentials: 'same-origin' });
     if (res.ok) {
       const d = await res.json();
-      emailAccounts = (d.accounts || []).filter(a => a.smtp_host && a.smtp_user && a.has_smtp_password);
+      emailAccounts = (d.accounts || []).filter(a => a.enabled !== false && a.smtp_host && a.smtp_user && a.has_smtp_password);
     }
   } catch (_) {}
   let smtpConfigured = emailAccounts.length > 0;
@@ -2538,7 +2538,7 @@ async function initReminderSettings() {
       const res = await fetch('/api/email/accounts', { credentials: 'same-origin' });
       if (res.ok) {
         const d = await res.json();
-        emailAccounts = (d.accounts || []).filter(a => a.smtp_host && a.smtp_user && a.has_smtp_password);
+        emailAccounts = (d.accounts || []).filter(a => a.enabled !== false && a.smtp_host && a.smtp_user && a.has_smtp_password);
       }
     } catch (_) {}
     smtpConfigured = emailAccounts.length > 0;
@@ -3668,6 +3668,18 @@ async function initUnifiedIntegrations() {
   if (!listEl) return;
   let integrationNotice = '';
 
+  const _intgBtnStyle = 'display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));';
+
+  async function _finishIntgToggle(msgEl, label) {
+    if (msgEl) {
+      msgEl.textContent = label;
+      msgEl.style.color = 'var(--green,#50fa7b)';
+    }
+    formEl.style.display = 'none';
+    await renderList();
+    notifyIntegrationsChanged();
+  }
+
   // Hide the "+ Add Integration" button whenever the per-type create form
   // is open so it doesn't compete visually with the in-progress form.
   // Many call sites toggle formEl.style.display directly; observe instead
@@ -3706,7 +3718,7 @@ async function initUnifiedIntegrations() {
     }
     // CalDAV — one card per account
     for (const acc of (calRes.accounts || [])) {
-      items.push({ type: 'caldav', id: acc.id, name: acc.label || 'Calendar (CalDAV)', detail: acc.url, enabled: true, data: acc });
+      items.push({ type: 'caldav', id: acc.id, name: acc.label || 'Calendar (CalDAV)', detail: acc.url, enabled: acc.enabled !== false, data: acc });
     }
     // Contacts import first, then the optional CardDAV sync account.
     const contactCount = Number(contactsRes.count || (contactsRes.contacts || []).length || 0);
@@ -3716,7 +3728,7 @@ async function initUnifiedIntegrations() {
         id: '__contacts__',
         name: 'Contacts Import',
         detail: `${contactCount} contact${contactCount === 1 ? '' : 's'}`,
-        enabled: true,
+        enabled: contactsRes.import_enabled !== false,
         data: contactsRes,
       });
     }
@@ -3726,7 +3738,7 @@ async function initUnifiedIntegrations() {
         id: '__carddav__',
         name: 'Contacts (CardDAV)',
         detail: cardRes.url,
-        enabled: true,
+        enabled: cardRes.enabled !== false,
         data: cardRes,
       });
     }
@@ -3921,9 +3933,10 @@ async function initUnifiedIntegrations() {
           <div class="settings-row"><label class="settings-label">API Key${_apiHint('The secret token the service issued you (generated in its admin panel / settings). Used to prove your identity on each request. Required for any Auth mode except None.')}</label><input id="uf-api-key" class="settings-input" type="password" placeholder="Token/key"></div>
           <div class="settings-row" style="margin-top:10px;align-items:center;justify-content:flex-end;gap:6px;">
             <span id="uf-api-msg" style="font-size:11px;flex:1;margin-right:8px"></span>
-            <button class="admin-btn-add" id="uf-api-test" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">Test</button>
-            <button class="admin-btn-add" id="uf-api-save" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));font-weight:600;">Save</button>
-            <button class="admin-btn-add" id="uf-api-cancel" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">Cancel</button>
+            <button class="admin-btn-add" id="uf-api-test" style="${_intgBtnStyle}">Test</button>
+            <button class="admin-btn-add" id="uf-api-save" style="${_intgBtnStyle}font-weight:600;">Save</button>
+            ${editId && editId !== 'new' ? `<button class="admin-btn-add" id="uf-api-disable" style="${_intgBtnStyle}"></button>` : ''}
+            <button class="admin-btn-add" id="uf-api-cancel" style="${_intgBtnStyle}">Cancel</button>
           </div>
         </div>
       </div>`;
@@ -3973,14 +3986,41 @@ async function initUnifiedIntegrations() {
 
     const preset = el('uf-api-preset'), name = el('uf-api-name'), url = el('uf-api-url'), auth = el('uf-api-auth'), header = el('uf-api-header'), key = el('uf-api-key'), ntfyHint = el('uf-api-ntfy-hint');
     let _editId = editId && editId !== 'new' ? editId : null;
+    let _apiEnabled = true;
     // Load existing
     if (_editId) {
       try {
         const r = await fetch('/api/auth/integrations', { credentials: 'same-origin' });
         const d = await r.json();
         const item = (d.integrations || []).find(i => i.id === _editId);
-        if (item) { name.value = item.name || ''; url.value = item.base_url || ''; auth.value = item.auth_type || 'none'; header.value = item.auth_header || ''; }
+        if (item) {
+          name.value = item.name || '';
+          url.value = item.base_url || '';
+          auth.value = item.auth_type || 'none';
+          header.value = item.auth_header || '';
+          _apiEnabled = item.enabled !== false;
+        }
       } catch (_) {}
+      const disableBtn = el('uf-api-disable');
+      if (disableBtn) {
+        disableBtn.textContent = _apiEnabled ? 'Disable' : 'Enable';
+        disableBtn.addEventListener('click', async () => {
+          const next = !_apiEnabled;
+          try {
+            const r = await fetch(`/api/auth/integrations/${_editId}`, {
+              method: 'PUT', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: next }),
+            });
+            if (!r.ok) throw new Error();
+            _apiEnabled = next;
+            await _finishIntgToggle(el('uf-api-msg'), next ? 'Enabled' : 'Disabled');
+          } catch (_) {
+            el('uf-api-msg').textContent = 'Failed';
+            el('uf-api-msg').style.color = 'var(--red)';
+          }
+        });
+      }
     }
     // Native <select>: the option `value` is the preset key directly, so
     // no typed-name → key lookup is needed (datalist-era leftover).
@@ -4058,6 +4098,7 @@ async function initUnifiedIntegrations() {
   // ── CalDAV form (supports add + edit per account) ──
   async function showCalDavForm(editId) {
     const isNew = !editId || editId === 'new';
+    let _caldavEnabled = true;
     formEl.innerHTML = `
       <div class="admin-card" style="margin-top:8px">
         <h2 style="font-size:13px;display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent, var(--red));flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>${isNew ? 'Add CalDAV Calendar' : 'Edit CalDAV Calendar'}</h2>
@@ -4068,9 +4109,10 @@ async function initUnifiedIntegrations() {
           <div class="settings-row"><label class="settings-label">Password</label><input id="uf-caldav-pass" class="settings-input" type="password" placeholder="${isNew ? '' : 'Leave blank to keep existing'}"></div>
           <div class="settings-row" style="margin-top:10px;align-items:center;justify-content:flex-end;gap:6px;">
             <span id="uf-caldav-msg" style="font-size:11px;flex:1;margin-right:8px"></span>
-            <button class="admin-btn-add" id="uf-caldav-test" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">Test</button>
-            <button class="admin-btn-add" id="uf-caldav-save" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));font-weight:600;">Save</button>
-            <button class="admin-btn-add" id="uf-caldav-cancel" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">Cancel</button>
+            <button class="admin-btn-add" id="uf-caldav-test" style="${_intgBtnStyle}">Test</button>
+            <button class="admin-btn-add" id="uf-caldav-save" style="${_intgBtnStyle}font-weight:600;">Save</button>
+            ${!isNew ? `<button class="admin-btn-add" id="uf-caldav-disable" style="${_intgBtnStyle}"></button>` : ''}
+            <button class="admin-btn-add" id="uf-caldav-cancel" style="${_intgBtnStyle}">Cancel</button>
           </div>
         </div>
       </div>`;
@@ -4084,6 +4126,7 @@ async function initUnifiedIntegrations() {
           el('uf-caldav-label').value = acc.label || '';
           el('uf-caldav-url').value = acc.url || '';
           el('uf-caldav-user').value = acc.username || '';
+          _caldavEnabled = acc.enabled !== false;
         }
       } catch (_) {}
     }
@@ -4114,6 +4157,28 @@ async function initUnifiedIntegrations() {
       msg.textContent = text;
       msg.style.color = ok ? 'var(--green, #50fa7b)' : 'var(--red)';
     };
+
+    if (!isNew) {
+      const disableBtn = el('uf-caldav-disable');
+      if (disableBtn) {
+        disableBtn.textContent = _caldavEnabled ? 'Disable' : 'Enable';
+        disableBtn.addEventListener('click', async () => {
+          const next = !_caldavEnabled;
+          try {
+            const r = await fetch(`/api/calendar/config/accounts/${editId}`, {
+              method: 'PUT', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: next }),
+            });
+            if (!r.ok) throw new Error();
+            _caldavEnabled = next;
+            await _finishIntgToggle(el('uf-caldav-msg'), next ? 'Enabled' : 'Disabled');
+          } catch (_) {
+            _setCalDavMsg('Failed', false);
+          }
+        });
+      }
+    }
 
     el('uf-caldav-save').addEventListener('click', async () => {
       _setCalDavMsg('Testing…', true);
@@ -4168,6 +4233,8 @@ async function initUnifiedIntegrations() {
 
   // ── CardDAV form + contacts manager ──
   async function showCardDavForm() {
+    let _carddavEnabled = true;
+    let _contactsImportEnabled = true;
     formEl.innerHTML = `
       <div class="admin-card" style="margin-top:8px">
         <h2 style="font-size:13px;display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent, var(--red));flex-shrink:0;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Contacts (CardDAV)</h2>
@@ -4177,11 +4244,12 @@ async function initUnifiedIntegrations() {
           <div class="settings-row"><label class="settings-label">Password</label><input id="uf-carddav-pass" class="settings-input" type="password"></div>
           <div class="settings-row" style="margin-top:10px;align-items:center;justify-content:flex-end;gap:6px;">
             <span id="uf-carddav-msg" style="font-size:11px;flex:1;margin-right:8px"></span>
-            <button class="admin-btn-add" id="uf-carddav-save" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));font-weight:600;">
+            <button class="admin-btn-add" id="uf-carddav-disable" style="${_intgBtnStyle}"></button>
+            <button class="admin-btn-add" id="uf-carddav-save" style="${_intgBtnStyle}font-weight:600;">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
               Save
             </button>
-            <button class="admin-btn-add" id="uf-carddav-cancel" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">
+            <button class="admin-btn-add" id="uf-carddav-cancel" style="${_intgBtnStyle}">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               Cancel
             </button>
@@ -4191,7 +4259,8 @@ async function initUnifiedIntegrations() {
       <div class="admin-card contacts-manager" style="margin-top:8px">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
           <h2 style="font-size:13px;margin:0;display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent, var(--red));flex-shrink:0;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Contacts Import <span id="cm-count" style="opacity:0.5;font-weight:normal;font-size:11px;"></span></h2>
-          <button class="admin-btn-sm" id="cm-import-btn" style="margin-left:auto;">Import</button>
+          <button class="admin-btn-sm" id="cm-import-disable" style="margin-left:auto;"></button>
+          <button class="admin-btn-sm" id="cm-import-btn">Import</button>
           <button class="admin-btn-sm" id="cm-export-vcf-btn">Export .vcf</button>
           <button class="admin-btn-sm" id="cm-export-csv-btn">Export .csv</button>
           <button class="admin-btn-sm" id="cm-add-toggle">+ Add</button>
@@ -4210,12 +4279,55 @@ async function initUnifiedIntegrations() {
     try {
       const r = await fetch('/api/contacts/config', { credentials: 'same-origin' }); const d = await r.json();
       el('uf-carddav-url').value = d.url || ''; el('uf-carddav-user').value = d.username || '';
+      _carddavEnabled = d.enabled !== false;
+      _contactsImportEnabled = d.import_enabled !== false;
       // Server masks the password as '***' when one is saved (or '' when
       // none). Surface that state via the input's placeholder so users
       // can tell their password is already on file without us echoing it.
       const passInput = el('uf-carddav-pass');
       if (passInput && d.password) passInput.placeholder = '(unchanged)';
     } catch (_) {}
+    const carddavDisableBtn = el('uf-carddav-disable');
+    if (carddavDisableBtn) {
+      const hasCarddav = !!(el('uf-carddav-url')?.value || '').trim();
+      carddavDisableBtn.style.display = hasCarddav ? '' : 'none';
+      carddavDisableBtn.textContent = _carddavEnabled ? 'Disable' : 'Enable';
+      carddavDisableBtn.addEventListener('click', async () => {
+        const next = !_carddavEnabled;
+        try {
+          await fetch('/api/contacts/config', {
+            method: 'PUT', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ carddav_enabled: next }),
+          });
+          _carddavEnabled = next;
+          carddavDisableBtn.textContent = next ? 'Disable' : 'Enable';
+          await _finishIntgToggle(el('uf-carddav-msg'), next ? 'Enabled' : 'Disabled');
+        } catch (_) {
+          el('uf-carddav-msg').textContent = 'Failed';
+          el('uf-carddav-msg').style.color = 'var(--red)';
+        }
+      });
+    }
+    const importDisableBtn = el('cm-import-disable');
+    if (importDisableBtn) {
+      importDisableBtn.textContent = _contactsImportEnabled ? 'Disable import' : 'Enable import';
+      importDisableBtn.addEventListener('click', async () => {
+        const next = !_contactsImportEnabled;
+        try {
+          await fetch('/api/contacts/config', {
+            method: 'PUT', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contacts_import_enabled: next }),
+          });
+          _contactsImportEnabled = next;
+          importDisableBtn.textContent = next ? 'Disable import' : 'Enable import';
+          await _renderContactsManager();
+          await renderList();
+          notifyIntegrationsChanged();
+        } catch (_) {}
+      });
+    }
     el('uf-carddav-cancel').addEventListener('click', () => { formEl.style.display = 'none'; });
     el('uf-carddav-save').addEventListener('click', async () => {
       const body = { carddav_url: el('uf-carddav-url').value, carddav_username: el('uf-carddav-user').value };
@@ -4560,6 +4672,7 @@ async function initUnifiedIntegrations() {
               </span>
               <span class="uf-email-save-label">${isEdit ? 'Save' : 'Create'}</span>
             </button>
+            ${isEdit ? `<button class="admin-btn-add" id="uf-email-disable" style="${_intgBtnStyle}"></button>` : ''}
             <button class="admin-btn-add" id="uf-email-cancel" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               Cancel
@@ -4794,6 +4907,29 @@ async function initUnifiedIntegrations() {
       el('uf-imap-port').value = 993;
       el('uf-smtp-port').value = 465;
       el('uf-smtp-security').value = 'ssl';
+    }
+    if (isEdit && existing) {
+      const disableBtn = el('uf-email-disable');
+      if (disableBtn) {
+        const emailEnabled = existing.enabled !== false;
+        disableBtn.textContent = emailEnabled ? 'Disable' : 'Enable';
+        disableBtn.addEventListener('click', async () => {
+          const next = !emailEnabled;
+          try {
+            const r = await fetch(`/api/email/accounts/${editId}`, {
+              method: 'PUT', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: next }),
+            });
+            const d = await r.json();
+            if (!d.ok) throw new Error(d.error || 'Failed');
+            await _finishIntgToggle(el('uf-email-msg'), next ? 'Enabled' : 'Disabled');
+          } catch (e) {
+            el('uf-email-msg').textContent = e.message || 'Failed';
+            el('uf-email-msg').style.color = 'var(--red)';
+          }
+        });
+      }
     }
     el('uf-email-cancel').addEventListener('click', () => { formEl.style.display = 'none'; });
 

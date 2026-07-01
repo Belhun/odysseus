@@ -44,6 +44,11 @@ def _save_settings(settings):
     atomic_write_json(str(SETTINGS_FILE), settings, indent=2)
 
 
+def _contacts_import_enabled(settings: Optional[Dict] = None) -> bool:
+    settings = settings if settings is not None else _load_settings()
+    return settings.get("contacts_import_enabled", True) is not False
+
+
 def _get_carddav_config():
     import os
     settings = _load_settings()
@@ -55,12 +60,13 @@ def _get_carddav_config():
         "url": settings.get("carddav_url", os.environ.get("CARDDAV_URL", "")),
         "username": settings.get("carddav_username", os.environ.get("CARDDAV_USERNAME", "")),
         "password": password,
+        "enabled": settings.get("carddav_enabled", True) is not False,
     }
 
 
 def _carddav_configured(cfg: Optional[Dict] = None) -> bool:
     cfg = cfg or _get_carddav_config()
-    return bool((cfg.get("url") or "").strip())
+    return bool((cfg.get("url") or "").strip()) and cfg.get("enabled", True) is not False
 
 
 def _validate_carddav_url(url: str) -> str:
@@ -346,7 +352,10 @@ def _fetch_contacts(force=False):
 
     cfg = _get_carddav_config()
     if not _carddav_configured(cfg):
-        contacts = _load_local_contacts()
+        if not _contacts_import_enabled():
+            contacts = []
+        else:
+            contacts = _load_local_contacts()
         _contact_cache["contacts"] = contacts
         _contact_cache["fetched_at"] = datetime.utcnow()
         return contacts
@@ -732,8 +741,14 @@ def setup_contacts_routes():
     @router.get("/list")
     async def list_contacts(_admin: str = Depends(require_admin)):
         """List all contacts."""
+        settings = _load_settings()
         contacts = _fetch_contacts()
-        return {"contacts": contacts, "count": len(contacts)}
+        return {
+            "contacts": contacts,
+            "count": len(contacts),
+            "import_enabled": _contacts_import_enabled(settings),
+            "carddav_enabled": _get_carddav_config().get("enabled", True) is not False,
+        }
 
     @router.get("/search")
     async def search_contacts(q: str = Query(""), _admin: str = Depends(require_admin)):
@@ -836,16 +851,21 @@ def setup_contacts_routes():
     @router.get("/config")
     async def get_config(_admin: str = Depends(require_admin)):
         cfg = _get_carddav_config()
+        settings = _load_settings()
         # Mask password
         if cfg["password"]:
             cfg["password"] = "***"
+        cfg["import_enabled"] = _contacts_import_enabled(settings)
         return cfg
 
     @router.put("/config")
     async def update_config(data: dict, _admin: str = Depends(require_admin)):
         settings = _load_settings()
-        for key in ("carddav_url", "carddav_username", "carddav_password"):
+        for key in ("carddav_url", "carddav_username", "carddav_password", "carddav_enabled", "contacts_import_enabled"):
             if key in data:
+                if key in ("carddav_enabled", "contacts_import_enabled"):
+                    settings[key] = bool(data[key])
+                    continue
                 if key == "carddav_url" and str(data[key] or "").strip():
                     try:
                         settings[key] = _validate_carddav_url(data[key])
