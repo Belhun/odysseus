@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import resource
 import time
 import uuid
 from typing import Callable, Optional
@@ -24,7 +23,11 @@ _STATIC_NOISE_PREFIXES = ("/static/", "/favicon.ico")
 
 
 def _rss_kb() -> Optional[int]:
+    if os.name != "posix":
+        return None
     try:
+        import resource
+
         usage = resource.getrusage(resource.RUSAGE_SELF)
         rss = usage.ru_maxrss
         # Linux: KB; macOS: bytes

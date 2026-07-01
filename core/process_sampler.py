@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import resource
 import sys
 import threading
 from typing import Any, Dict, List, Optional
@@ -34,7 +33,11 @@ _PROCESS_PATTERNS = [
 
 
 def _rss_mb() -> Optional[float]:
+    if os.name != "posix":
+        return None
     try:
+        import resource
+
         usage = resource.getrusage(resource.RUSAGE_SELF)
         rss = usage.ru_maxrss
         if sys.platform == "darwin":
