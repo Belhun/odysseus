@@ -33,6 +33,17 @@ def _format_mcp_connection_error(name: str, command: str = "", args: Optional[Li
     return raw_error
 
 
+def _format_mcp_call_error(error: Exception) -> str:
+    """Return a useful tool-call error when the MCP SDK gives an empty message."""
+    msg = str(error).strip()
+    if msg:
+        return msg
+    name = type(error).__name__
+    if name in ("ClosedResourceError", "BrokenResourceError", "EndOfStream"):
+        return f"{name}: MCP server subprocess is not running (try Reconnect in Admin → MCP)"
+    return f"{name}: MCP tool call failed"
+
+
 # Caps for rendering untrusted MCP tool schemas into the agent prompt (issue #2660).
 # MCP servers are third-party/user-added, so field names and parameter counts are
 # untrusted input — bound them so an odd or hostile schema cannot distort the prompt.
@@ -201,7 +212,7 @@ class McpManager:
 
                 # Discover tools
                 tools_result = await session.list_tools()
-            except Exception:
+            except BaseException:
                 await stack.aclose()
                 raise
             tools = []
@@ -262,7 +273,7 @@ class McpManager:
 
                 # Discover tools
                 tools_result = await session.list_tools()
-            except Exception:
+            except BaseException:
                 await stack.aclose()
                 raise
             tools = []
@@ -394,6 +405,10 @@ class McpManager:
         if stack:
             try:
                 await stack.aclose()
+            except RuntimeError as e:
+                if "cancel scope" not in str(e).lower():
+                    raise
+                logger.warning(f"Error closing MCP server {server_id}: {e}")
             except Exception as e:
                 logger.warning(f"Error closing MCP server {server_id}: {e}")
 
@@ -448,33 +463,39 @@ class McpManager:
             return {"error": f"MCP server not connected: {server_id}", "exit_code": 1}
 
         try:
-            result = await self._do_call(session, tool_name, arguments)
+            result = await self._do_call(session, tool_name, arguments, server_id=server_id)
         except Exception as e:
-            # Auto-reconnect for builtin servers whose subprocess may have died
-            if self.is_builtin(server_id):
-                logger.warning(f"MCP call failed for {qualified_name}, attempting reconnect: {e}")
-                reconnected = await self._reconnect_builtin(server_id)
+            err_msg = _format_mcp_call_error(e)
+            transport = self._connections.get(server_id, {}).get("transport")
+            # Auto-reconnect stdio servers (PhonePi, builtins, etc.) when the subprocess dies.
+            if transport == "stdio":
+                logger.warning(f"MCP call failed for {qualified_name}, attempting reconnect: {err_msg}")
+                reconnected = await self._reconnect_server(server_id)
                 if reconnected:
                     session = self._sessions.get(server_id)
                     if session:
                         try:
-                            result = await self._do_call(session, tool_name, arguments)
+                            result = await self._do_call(session, tool_name, arguments, server_id=server_id)
                         except Exception as e2:
-                            logger.error(f"MCP tool call failed after reconnect: {qualified_name}: {e2}")
-                            return {"error": str(e2), "exit_code": 1}
+                            err2 = _format_mcp_call_error(e2)
+                            logger.error(f"MCP tool call failed after reconnect: {qualified_name}: {err2}")
+                            return {"error": err2, "exit_code": 1}
                     else:
                         return {"error": f"Reconnected but no session for {server_id}", "exit_code": 1}
                 else:
                     logger.error(f"MCP reconnect failed for {server_id}")
                     return {"error": f"MCP server crashed and reconnect failed: {server_id}", "exit_code": 1}
             else:
-                logger.error(f"MCP tool call failed: {qualified_name}: {e}")
-                return {"error": str(e), "exit_code": 1}
+                logger.error(f"MCP tool call failed: {qualified_name}: {err_msg}")
+                return {"error": err_msg, "exit_code": 1}
 
         return result
 
-    async def _do_call(self, session, tool_name: str, arguments: Dict) -> Dict:
+    async def _do_call(self, session, tool_name: str, arguments: Dict, server_id: str = "") -> Dict:
         """Execute a single MCP tool call and return result dict."""
+        import time as _time
+        from core.perf_emit import emit
+        t0 = _time.perf_counter()
         result = await session.call_tool(tool_name, arguments)
         output_parts = []
         images = []
@@ -499,7 +520,51 @@ class McpManager:
         }
         if images:
             result_dict["images"] = images
+        try:
+            emit(
+                "mcp.tool.completed",
+                server_id=server_id,
+                tool_name=tool_name,
+                duration_ms=round((_time.perf_counter() - t0) * 1000, 2),
+                is_error=is_error,
+                exit_code=result_dict.get("exit_code", 0),
+            )
+        except Exception:
+            pass
         return result_dict
+
+    async def _reconnect_server(self, server_id: str) -> bool:
+        """Tear down and reconnect a crashed stdio MCP server."""
+        if self.is_builtin(server_id):
+            return await self._reconnect_builtin(server_id)
+
+        from src.database import McpServer, SessionLocal
+
+        db = SessionLocal()
+        try:
+            srv = db.query(McpServer).filter(McpServer.id == server_id).first()
+            if not srv or not srv.is_enabled:
+                return False
+            await self.disconnect_server(server_id)
+            args = json.loads(srv.args) if srv.args else []
+            env = json.loads(srv.env) if srv.env else {}
+            ok = await self.connect_server(
+                server_id=server_id,
+                name=srv.name,
+                transport=srv.transport,
+                command=srv.command,
+                args=args,
+                env=env,
+                url=srv.url,
+            )
+            if ok:
+                logger.info(f"Reconnected MCP server: {srv.name} ({server_id})")
+            return ok
+        except Exception as e:
+            logger.error(f"Failed to reconnect MCP server {server_id}: {e}")
+            return False
+        finally:
+            db.close()
 
     async def _reconnect_builtin(self, server_id: str) -> bool:
         """Tear down and reconnect a crashed builtin MCP server."""
