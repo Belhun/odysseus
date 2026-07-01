@@ -184,6 +184,13 @@ DEFAULT_SETTINGS = {
         "Newsletters, marketing, automated digests, and FYI-only updates are "
         "NOT urgent."
     ),
+    # Local email mirror (background sync_local_emails task + read_local_emails tool).
+    "email_local_sync_enabled": True,
+    "email_local_sync_folders": ["INBOX", "Sent"],
+    "email_local_sync_backfill_batch": 200,
+    "email_local_sync_flag_refresh_window": 200,
+    "email_local_sync_max_attachment_bytes": 52428800,
+    "email_local_sync_attachment_budget_bytes": 2147483648,
     # Keyboard shortcuts (action: key combination)
     "keybinds": {
         "search": "ctrl+k",

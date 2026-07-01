@@ -10,16 +10,53 @@
     powershell -ExecutionPolicy Bypass -File .\launch-windows.ps1
     powershell -ExecutionPolicy Bypass -File .\launch-windows.ps1 -Port 7000 -BindHost 127.0.0.1
 
-  Tip: bind 127.0.0.1 (default) for local-only use. Use 0.0.0.0 only when you
-  intentionally want other devices on your LAN to reach it.
+  Reads APP_BIND / APP_PORT from .env (set APP_BIND=0.0.0.0 for phone/LAN access).
+  Command-line -BindHost / -Port override .env when passed explicitly.
 #>
 param(
-    [int]$Port = 7000,
-    [string]$BindHost = "127.0.0.1"
+    [int]$Port = 0,
+    [string]$BindHost = ""
 )
 
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
+
+function Import-DotEnv($path) {
+    if (-not (Test-Path $path)) { return }
+    Get-Content $path | ForEach-Object {
+        $line = $_.Trim()
+        if (-not $line -or $line.StartsWith("#")) { return }
+        if ($line -notmatch '^\s*([^#=]+?)\s*=\s*(.*)$') { return }
+        $key = $matches[1].Trim()
+        $value = ($matches[2] -replace '\s*#.*$', '').Trim()
+        if ($key -and -not (Get-Item -Path "Env:$key" -ErrorAction SilentlyContinue)) {
+            Set-Item -Path "Env:$key" -Value $value
+        }
+    }
+}
+
+function Get-LanIpv4Addresses {
+    Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.IPAddress -notmatch '^(127\.|169\.254\.)' -and
+            $_.PrefixOrigin -ne 'WellKnown'
+        } |
+        ForEach-Object { $_.IPAddress } |
+        Select-Object -Unique
+}
+
+Import-DotEnv (Join-Path $PSScriptRoot ".env")
+
+if (-not $PSBoundParameters.ContainsKey("Port") -or $Port -eq 0) {
+    if ($env:ODYSSEUS_PORT) { $Port = [int]$env:ODYSSEUS_PORT }
+    elseif ($env:APP_PORT) { $Port = [int]$env:APP_PORT }
+    else { $Port = 7000 }
+}
+if (-not $PSBoundParameters.ContainsKey("BindHost") -or -not $BindHost) {
+    if ($env:ODYSSEUS_HOST) { $BindHost = $env:ODYSSEUS_HOST }
+    elseif ($env:APP_BIND) { $BindHost = $env:APP_BIND }
+    else { $BindHost = "127.0.0.1" }
+}
 
 function Write-Step($msg) { Write-Host ""; Write-Host ("==> " + $msg) -ForegroundColor Cyan }
 function Fail($msg) {
@@ -164,6 +201,19 @@ if (Test-Path $cudaBase) {
 
 # 7. Start the server (use `python -m uvicorn` - bare `uvicorn` may not be on PATH)
 Write-Step ("Starting Odysseus at http://{0}:{1}" -f $BindHost, $Port)
+if ($BindHost -in @("0.0.0.0", "::")) {
+    $lanIps = @(Get-LanIpv4Addresses)
+    if ($lanIps.Count -gt 0) {
+        Write-Host "LAN (phone on same Wi-Fi):" -ForegroundColor Green
+        foreach ($ip in $lanIps) {
+            Write-Host ("  http://{0}:{1}" -f $ip, $Port) -ForegroundColor Green
+        }
+    } else {
+        Write-Host "LAN access enabled (bound to all interfaces). Find your PC IP with: ipconfig" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host ("Bound to {0} (local only)" -f $BindHost)
+}
 Write-Host "Press Ctrl+C to stop."
 Write-Host ""
 & $venvPy -m uvicorn app:app --host $BindHost --port $Port

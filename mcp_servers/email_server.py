@@ -2156,7 +2156,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     size_kb = a['size'] // 1024
                     text += f"  - [{a['index']}] {a['filename']} ({a['content_type']}, {size_kb}KB)\n"
                 text += "\n_Use `download_attachment` with the UID and index to download._\n"
-            text += f"\n---\n\n{result['body']}"
+            from src.prompt_security import UNTRUSTED_CONTEXT_HEADER
+            body_block = result.get('body') or ''
+            text += "\n---\n\n"
+            text += (
+                f"{UNTRUSTED_CONTEXT_HEADER}\n"
+                f"Source: live email body\n\n"
+                "<<<UNTRUSTED_SOURCE_DATA>>>\n"
+                f"{body_block}\n"
+                "<<<END_UNTRUSTED_SOURCE_DATA>>>"
+            )
             return [TextContent(type="text", text=text)]
 
         elif name == "send_email":
