@@ -140,7 +140,7 @@ async def register_builtin_servers(mcp_manager):
             continue
         _spawn_bg(_connect_python_server(server_id, script_path, name))
 
-    # Register NPX-based servers in the background (they take longer to start)
+    # NPX-based servers take longer to start; run after Python builtins.
     npx_path = _find_npx()
     logger.info(f"NPX binary resolved to: {npx_path}")
 

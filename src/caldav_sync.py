@@ -575,6 +575,11 @@ def _pending_writeback_uids(owner: str) -> tuple[list[str], list[str]]:
         db.close()
 
 
+def _caldav_account_enabled(acc: dict) -> bool:
+    """Return True when a CalDAV account row should sync and appear in the UI."""
+    return acc.get("enabled", True) is not False
+
+
 def _load_caldav_accounts(owner: str) -> list:
     """Return the list of CalDAV accounts for *owner*, auto-migrating the legacy
     single-account ``caldav`` key to the new ``caldav_accounts`` list on first call.
@@ -615,7 +620,7 @@ async def sync_caldav(owner: str) -> dict:
     Returns aggregated counts + per-account errors."""
     from src.secret_storage import decrypt
 
-    accounts = _load_caldav_accounts(owner)
+    accounts = [a for a in _load_caldav_accounts(owner) if _caldav_account_enabled(a)]
     if not accounts:
         return {
             "calendars": 0, "events": 0, "deleted": 0,

@@ -31,13 +31,21 @@ BUILTIN_EMAIL_TOOLS = frozenset({
     "download_attachment",
 })
 
+# Native agent tools for the local email mirror (routes/email_local_store.py).
+# Not part of the email MCP server — kept separate so BUILTIN_EMAIL_TOOLS stays
+# in sync with mcp_servers/email_server.py (see tests/test_email_registry_sync.py).
+LOCAL_EMAIL_TOOLS = frozenset({
+    "read_local_emails",
+    "sync_local_emails",
+})
+
 
 # Tools regular/public users must not execute directly. These either expose
 # server/runtime access, sensitive user data, external messaging, persistent
 # state changes, or generic loopback/integration surfaces. All email tools are
 # included (SECURITY.md: email/MCP capabilities are privileged admin
 # functionality).
-NON_ADMIN_BLOCKED_TOOLS = BUILTIN_EMAIL_TOOLS | {
+NON_ADMIN_BLOCKED_TOOLS = BUILTIN_EMAIL_TOOLS | LOCAL_EMAIL_TOOLS | {
     "bash",
     "python",
     "manage_bg_jobs",
@@ -110,6 +118,7 @@ PLAN_MODE_READONLY_TOOLS = {
     # classified — see the plan-mode partition test in
     # tests/test_email_registry_sync.py.
     "search_emails",
+    "read_local_emails",
     "list_served_models",
     "list_downloads",
     "list_cached_models",
@@ -150,6 +159,7 @@ _PLAN_MODE_KNOWN_MUTATORS = {
     # entirely on the MCP read-only inventory being present and current.
     "draft_email", "draft_email_reply", "ai_draft_email_reply",
     "download_attachment",
+    "sync_local_emails",
     "download_model", "serve_model",
     "stop_served_model", "cancel_download", "adopt_served_model", "serve_preset",
     "generate_image", "edit_image", "trigger_research", "manage_research",

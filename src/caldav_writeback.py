@@ -252,7 +252,9 @@ async def writeback_event(owner: str, calendar_source: str, calendar_id: str,
         from src.secret_storage import decrypt
         from core.database import CalendarCal, SessionLocal
 
-        accounts = _load_caldav_accounts(owner)
+        from src.caldav_sync import _caldav_account_enabled
+
+        accounts = [a for a in _load_caldav_accounts(owner) if _caldav_account_enabled(a)]
         if not accounts:
             return {"skipped": "caldav not configured"}
 
