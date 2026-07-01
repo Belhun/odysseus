@@ -13,6 +13,11 @@ import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
+
+# Load .env before constants so ODYSSEUS_DATA_DIR on another drive is honored.
+from dotenv import load_dotenv
+load_dotenv(os.path.join(BASE_DIR, ".env"), encoding="utf-8-sig")
+
 from src.constants import (
     DATA_DIR, AUTH_FILE, UPLOAD_DIR, PERSONAL_DIR, PERSONAL_UPLOADS_DIR,
     TTS_CACHE_DIR, GENERATED_IMAGES_DIR, DEEP_RESEARCH_DIR, CHROMA_DIR,
@@ -35,10 +40,19 @@ DIRS = [
 ]
 
 
+def _dir_label(path: str) -> str:
+    """Human-readable path for setup output (relpath when possible)."""
+    try:
+        return os.path.relpath(path, BASE_DIR)
+    except ValueError:
+        # Windows: relpath fails across drives (e.g. ODYSSEUS_DATA_DIR on E:, repo on F:).
+        return os.path.normpath(path)
+
+
 def create_dirs():
     for d in DIRS:
         os.makedirs(d, exist_ok=True)
-        print(f"  [ok] {os.path.relpath(d, BASE_DIR)}/")
+        print(f"  [ok] {_dir_label(d)}/")
 
 
 def init_database():
