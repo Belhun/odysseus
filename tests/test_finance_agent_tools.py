@@ -129,6 +129,183 @@ async def test_manage_finance_owner_scoped(finance_tool_env):
 
 @pytest.mark.asyncio
 @pytest.mark.area_routes
+async def test_list_transactions_filters_by_account_id_prefix(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        acct = FinanceAccount(
+            id="dd8bb9fa-1111-2222-3333-444455556666",
+            owner=owner,
+            name="Wells Fargo",
+            account_type="checking",
+        )
+        other = FinanceAccount(
+            id="bc3c8fbc-aaaa-bbbb-cccc-ddddeeeeffff",
+            owner=owner,
+            name="Navy Fed",
+            account_type="checking",
+        )
+        db.add_all([acct, other])
+        db.add_all([
+            FinanceTransaction(
+                id="tx-wells-1",
+                owner=owner,
+                account_id=acct.id,
+                date=__import__("datetime").date(2026, 7, 6),
+                amount_cents=-9870,
+                payee="MOBILESENTRI",
+                dedup_hash="w1",
+            ),
+            FinanceTransaction(
+                id="tx-navy-1",
+                owner=owner,
+                account_id=other.id,
+                date=__import__("datetime").date(2026, 7, 6),
+                amount_cents=-500,
+                payee="NAVY FED FEE",
+                dedup_hash="n1",
+            ),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    result = await do_manage_finance(json.dumps({
+        "action": "list_transactions",
+        "account_id": "dd8bb9fa",
+        "limit": 5,
+    }), owner=owner)
+    assert result.get("exit_code") == 0, result
+    body = result.get("response", "")
+    assert "MOBILESENTRI" in body
+    assert "NAVY FED FEE" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_categorize_transaction_accepts_category_id_prefix_and_names(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        acct = FinanceAccount(id="acct-1", owner=owner, name="Checking", account_type="checking")
+        travel = FinanceCategory(
+            id="c5e2864c-aaaa-bbbb-cccc-ddddeeeeffff",
+            owner=owner,
+            name="Travel",
+            is_income=False,
+        )
+        dining = FinanceCategory(
+            id="5b3cda32-bbbb-cccc-dddd-eeeeffff0000",
+            owner=owner,
+            name="Dining",
+            is_income=False,
+        )
+        subs = FinanceCategory(
+            id="5723bf38-cccc-dddd-eeee-ffff00001111",
+            owner=owner,
+            name="Subscriptions",
+            is_income=False,
+        )
+        db.add_all([acct, travel, dining, subs])
+        db.add_all([
+            FinanceTransaction(
+                id="7c7c1ff7-1111-2222-3333-444455556666",
+                owner=owner,
+                account_id=acct.id,
+                date=__import__("datetime").date(2026, 7, 6),
+                amount_cents=-9870,
+                payee="MOBILESENTRI",
+                dedup_hash="t1",
+            ),
+            FinanceTransaction(
+                id="e4fdac7d-2222-3333-4444-555566667777",
+                owner=owner,
+                account_id=acct.id,
+                date=__import__("datetime").date(2026, 7, 2),
+                amount_cents=-2377,
+                payee="JACK IN THE BOX",
+                dedup_hash="t2",
+            ),
+            FinanceTransaction(
+                id="8c805464-3333-4444-5555-666677778888",
+                owner=owner,
+                account_id=acct.id,
+                date=__import__("datetime").date(2026, 7, 2),
+                amount_cents=-1399,
+                payee="CRUNCHYROLL",
+                dedup_hash="t3",
+            ),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    travel_result = await do_manage_finance(json.dumps({
+        "action": "categorize_transaction",
+        "transaction_id": "7c7c1ff7",
+        "category_id": "Travel",
+    }), owner=owner)
+    assert travel_result.get("exit_code") == 0, travel_result
+
+    dining_result = await do_manage_finance(json.dumps({
+        "action": "categorize_transaction",
+        "transaction_id": "e4fdac7d",
+        "category_id": "Dining",
+    }), owner=owner)
+    assert dining_result.get("exit_code") == 0, dining_result
+
+    subs_result = await do_manage_finance(json.dumps({
+        "action": "categorize_transaction",
+        "transaction_id": "8c805464",
+        "category_id": "[5723bf38]",
+    }), owner=owner)
+    assert subs_result.get("exit_code") == 0, subs_result
+
+    db = finance_tool_env["session_factory"]()
+    try:
+        tx_travel = db.query(FinanceTransaction).filter(FinanceTransaction.id.startswith("7c7c1ff7")).one()
+        tx_dining = db.query(FinanceTransaction).filter(FinanceTransaction.id.startswith("e4fdac7d")).one()
+        tx_subs = db.query(FinanceTransaction).filter(FinanceTransaction.id.startswith("8c805464")).one()
+        assert tx_travel.category_id == "c5e2864c-aaaa-bbbb-cccc-ddddeeeeffff"
+        assert tx_dining.category_id == "5b3cda32-bbbb-cccc-dddd-eeeeffff0000"
+        assert tx_subs.category_id == "5723bf38-cccc-dddd-eeee-ffff00001111"
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_create_rule_accepts_category_name(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        acct = FinanceAccount(id="acct-1", owner=owner, name="Checking", account_type="checking")
+        travel = FinanceCategory(id="travel-1", owner=owner, name="Travel", is_income=False)
+        db.add_all([acct, travel])
+        db.add(FinanceTransaction(
+            id="tx-sentri",
+            owner=owner,
+            account_id=acct.id,
+            date=__import__("datetime").date(2026, 7, 6),
+            amount_cents=-9870,
+            payee="MOBILESENTRI",
+            dedup_hash="s1",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    result = await do_manage_finance(json.dumps({
+        "action": "create_rule",
+        "pattern": "MOBILESENTRI",
+        "category_id": "Travel",
+    }), owner=owner)
+    assert result.get("exit_code") == 0, result
+    assert "Categorized 1" in result.get("response", "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
 async def test_categorize_transaction_with_prefix_ids(finance_tool_env):
     owner = finance_tool_env["owner"]
     db = finance_tool_env["session_factory"]()
