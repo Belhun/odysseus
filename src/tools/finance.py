@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import date
 from typing import Dict, Optional
@@ -12,6 +13,7 @@ from src.tools._common import _parse_tool_args
 logger = logging.getLogger(__name__)
 
 _MAX_TX_LIMIT = 50
+_ID_PREFIX_RE = re.compile(r"^[0-9a-fA-F-]{8,36}$")
 
 
 def _fmt_cents(cents: int) -> str:
@@ -35,60 +37,122 @@ def _require_owner(owner: Optional[str]) -> str:
     return owner
 
 
+def _normalize_display_id(value: str | None) -> str:
+    """Strip brackets/whitespace from ids copied out of tool output."""
+    raw = str(value or "").strip()
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1].strip()
+    return raw.split("]", 1)[0].strip() if raw.startswith("[") else raw
+
+
+def _looks_like_entity_id(value: str) -> bool:
+    """True when value looks like an 8-char prefix or UUID, not a category label."""
+    token = _normalize_display_id(value)
+    return bool(token and _ID_PREFIX_RE.fullmatch(token))
+
+
+def _pick_entity_match(matches, token: str):
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    for match in matches:
+        if match.id[:8] == token[:8]:
+            return match
+    return matches[0]
+
+
+def _lookup_category_by_id(db, user: str, category_id: str):
+    from integrations.finance.models import FinanceCategory
+
+    cid = _normalize_display_id(category_id)
+    if not cid:
+        return None
+    exact = db.query(FinanceCategory).filter(
+        FinanceCategory.owner == user,
+        FinanceCategory.id == cid,
+    ).first()
+    if exact:
+        return exact
+    matches = (
+        db.query(FinanceCategory)
+        .filter(FinanceCategory.owner == user, FinanceCategory.id.startswith(cid))
+        .order_by(FinanceCategory.display_order, FinanceCategory.created_at)
+        .all()
+    )
+    return _pick_entity_match(matches, cid)
+
+
+def _lookup_category_by_name(db, user: str, category_name: str):
+    from integrations.finance.models import FinanceCategory
+
+    name = str(category_name or "").strip()
+    if not name:
+        return None
+    matches = (
+        db.query(FinanceCategory)
+        .filter(FinanceCategory.owner == user, FinanceCategory.name.ilike(name))
+        .order_by(FinanceCategory.display_order, FinanceCategory.created_at)
+        .all()
+    )
+    if not matches:
+        return None
+    if name.lower() == "income":
+        income_cats = [m for m in matches if m.is_income]
+        if income_cats:
+            return income_cats[0]
+    return matches[0]
+
+
 def _resolve_category(db, user: str, *, category_id: str | None = None, category_name: str | None = None):
     """Match category by full id, id prefix (8-char display ids), or name."""
-    from integrations.finance.models import FinanceCategory
-    from integrations.finance.services.categories import dedupe_categories
+    from integrations.finance.services.categories import dedupe_categories, ensure_default_categories
 
+    ensure_default_categories(db, user)
     dedupe_categories(db, user)
-    if category_id:
-        cid = str(category_id).strip()
-        if not cid:
-            return None
-        exact = db.query(FinanceCategory).filter(
-            FinanceCategory.owner == user,
-            FinanceCategory.id == cid,
-        ).first()
-        if exact:
-            return exact
-        matches = (
-            db.query(FinanceCategory)
-            .filter(FinanceCategory.owner == user, FinanceCategory.id.startswith(cid))
-            .order_by(FinanceCategory.display_order, FinanceCategory.created_at)
-            .all()
-        )
-        if not matches:
-            return None
-        if len(matches) == 1:
-            return matches[0]
-        for match in matches:
-            if match.id[:8] == cid[:8]:
-                return match
-        return matches[0]
-    if category_name:
-        name = str(category_name).strip()
-        if not name:
-            return None
-        matches = (
-            db.query(FinanceCategory)
-            .filter(FinanceCategory.owner == user, FinanceCategory.name.ilike(name))
-            .order_by(FinanceCategory.display_order, FinanceCategory.created_at)
-            .all()
-        )
-        if not matches:
-            return None
-        if name.lower() == "income":
-            income_cats = [m for m in matches if m.is_income]
-            if income_cats:
-                return income_cats[0]
-        return matches[0]
+
+    raw_id = _normalize_display_id(category_id) if category_id else ""
+    name = str(category_name or "").strip()
+
+    if raw_id and _looks_like_entity_id(raw_id):
+        cat = _lookup_category_by_id(db, user, raw_id)
+        if cat:
+            return cat
+
+    for candidate in (name, raw_id):
+        if not candidate:
+            continue
+        cat = _lookup_category_by_name(db, user, candidate)
+        if cat:
+            return cat
     return None
+
+
+def _resolve_account(db, user: str, account_id: str):
+    from integrations.finance.models import FinanceAccount
+
+    aid = _normalize_display_id(account_id)
+    if not aid:
+        return None
+    exact = db.query(FinanceAccount).filter(
+        FinanceAccount.owner == user,
+        FinanceAccount.id == aid,
+    ).first()
+    if exact:
+        return exact
+    matches = (
+        db.query(FinanceAccount)
+        .filter(FinanceAccount.owner == user, FinanceAccount.id.startswith(aid))
+        .order_by(FinanceAccount.display_order, FinanceAccount.name)
+        .all()
+    )
+    return _pick_entity_match(matches, aid)
 
 
 def _resolve_transaction(db, user: str, tx_id: str):
     from integrations.finance.models import FinanceTransaction
 
-    tid = (tx_id or "").strip()
+    tid = _normalize_display_id(tx_id)
     if not tid:
         return None
     exact = db.query(FinanceTransaction).filter(
@@ -103,14 +167,7 @@ def _resolve_transaction(db, user: str, tx_id: str):
         .order_by(FinanceTransaction.date.desc(), FinanceTransaction.created_at.desc())
         .all()
     )
-    if not matches:
-        return None
-    if len(matches) == 1:
-        return matches[0]
-    for match in matches:
-        if match.id[:8] == tid[:8]:
-            return match
-    return matches[0]
+    return _pick_entity_match(matches, tid)
 
 
 async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
@@ -182,9 +239,15 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
             limit = min(int(args.get("limit") or 25), _MAX_TX_LIMIT)
             q = db.query(FinanceTransaction).filter(FinanceTransaction.owner == user)
             if args.get("account_id"):
-                q = q.filter(FinanceTransaction.account_id == args["account_id"])
+                acct = _resolve_account(db, user, str(args["account_id"]))
+                if not acct:
+                    return {"response": "No matching transactions.", "exit_code": 0}
+                q = q.filter(FinanceTransaction.account_id == acct.id)
             if args.get("category_id"):
-                q = q.filter(FinanceTransaction.category_id == args["category_id"])
+                cat = _resolve_category(db, user, category_id=str(args["category_id"]))
+                if not cat:
+                    return {"response": "No matching transactions.", "exit_code": 0}
+                q = q.filter(FinanceTransaction.category_id == cat.id)
             month = args.get("month")
             if month:
                 start, end = month_bounds(str(month)[:7])
@@ -293,7 +356,10 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
                 FinanceTransaction.category_id.is_(None),
             )
             if args.get("account_id"):
-                q = q.filter(FinanceTransaction.account_id == args["account_id"])
+                acct = _resolve_account(db, user, str(args["account_id"]))
+                if not acct:
+                    return {"response": "No uncategorized transactions to process.", "exit_code": 0}
+                q = q.filter(FinanceTransaction.account_id == acct.id)
             limit = min(int(args.get("limit") or 500), 500)
             txs = q.order_by(FinanceTransaction.date.desc()).limit(limit).all()
             if not txs:
@@ -309,11 +375,6 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
             tx_id = (args.get("transaction_id") or args.get("id") or "").strip()
             category_id = args.get("category_id")
             category_name = (args.get("category_name") or args.get("category") or "").strip()
-            if category_id and not category_name and str(category_id).strip().lower() in {
-                "income", "groceries", "dining", "shopping", "transfers", "other",
-            }:
-                category_name = str(category_id).strip()
-                category_id = None
             if not tx_id or (not category_id and not category_name):
                 return {
                     "error": (
