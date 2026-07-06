@@ -87,6 +87,32 @@ def test_finance_import_preview_and_commit(finance_client):
 
 
 @pytest.mark.area_routes
+def test_finance_transactions_pagination(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "WF", "account_type": "checking"}).json()
+    account_id = acct["id"]
+
+    preview = finance_client.post(
+        "/api/finance/import/preview",
+        data={"account_id": account_id},
+        files={"file": ("wells.csv", WELLS_FARGO_SAMPLE.encode("utf-8"), "text/csv")},
+    ).json()
+    finance_client.post("/api/finance/import/commit", json={"preview_id": preview["preview_id"]})
+
+    page1 = finance_client.get(f"/api/finance/transactions?account_id={account_id}&limit=1&offset=0")
+    assert page1.status_code == 200
+    body1 = page1.json()
+    assert body1["total"] == 2
+    assert len(body1["transactions"]) == 1
+
+    page2 = finance_client.get(f"/api/finance/transactions?account_id={account_id}&limit=1&offset=1")
+    assert page2.status_code == 200
+    body2 = page2.json()
+    assert body2["total"] == 2
+    assert len(body2["transactions"]) == 1
+    assert body1["transactions"][0]["id"] != body2["transactions"][0]["id"]
+
+
+@pytest.mark.area_routes
 def test_plugin_install_writes_marker_and_feature(monkeypatch, tmp_path):
     plugins_root = tmp_path / "plugins"
     monkeypatch.setattr("src.plugins.registry.PLUGINS_DATA_ROOT", plugins_root)
