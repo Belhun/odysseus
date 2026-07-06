@@ -112,10 +112,18 @@ class BashTool:
             env=_subproc_env,
             cwd=agent_cwd(),
         )
+        from core.subprocess_perf import SubprocessTimer
+        timer = SubprocessTimer(proc.pid, "bash", "B1", command_preview=content[:120])
         stdout, stderr, rc, timed_out = await _run_subprocess_streaming(
             proc,
             timeout=DEFAULT_BASH_TIMEOUT,
             progress_cb=progress_cb,
+        )
+        timer.complete(
+            exit_code=124 if timed_out else (rc or 0),
+            timed_out=timed_out,
+            stdout_chars=len(stdout),
+            stderr_chars=len(stderr),
         )
         if timed_out:
             return {"error": f"bash: timed out after {DEFAULT_BASH_TIMEOUT}s — process killed", "exit_code": 124, "stdout": _truncate(stdout, MAX_OUTPUT_CHARS), "stderr": _truncate(stderr, MAX_OUTPUT_CHARS)}
@@ -138,10 +146,18 @@ class PythonTool:
             env=_subproc_env,
             cwd=agent_cwd(),
         )
+        from core.subprocess_perf import SubprocessTimer
+        timer = SubprocessTimer(proc.pid, "python", "B2", command_preview=content[:80])
         stdout, stderr, rc, timed_out = await _run_subprocess_streaming(
             proc,
             timeout=DEFAULT_PYTHON_TIMEOUT,
             progress_cb=progress_cb,
+        )
+        timer.complete(
+            exit_code=124 if timed_out else (rc or 0),
+            timed_out=timed_out,
+            stdout_chars=len(stdout),
+            stderr_chars=len(stderr),
         )
         if timed_out:
             return {"error": f"python: timed out after {DEFAULT_PYTHON_TIMEOUT}s — process killed", "exit_code": 124, "stdout": _truncate(stdout, MAX_OUTPUT_CHARS), "stderr": _truncate(stderr, MAX_OUTPUT_CHARS)}
