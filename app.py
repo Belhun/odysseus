@@ -13,6 +13,10 @@ import asyncio
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+# Instrument asyncio.to_thread before other modules import it.
+from core.async_thread import install as _install_perf_to_thread
+_install_perf_to_thread()
+
 
 def register_static_mime_types() -> None:
     """Force stable JS module MIME types across platforms.
@@ -210,6 +214,10 @@ class _InteractiveActivityMiddleware(_BaseHTTPMiddleware):
 
 app.add_middleware(_RequestTimeoutMiddleware)
 app.add_middleware(_InteractiveActivityMiddleware)
+
+# ========= PERFORMANCE TRACKING =========
+from core.perf_middleware import PerfMiddleware
+app.add_middleware(PerfMiddleware)
 
 # ========= AUTH =========
 from routes.auth_routes import setup_auth_routes, SESSION_COOKIE
@@ -1195,7 +1203,23 @@ async def _startup_event():
     # cookbook_serve entry in BUILTIN_ACTIONS + src/cookbook_serve_lifecycle.py
     # removes the feature.
     from src.cookbook_serve_lifecycle import cookbook_serve_lifecycle_loop
-    _startup_tasks.append(asyncio.create_task(cookbook_serve_lifecycle_loop()))
+    _startup_tasks.append(asyncio.create_task(cookbook_serve_lifecycle_loop(), name="startup.cookbook_serve_lifecycle"))
+
+    # Performance tracking background samplers
+    try:
+        from core.process_sampler import start_process_sampler
+        from core.container_stats import start_container_sampler
+        from core.gpu_sampler import start_gpu_ollama_sampler
+        _perf_interval = float(os.getenv("ODYSSEUS_PERF_SAMPLE_INTERVAL", "30"))
+        _perf_task_interval = float(os.getenv("ODYSSEUS_PERF_TASK_INTERVAL", "2"))
+        _startup_tasks.append(start_process_sampler(_perf_interval, _perf_task_interval))
+        ct = start_container_sampler(max(_perf_interval, 60.0))
+        if ct:
+            _startup_tasks.append(ct)
+        _startup_tasks.append(start_gpu_ollama_sampler(_perf_interval))
+        logger.info("Performance tracking samplers started (ODYSSEUS_PERF=%s)", os.getenv("ODYSSEUS_PERF", "true"))
+    except Exception as e:
+        logger.warning("Performance tracking samplers failed to start: %s", e)
 
     logger.info("Application startup complete")
 
@@ -1222,6 +1246,15 @@ async def _shutdown_event():
         await mcp_manager.disconnect_all()
     except Exception as e:
         logger.warning(f"MCP shutdown error: {e}")
+    try:
+        from core.process_sampler import stop_process_sampler
+        from core.container_stats import stop_container_sampler
+        from core.gpu_sampler import stop_gpu_ollama_sampler
+        stop_process_sampler()
+        stop_container_sampler()
+        stop_gpu_ollama_sampler()
+    except Exception:
+        pass
     logger.info("Application shutdown complete")
 
 
