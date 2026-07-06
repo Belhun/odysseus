@@ -21,6 +21,11 @@ let _categories = [];
 let _activeAccountId = null;
 let _activeTab = 'transactions';
 let _preview = null;
+let _txSearch = '';
+let _txPage = 0;
+let _txListAccountId = null;
+let _txSearchTimer = null;
+const TX_PAGE_SIZE = 50;
 
 function _el(id) {
   return document.getElementById(id);
@@ -129,40 +134,19 @@ function _tabStyle(tab) {
   return _activeTab === tab ? 'font-weight:600;text-decoration:underline;' : '';
 }
 
-async function _renderTransactions() {
-  const panel = _el('finance-panel');
-  if (!panel) return;
-  if (!_activeAccountId) {
-    panel.innerHTML = '<p>Create an account to get started.</p>';
-    return;
-  }
-  panel.innerHTML = '<p>Loading transactions…</p>';
-  const search = panel.dataset.search || '';
-  const data = await _api(`/transactions?account_id=${encodeURIComponent(_activeAccountId)}&limit=200&search=${encodeURIComponent(search)}`);
-  const rows = (data.transactions || []).map((tx) => {
-    const amtClass = tx.amount_cents < 0 ? 'color:var(--danger,#e74c3c)' : 'color:var(--success,#2ecc71)';
-    const catOpts = _categoryOptions(tx.category_id);
-    return `<tr>
-      <td>${tx.date || ''}</td>
-      <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(tx.payee)}">${_escHtml(tx.payee)}</td>
-      <td style="${amtClass};text-align:right;">${_fmtMoney(tx.amount_cents)}</td>
-      <td><select data-tx-cat="${tx.id}" class="finance-cat-select">${catOpts}</select></td>
-    </tr>`;
-  }).join('');
-  panel.innerHTML = `
-    <div style="margin-bottom:8px;display:flex;gap:8px;">
-      <input id="finance-tx-search" placeholder="Search payee…" value="${search.replace(/"/g, '&quot;')}" style="flex:1;" />
-    </div>
-    <table class="finance-table" style="width:100%;border-collapse:collapse;font-size:0.9rem;">
-      <thead><tr><th>Date</th><th>Payee</th><th style="text-align:right;">Amount</th><th>Category</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="4">No transactions yet. Import a CSV from your bank.</td></tr>'}</tbody>
-    </table>`;
-  _el('finance-tx-search')?.addEventListener('input', (e) => {
-    panel.dataset.search = e.target.value;
-    clearTimeout(panel._searchTimer);
-    panel._searchTimer = setTimeout(() => _renderTransactions(), 300);
-  });
-  panel.querySelectorAll('.finance-cat-select').forEach((sel) => {
+function _txRowHtml(tx) {
+  const amtClass = tx.amount_cents < 0 ? 'color:var(--danger,#e74c3c)' : 'color:var(--success,#2ecc71)';
+  const catOpts = _categoryOptions(tx.category_id);
+  return `<tr>
+    <td>${tx.date || ''}</td>
+    <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(tx.payee)}">${_escHtml(tx.payee)}</td>
+    <td style="${amtClass};text-align:right;">${_fmtMoney(tx.amount_cents)}</td>
+    <td><select data-tx-cat="${tx.id}" class="finance-cat-select">${catOpts}</select></td>
+  </tr>`;
+}
+
+function _wireCategorySelects(root) {
+  root?.querySelectorAll('.finance-cat-select').forEach((sel) => {
     sel.addEventListener('change', async () => {
       await _api(`/transactions/${sel.dataset.txCat}`, {
         method: 'PATCH',
@@ -171,6 +155,128 @@ async function _renderTransactions() {
       });
     });
   });
+}
+
+function _renderTxPager(total) {
+  const pager = _el('finance-tx-pager');
+  if (!pager) return;
+  const pageCount = Math.max(1, Math.ceil(total / TX_PAGE_SIZE));
+  if (_txPage >= pageCount) _txPage = Math.max(0, pageCount - 1);
+  const start = total ? _txPage * TX_PAGE_SIZE + 1 : 0;
+  const end = Math.min(total, (_txPage + 1) * TX_PAGE_SIZE);
+  pager.innerHTML = `
+    <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-color,#333);">
+      <span style="font-size:0.85rem;opacity:0.85;">
+        ${total ? `Showing ${start}–${end} of ${total.toLocaleString()}` : 'No transactions'}
+      </span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button type="button" id="finance-tx-prev" class="btn-secondary" ${_txPage <= 0 ? 'disabled' : ''}>Previous</button>
+        <span style="font-size:0.85rem;min-width:7rem;text-align:center;">Page ${_txPage + 1} of ${pageCount}</span>
+        <button type="button" id="finance-tx-next" class="btn-secondary" ${_txPage >= pageCount - 1 ? 'disabled' : ''}>Next</button>
+      </div>
+    </div>`;
+  _el('finance-tx-prev')?.addEventListener('click', () => {
+    if (_txPage > 0) {
+      _txPage -= 1;
+      _fetchTransactionPage();
+    }
+  });
+  _el('finance-tx-next')?.addEventListener('click', () => {
+    if (_txPage < pageCount - 1) {
+      _txPage += 1;
+      _fetchTransactionPage();
+    }
+  });
+}
+
+async function _fetchTransactionPage() {
+  const tbody = _el('finance-tx-tbody');
+  const status = _el('finance-tx-status');
+  const searchInput = _el('finance-tx-search');
+  const hadFocus = document.activeElement === searchInput;
+  const selStart = searchInput?.selectionStart ?? null;
+  const selEnd = searchInput?.selectionEnd ?? null;
+
+  if (status) status.textContent = 'Loading…';
+  if (tbody) {
+    tbody.innerHTML = '<tr><td colspan="4" style="opacity:0.7;">Loading transactions…</td></tr>';
+  }
+
+  try {
+    const offset = _txPage * TX_PAGE_SIZE;
+    const data = await _api(
+      `/transactions?account_id=${encodeURIComponent(_activeAccountId)}`
+      + `&limit=${TX_PAGE_SIZE}&offset=${offset}&search=${encodeURIComponent(_txSearch)}`,
+    );
+    const txs = data.transactions || [];
+    const total = Number(data.total) || 0;
+    if (status) status.textContent = _txSearch ? `Filtered by “${_txSearch}”` : '';
+    if (tbody) {
+      tbody.innerHTML = txs.length
+        ? txs.map(_txRowHtml).join('')
+        : '<tr><td colspan="4">No matching transactions.</td></tr>';
+      _wireCategorySelects(tbody);
+    }
+    _renderTxPager(total);
+  } catch (err) {
+    if (status) status.textContent = '';
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger,#e74c3c);">${_escHtml(err.message || String(err))}</td></tr>`;
+    }
+    _renderTxPager(0);
+  }
+
+  if (hadFocus && searchInput) {
+    searchInput.focus();
+    if (selStart != null && selEnd != null) {
+      searchInput.setSelectionRange(selStart, selEnd);
+    }
+  }
+}
+
+function _ensureTransactionsShell() {
+  const panel = _el('finance-panel');
+  if (!panel || panel.querySelector('#finance-tx-root')) return;
+  panel.innerHTML = `
+    <div id="finance-tx-root">
+      <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;">
+        <input id="finance-tx-search" type="search" placeholder="Search payee…" autocomplete="off" style="flex:1;" />
+      </div>
+      <div id="finance-tx-status" style="font-size:0.85rem;opacity:0.8;min-height:1.2em;margin-bottom:4px;"></div>
+      <table class="finance-table" style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+        <thead><tr><th>Date</th><th>Payee</th><th style="text-align:right;">Amount</th><th>Category</th></tr></thead>
+        <tbody id="finance-tx-tbody"></tbody>
+      </table>
+      <div id="finance-tx-pager"></div>
+    </div>`;
+  const searchInput = _el('finance-tx-search');
+  searchInput.value = _txSearch;
+  searchInput.addEventListener('input', (e) => {
+    _txSearch = e.target.value;
+    _txPage = 0;
+    clearTimeout(_txSearchTimer);
+    _txSearchTimer = setTimeout(() => _fetchTransactionPage(), 300);
+  });
+}
+
+async function _renderTransactions() {
+  const panel = _el('finance-panel');
+  if (!panel) return;
+  if (!_activeAccountId) {
+    panel.innerHTML = '<p>Create an account to get started.</p>';
+    return;
+  }
+  if (_txListAccountId !== _activeAccountId) {
+    _txListAccountId = _activeAccountId;
+    _txPage = 0;
+    _txSearch = '';
+  }
+  _ensureTransactionsShell();
+  const searchInput = _el('finance-tx-search');
+  if (searchInput && searchInput.value !== _txSearch) {
+    searchInput.value = _txSearch;
+  }
+  await _fetchTransactionPage();
 }
 
 async function _renderImport() {
