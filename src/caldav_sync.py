@@ -182,6 +182,56 @@ def _find_existing_event(db, pending, uid_val, calendar_id):
     ).first()
 
 
+def _find_owner_event_by_uid(db, uid_val, owner):
+    """Return an existing row for this uid owned by `owner`, any calendar.
+
+    Google accounts often surface the same VEVENT uid from multiple subscribed
+    calendars in one sync pass. uid is globally unique, so the second calendar
+    must refresh the existing row instead of INSERT-ing a duplicate.
+    """
+    from core.database import CalendarCal, CalendarEvent
+
+    if not owner:
+        return None
+    return (
+        db.query(CalendarEvent)
+        .join(CalendarCal)
+        .filter(CalendarEvent.uid == uid_val, CalendarCal.owner == owner)
+        .first()
+    )
+
+
+def _apply_caldav_event_fields(
+    existing,
+    *,
+    summary,
+    description,
+    location,
+    start_dt,
+    end_dt,
+    all_day,
+    row_is_utc,
+    rrule,
+    remote_href,
+    remote_etag,
+    calendar_id=None,
+):
+    if calendar_id is not None:
+        existing.calendar_id = calendar_id
+    existing.summary = summary
+    existing.description = description
+    existing.location = location
+    existing.dtstart = start_dt
+    existing.dtend = end_dt
+    existing.all_day = all_day
+    existing.is_utc = row_is_utc
+    existing.rrule = rrule
+    existing.origin = "caldav"
+    existing.remote_href = remote_href
+    existing.remote_etag = remote_etag
+    existing.caldav_sync_pending = None
+
+
 def _google_caldav_events_url(url: str) -> str | None:
     """Map a Google CalDAV *principal* URL to its event-collection URL.
 
@@ -415,25 +465,41 @@ def _sync_blocking(owner: str, url: str, username: str, password: str, account_i
                             else ""
                         )
 
+                        remote_href = str(getattr(obj, "url", "") or "") or None
+                        remote_etag = _event_etag(obj) or None
+                        field_kwargs = dict(
+                            summary=summary,
+                            description=description,
+                            location=location,
+                            start_dt=start_dt,
+                            end_dt=end_dt,
+                            all_day=all_day,
+                            row_is_utc=row_is_utc,
+                            rrule=rrule,
+                            remote_href=remote_href,
+                            remote_etag=remote_etag,
+                        )
+
                         existing = _find_existing_event(db, pending, uid_val, local_cal.id)
                         if existing:
                             if existing.caldav_sync_pending in {"create", "update"}:
                                 result["events"] += 1
                                 continue
-                            existing.calendar_id = local_cal.id
-                            existing.summary = summary
-                            existing.description = description
-                            existing.location = location
-                            existing.dtstart = start_dt
-                            existing.dtend = end_dt
-                            existing.all_day = all_day
-                            existing.is_utc = row_is_utc
-                            existing.rrule = rrule
-                            existing.origin = "caldav"
-                            existing.remote_href = str(getattr(obj, "url", "") or "") or None
-                            existing.remote_etag = _event_etag(obj) or None
-                            existing.caldav_sync_pending = None
+                            _apply_caldav_event_fields(
+                                existing, calendar_id=local_cal.id, **field_kwargs
+                            )
                         else:
+                            cross_cal = _find_owner_event_by_uid(db, uid_val, owner)
+                            if cross_cal:
+                                if cross_cal.caldav_sync_pending not in {"create", "update"}:
+                                    # Same owner, different calendar — refresh
+                                    # fields but keep calendar_id so subscribed
+                                    # duplicates do not ping-pong between cals.
+                                    _apply_caldav_event_fields(
+                                        cross_cal, **field_kwargs
+                                    )
+                                result["events"] += 1
+                                continue
                             new_ev = CalendarEvent(
                                 uid=uid_val,
                                 calendar_id=local_cal.id,
@@ -446,8 +512,8 @@ def _sync_blocking(owner: str, url: str, username: str, password: str, account_i
                                 is_utc=row_is_utc,
                                 rrule=rrule,
                                 origin="caldav",
-                                remote_href=str(getattr(obj, "url", "") or "") or None,
-                                remote_etag=_event_etag(obj) or None,
+                                remote_href=remote_href,
+                                remote_etag=remote_etag,
                             )
                             db.add(new_ev)
                             pending[uid_val] = new_ev
