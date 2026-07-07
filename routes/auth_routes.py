@@ -655,6 +655,13 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
         _INT_RANGES = {
             "agent_max_rounds": (1, 200),
             "agent_max_tool_calls": (0, 1000),  # 0 = unlimited
+            "email_local_sync_backfill_batch": (1, 500),
+            "email_local_sync_flag_refresh_window": (10, 5000),
+            "email_local_sync_max_attachment_bytes": (1_048_576, 104_857_600),
+            "email_local_sync_attachment_budget_bytes": (10_485_760, 10_737_418_240),
+            "email_local_sync_max_sync_seconds": (0, 3600),
+            "email_local_sync_account_delay_ms": (0, 60_000),
+            "email_local_sync_chunk_delay_ms": (0, 5_000),
         }
         for key in DEFAULT_SETTINGS:
             if key not in body:

@@ -995,6 +995,9 @@ def setup_chat_routes(
             from src.tool_security import plan_mode_disabled_tools
             disabled_tools.update(plan_mode_disabled_tools())
 
+        from src.tool_security import live_imap_read_disabled_tools
+        disabled_tools.update(live_imap_read_disabled_tools(owner))
+
         tool_policy = build_effective_tool_policy(
             disabled_tools=disabled_tools,
             last_user_message=message,
