@@ -1615,6 +1615,12 @@ class TaskScheduler:
         except Exception:
             pass
 
+        try:
+            from src.tool_security import live_imap_read_disabled_tools
+            disabled_tools.update(live_imap_read_disabled_tools(task.owner))
+        except Exception:
+            pass
+
         # RAG-select relevant tools for this prompt + always-available assistant tools.
         # Without this, all 40+ tools get sent and models hit their tool limit.
         relevant_tools = None

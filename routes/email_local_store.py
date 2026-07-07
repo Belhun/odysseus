@@ -10,6 +10,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,11 +22,15 @@ from routes.email_helpers import (
     _detect_sent_folder,
     _extract_html,
     _extract_text,
+    _flags_from_fetch_meta,
+    _group_uid_fetch_records,
     _imap_connect,
     _list_attachments_from_msg,
     _q,
+    _uid_from_fetch_meta,
     attachment_extract_dir,
 )
+from routes.email_mime_parse import AttachmentPart, parse_mime_for_local_store
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +52,9 @@ _WINDOWS_RESERVED = frozenset({
 })
 
 _SYNC_LOCKS: dict[tuple[str, str, str], threading.Lock] = {}
+_SYNC_ALL_LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
+_SYNC_ALL_GUARD = threading.Lock()
 
 
 def _folder_lock(owner: str, account_id: str, folder: str) -> threading.Lock:
@@ -56,6 +63,14 @@ def _folder_lock(owner: str, account_id: str, folder: str) -> threading.Lock:
         if key not in _SYNC_LOCKS:
             _SYNC_LOCKS[key] = threading.Lock()
         return _SYNC_LOCKS[key]
+
+
+def _owner_sync_all_lock(owner: str) -> threading.Lock:
+    key = owner or ""
+    with _SYNC_ALL_GUARD:
+        if key not in _SYNC_ALL_LOCKS:
+            _SYNC_ALL_LOCKS[key] = threading.Lock()
+        return _SYNC_ALL_LOCKS[key]
 
 
 def _connect() -> sqlite3.Connection:
@@ -118,6 +133,8 @@ def _init_local_store_db() -> None:
                 skipped_reason TEXT,
                 FOREIGN KEY(message_row_id) REFERENCES messages(id) ON DELETE CASCADE
             );
+            CREATE INDEX IF NOT EXISTS ix_attachments_message_row_id
+                ON attachments(message_row_id);
 
             CREATE TABLE IF NOT EXISTS sync_state (
                 owner TEXT NOT NULL DEFAULT '',
@@ -139,24 +156,166 @@ def _init_local_store_db() -> None:
             conn.execute(
                 "ALTER TABLE messages ADD COLUMN read_dirty INTEGER NOT NULL DEFAULT 0"
             )
+        _migrate_messages_fts(conn)
         conn.commit()
     finally:
         conn.close()
 
 
+def _migrate_messages_fts(conn: sqlite3.Connection) -> None:
+    """Create FTS5 index for local email search."""
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS temp._email_fts5_probe USING fts5(content)"
+        )
+        conn.execute("DROP TABLE IF EXISTS temp._email_fts5_probe")
+    except Exception as e:
+        logger.debug("messages_fts skipped; FTS5 unavailable: %s", e)
+        return
+    conn.executescript("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+            subject, from_name, from_addr, snippet, body_text,
+            content='messages', content_rowid='id'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, subject, from_name, from_addr, snippet, body_text)
+            VALUES (
+                new.id,
+                COALESCE(new.subject, ''),
+                COALESCE(new.from_name, ''),
+                COALESCE(new.from_addr, ''),
+                COALESCE(new.snippet, ''),
+                COALESCE(new.body_text, '')
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_addr, snippet, body_text)
+            VALUES ('delete', old.id, old.subject, old.from_name, old.from_addr, old.snippet, old.body_text);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_addr, snippet, body_text)
+            VALUES ('delete', old.id, old.subject, old.from_name, old.from_addr, old.snippet, old.body_text);
+            INSERT INTO messages_fts(rowid, subject, from_name, from_addr, snippet, body_text)
+            VALUES (
+                new.id,
+                COALESCE(new.subject, ''),
+                COALESCE(new.from_name, ''),
+                COALESCE(new.from_addr, ''),
+                COALESCE(new.snippet, ''),
+                COALESCE(new.body_text, '')
+            );
+        END;
+    """)
+    conn.execute("""
+        INSERT INTO messages_fts(rowid, subject, from_name, from_addr, snippet, body_text)
+        SELECT m.id,
+               COALESCE(m.subject, ''),
+               COALESCE(m.from_name, ''),
+               COALESCE(m.from_addr, ''),
+               COALESCE(m.snippet, ''),
+               COALESCE(m.body_text, '')
+        FROM messages m
+        WHERE NOT EXISTS (
+            SELECT 1 FROM messages_fts fts WHERE fts.rowid = m.id
+        )
+    """)
+
+
 _init_local_store_db()
 
 
-def _uid_from_fetch_meta(meta_b: bytes) -> int | None:
-    m = re.search(rb"\bUID\s+(\d+)\b", meta_b)
-    return int(m.group(1)) if m else None
+def _ensure_server_uid_temp(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TEMP TABLE IF NOT EXISTS _sync_server_uids (
+            uid INTEGER PRIMARY KEY
+        ) WITHOUT ROWID
+        """
+    )
 
 
-def _flags_from_fetch_meta(meta_b: bytes) -> str:
-    m = re.search(rb"FLAGS \(([^)]*)\)", meta_b)
-    if not m:
-        return ""
-    return m.group(1).decode(errors="replace")
+def _populate_server_uid_temp(conn: sqlite3.Connection, server_uids: list[int]) -> None:
+    _ensure_server_uid_temp(conn)
+    conn.execute("DELETE FROM _sync_server_uids")
+    if server_uids:
+        conn.executemany(
+            "INSERT INTO _sync_server_uids (uid) VALUES (?)",
+            [(u,) for u in server_uids],
+        )
+
+
+def _missing_uids_anti_join(
+    conn: sqlite3.Connection,
+    owner: str,
+    account_id: str,
+    folder: str,
+    uidvalidity: int,
+    *,
+    limit: int | None = None,
+) -> list[int]:
+    sql = """
+        SELECT s.uid
+        FROM _sync_server_uids AS s
+        LEFT JOIN messages AS m
+          ON m.owner = ?
+         AND m.account_id = ?
+         AND m.folder = ?
+         AND m.uidvalidity = ?
+         AND m.uid = s.uid
+        WHERE m.uid IS NULL
+        ORDER BY s.uid DESC
+    """
+    params: list[Any] = [owner or "", account_id, folder, uidvalidity]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    rows = conn.execute(sql, params).fetchall()
+    return [int(r[0]) for r in rows]
+
+
+def _count_missing_uids(
+    conn: sqlite3.Connection,
+    owner: str,
+    account_id: str,
+    folder: str,
+    uidvalidity: int,
+) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) FROM _sync_server_uids s
+        LEFT JOIN messages m
+          ON m.owner = ?
+         AND m.account_id = ?
+         AND m.folder = ?
+         AND m.uidvalidity = ?
+         AND m.uid = s.uid
+        WHERE m.uid IS NULL
+        """,
+        (owner or "", account_id, folder, uidvalidity),
+    ).fetchone()
+    return int(row[0] or 0)
+
+
+def _count_stale_local_uids(
+    conn: sqlite3.Connection,
+    owner: str,
+    account_id: str,
+    folder: str,
+    uidvalidity: int,
+) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) FROM messages m
+        LEFT JOIN _sync_server_uids s ON s.uid = m.uid
+        WHERE m.owner=? AND m.account_id=? AND m.folder=? AND m.uidvalidity=?
+          AND s.uid IS NULL
+        """,
+        (owner or "", account_id, folder, uidvalidity),
+    ).fetchone()
+    return int(row[0] or 0)
 
 
 def _parse_uidvalidity_value(items) -> int | None:
@@ -219,6 +378,29 @@ def _read_uidvalidity(conn_imap, select_data: list, folder: str | None = None) -
 
 
 def _parse_message_for_store(raw_bytes: bytes) -> dict[str, Any]:
+    from src.settings import load_settings
+
+    if load_settings().get("email_local_sync_single_pass_mime", False):
+        parsed = parse_mime_for_local_store(raw_bytes, snippet_len=_SNIPPET_LEN)
+        return {
+            "message_id": parsed.message_id,
+            "in_reply_to": parsed.in_reply_to,
+            "references_hdr": parsed.references_hdr,
+            "from_name": parsed.from_name,
+            "from_addr": parsed.from_addr,
+            "to_addrs": parsed.to_addrs,
+            "cc_addrs": parsed.cc_addrs,
+            "subject": parsed.subject,
+            "date_epoch": parsed.date_epoch,
+            "date_raw": parsed.date_raw,
+            "body_text": parsed.body_text,
+            "body_html": parsed.body_html,
+            "snippet": parsed.snippet,
+            "size": parsed.size,
+            "has_attachments": parsed.has_attachments,
+            "attachments_meta": parsed.attachments_meta,
+            "attachment_parts": parsed.attachment_parts,
+        }
     msg = email.message_from_bytes(raw_bytes)
     subject = _decode_header(msg.get("Subject", ""))
     from_raw = _decode_header(msg.get("From", ""))
@@ -233,7 +415,7 @@ def _parse_message_for_store(raw_bytes: bytes) -> dict[str, Any]:
     body_text = _extract_text(msg) or ""
     body_html = _extract_html(msg) or ""
     snippet = (body_text or re.sub(r"<[^>]+>", "", body_html or ""))[:_SNIPPET_LEN]
-    attachments = _list_attachments_from_msg(msg)
+    attachments = _list_attachments_from_msg(msg, include_payload=True)
     has_attachments = bool(attachments)
     return {
         "message_id": (msg.get("Message-ID") or "").strip(),
@@ -290,28 +472,69 @@ def _write_bytes_contained(target_dir: Path, filename: str, payload: bytes) -> P
     return filepath
 
 
-def _get_attachment_part(msg, index: int):
-    if not msg.is_multipart():
-        return None, None
-    idx = 0
-    for part in msg.walk():
-        if part.is_multipart():
-            continue
-        cd = str(part.get("Content-Disposition", "")).lower()
-        ct = part.get_content_type()
-        if ct in ("text/plain", "text/html") and "attachment" not in cd:
-            continue
-        if idx == index:
-            filename = part.get_filename()
-            if filename:
-                filename = _decode_header(filename)
-            else:
-                ext = ct.split("/")[-1] if "/" in ct else "bin"
-                filename = f"attachment_{idx}.{ext}"
-            payload = part.get_payload(decode=True)
-            return filename, payload
-        idx += 1
-    return None, None
+def _attachments_meta_fingerprint(meta: list[dict]) -> tuple:
+    return tuple(
+        sorted(
+            (
+                int(m["index"]),
+                m.get("filename") or "",
+                m.get("content_type") or "",
+                int(m.get("size") or 0),
+                1 if m.get("is_inline") else 0,
+            )
+            for m in meta
+        )
+    )
+
+
+def _existing_attachment_fingerprint(rows) -> tuple:
+    return tuple(
+        sorted(
+            (
+                int(r["idx"]),
+                r["filename"] or "",
+                r["content_type"] or "",
+                int(r["size"] or 0),
+                int(r["is_inline"] or 0),
+            )
+            for r in rows
+        )
+    )
+
+
+def _can_reuse_attachments(existing_atts, attachments_meta: list[dict]) -> bool:
+    if not attachments_meta and not existing_atts:
+        return True
+    if _attachments_meta_fingerprint(attachments_meta) != _existing_attachment_fingerprint(existing_atts):
+        return False
+    for row in existing_atts:
+        if row["skipped_reason"]:
+            return False
+        if not row["extracted"]:
+            return False
+        local_path = row["local_path"]
+        if not local_path:
+            return False
+        p = Path(local_path)
+        if not p.is_file() or p.stat().st_size != int(row["size"] or 0):
+            return False
+    return True
+
+
+def _normalize_attachment_rows(existing_atts) -> list[dict[str, Any]]:
+    return [
+        {
+            "idx": int(r["idx"]),
+            "filename": r["filename"],
+            "content_type": r["content_type"],
+            "size": int(r["size"] or 0),
+            "is_inline": int(r["is_inline"] or 0),
+            "local_path": r["local_path"],
+            "extracted": int(r["extracted"] or 0),
+            "skipped_reason": r["skipped_reason"],
+        }
+        for r in existing_atts
+    ]
 
 
 def _extract_attachments_for_store(
@@ -322,6 +545,7 @@ def _extract_attachments_for_store(
     *,
     max_attachment_bytes: int,
     budget_state: dict[str, int],
+    attachment_parts: dict[int, AttachmentPart] | None = None,
 ) -> list[dict[str, Any]]:
     """Hardened attachment extraction for the local store."""
     if not attachments_meta:
@@ -344,36 +568,49 @@ def _extract_attachments_for_store(
         }
         if size > max_attachment_bytes:
             row["skipped_reason"] = "too_large"
+            budget_state["skipped"] = budget_state.get("skipped", 0) + 1
             rows.append(row)
             continue
         if budget_state.get("remaining", 0) <= 0:
             row["skipped_reason"] = "pass_budget"
+            budget_state["skipped"] = budget_state.get("skipped", 0) + 1
             rows.append(row)
             continue
-        part_name, payload = _get_attachment_part(msg, idx)
+        payload = None
+        part_obj = attachment_parts.get(idx) if attachment_parts else None
+        if part_obj is not None:
+            payload = part_obj.payload
+            filename = part_obj.filename or filename
+        elif meta.get("_payload") is not None:
+            payload = meta["_payload"]
         if not payload:
             row["skipped_reason"] = "no_payload"
+            budget_state["skipped"] = budget_state.get("skipped", 0) + 1
             rows.append(row)
             continue
         if len(payload) > max_attachment_bytes:
             row["skipped_reason"] = "too_large"
             row["size"] = len(payload)
+            budget_state["skipped"] = budget_state.get("skipped", 0) + 1
             rows.append(row)
             continue
         if len(payload) > budget_state.get("remaining", 0):
             row["skipped_reason"] = "pass_budget"
+            budget_state["skipped"] = budget_state.get("skipped", 0) + 1
             rows.append(row)
             continue
-        stored_name = _safe_stored_attachment_name(idx, part_name or filename)
+        stored_name = _safe_stored_attachment_name(idx, filename)
         try:
             path = _write_bytes_contained(target_dir, stored_name, payload)
             row["local_path"] = str(path)
             row["extracted"] = 1
             budget_state["remaining"] -= len(payload)
             budget_state["written"] = budget_state.get("written", 0) + len(payload)
+            budget_state["extracted"] = budget_state.get("extracted", 0) + 1
         except Exception as e:
             logger.warning("attachment extract failed uid=%s idx=%s: %s", uid, idx, e)
             row["skipped_reason"] = "write_error"
+            budget_state["skipped"] = budget_state.get("skipped", 0) + 1
         rows.append(row)
     return rows
 
@@ -386,12 +623,17 @@ def _load_sync_state(conn: sqlite3.Connection, owner: str, account_id: str, fold
     return dict(row) if row else None
 
 
-def _unlink_attachment_paths(paths: list[str], *, folder: str | None = None, uid: int | None = None) -> None:
+def _unlink_attachment_paths(paths: list[str], *, folder: str | None = None, uid: int | None = None) -> int:
+    """Unlink attachment files; return count of files that existed and were removed."""
+    removed = 0
     for path_str in paths:
         if not path_str:
             continue
         try:
-            Path(path_str).unlink(missing_ok=True)
+            p = Path(path_str)
+            if p.is_file():
+                p.unlink()
+                removed += 1
         except Exception:
             pass
     if folder is not None and uid is not None:
@@ -401,9 +643,10 @@ def _unlink_attachment_paths(paths: list[str], *, folder: str | None = None, uid
                 d.rmdir()
         except Exception:
             pass
+    return removed
 
 
-def _unlink_folder_attachments(conn: sqlite3.Connection, owner: str, account_id: str, folder: str) -> None:
+def _unlink_folder_attachments(conn: sqlite3.Connection, owner: str, account_id: str, folder: str) -> int:
     rows = conn.execute(
         """
         SELECT a.local_path, m.folder, m.uid FROM attachments a
@@ -418,9 +661,10 @@ def _unlink_folder_attachments(conn: sqlite3.Connection, owner: str, account_id:
         if row["local_path"]:
             paths.append(row["local_path"])
         dirs_seen.add((row["folder"], int(row["uid"])))
-    _unlink_attachment_paths(paths)
+    removed = _unlink_attachment_paths(paths)
     for folder_name, uid in dirs_seen:
         _unlink_attachment_paths([], folder=folder_name, uid=uid)
+    return removed
 
 
 def _persist_sync_error(
@@ -504,8 +748,66 @@ def _resolve_read_folder(
     return requested
 
 
-def _purge_folder(conn: sqlite3.Connection, owner: str, account_id: str, folder: str) -> None:
-    _unlink_folder_attachments(conn, owner, account_id, folder)
+def _resolve_all_mail_folder(conn_imap) -> str | None:
+    """Return the IMAP All Mail folder name if the server exposes one."""
+    try:
+        status, folder_lines = conn_imap.list()
+        if status != "OK" or not folder_lines:
+            return None
+        for raw in folder_lines:
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="replace")
+            m = re.match(
+                r'\((?P<flags>[^)]*)\)\s+"[^"]*"\s+(?P<name>.+)',
+                raw,
+            )
+            if not m:
+                continue
+            flags = (m.group("flags") or "").lower()
+            name = m.group("name").strip().strip('"')
+            if "\\all" in flags or "all mail" in name.lower():
+                return name
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_sync_folders(conn_imap, folder_list: list[str]) -> list[str]:
+    """Resolve sync folder tokens (__ALL_MAIL__, Sent) to IMAP names."""
+    sent_name = _detect_sent_folder(conn_imap)
+    resolved: list[str] = []
+    for f in folder_list:
+        token = str(f or "").strip()
+        if not token:
+            continue
+        if token == "__ALL_MAIL__":
+            all_mail = _resolve_all_mail_folder(conn_imap)
+            resolved.append(all_mail or "INBOX")
+        elif token.lower() == "sent":
+            resolved.append(sent_name or token)
+        else:
+            resolved.append(token)
+    return resolved
+
+
+def _purge_folder(conn: sqlite3.Connection, owner: str, account_id: str, folder: str) -> dict[str, int]:
+    """Remove all local data for a folder (UIDVALIDITY change). Return removal counts."""
+    msg_count = conn.execute(
+        """
+        SELECT COUNT(*) FROM messages
+        WHERE owner=? AND account_id=? AND folder=?
+        """,
+        (owner or "", account_id, folder),
+    ).fetchone()[0]
+    att_count = conn.execute(
+        """
+        SELECT COUNT(*) FROM attachments a
+        JOIN messages m ON m.id = a.message_row_id
+        WHERE m.owner=? AND m.account_id=? AND m.folder=?
+        """,
+        (owner or "", account_id, folder),
+    ).fetchone()[0]
+    files_unlinked = _unlink_folder_attachments(conn, owner, account_id, folder)
     msg_ids = [
         r[0]
         for r in conn.execute(
@@ -527,6 +829,11 @@ def _purge_folder(conn: sqlite3.Connection, owner: str, account_id: str, folder:
         "DELETE FROM sync_state WHERE owner=? AND account_id=? AND folder=?",
         (owner or "", account_id, folder),
     )
+    return {
+        "messages_removed": int(msg_count or 0),
+        "attachments_removed": int(att_count or 0),
+        "attachment_files_unlinked": files_unlinked,
+    }
 
 
 def _upsert_message(
@@ -540,6 +847,8 @@ def _upsert_message(
     parsed: dict,
     flags: str,
     attachment_rows: list[dict],
+    deletion_state: dict[str, int] | None = None,
+    reuse_attachments: bool = False,
 ) -> tuple[int, bool]:
     now = datetime.now(timezone.utc).isoformat()
     is_read = 1 if "\\Seen" in flags else 0
@@ -550,7 +859,7 @@ def _upsert_message(
         (owner or "", account_id, folder, uid, uidvalidity),
     ).fetchone()
     is_new = existing is None
-    if existing is not None:
+    if existing is not None and not reuse_attachments:
         existing_id = int(existing[0])
         old_paths = [
             r[0]
@@ -560,9 +869,13 @@ def _upsert_message(
             ).fetchall()
             if r[0]
         ]
-        _unlink_attachment_paths(old_paths, folder=folder, uid=uid)
+        unlinked = _unlink_attachment_paths(old_paths, folder=folder, uid=uid)
+        if deletion_state is not None and unlinked:
+            deletion_state["resync_attachments_unlinked"] = (
+                deletion_state.get("resync_attachments_unlinked", 0) + unlinked
+            )
 
-    conn.execute(
+    row = conn.execute(
         """
         INSERT INTO messages (
             owner, account_id, folder, uid, uidvalidity,
@@ -591,6 +904,7 @@ def _upsert_message(
             is_flagged=excluded.is_flagged,
             has_attachments=excluded.has_attachments,
             synced_at=excluded.synced_at
+        RETURNING id
         """,
         (
             owner or "", account_id, folder, uid, uidvalidity,
@@ -601,69 +915,144 @@ def _upsert_message(
             parsed["size"], is_read, is_answered, is_flagged,
             1 if parsed["has_attachments"] else 0, now,
         ),
-    )
-    row = conn.execute(
-        "SELECT id FROM messages WHERE owner=? AND account_id=? AND folder=? AND uid=? AND uidvalidity=?",
-        (owner or "", account_id, folder, uid, uidvalidity),
     ).fetchone()
     message_row_id = int(row[0])
-    conn.execute("DELETE FROM attachments WHERE message_row_id=?", (message_row_id,))
-    for att in attachment_rows:
-        conn.execute(
-            """
-            INSERT INTO attachments (
-                message_row_id, idx, filename, content_type, size,
-                is_inline, local_path, extracted, skipped_reason
-            ) VALUES (?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                message_row_id, att["idx"], att["filename"], att["content_type"],
-                att["size"], att["is_inline"], att.get("local_path"),
-                att.get("extracted", 0), att.get("skipped_reason"),
-            ),
-        )
+    if not reuse_attachments:
+        conn.execute("DELETE FROM attachments WHERE message_row_id=?", (message_row_id,))
+        if attachment_rows:
+            conn.executemany(
+                """
+                INSERT INTO attachments (
+                    message_row_id, idx, filename, content_type, size,
+                    is_inline, local_path, extracted, skipped_reason
+                ) VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    (
+                        message_row_id,
+                        att["idx"],
+                        att["filename"],
+                        att["content_type"],
+                        att["size"],
+                        att["is_inline"],
+                        att.get("local_path"),
+                        att.get("extracted", 0),
+                        att.get("skipped_reason"),
+                    )
+                    for att in attachment_rows
+                ],
+            )
     return message_row_id, is_new
 
 
-def _parse_fetch_items(data: list) -> list[tuple[int, str, bytes]]:
+def _parse_body_fetch_grouped(data: list) -> list[tuple[int, str, bytes]]:
+    """Turn imaplib UID FETCH data into (uid, flags_str, raw_bytes) records."""
     out: list[tuple[int, str, bytes]] = []
-    for item in data:
-        if not isinstance(item, tuple) or len(item) < 2:
-            continue
-        meta_b, raw = item[0], item[1]
+    for meta_b, raw in _group_uid_fetch_records(data):
         if not raw:
             continue
-        if isinstance(meta_b, bytes):
-            uid = _uid_from_fetch_meta(meta_b)
-            flags = _flags_from_fetch_meta(meta_b)
-        else:
-            uid = None
-            flags = ""
-        if uid is not None:
-            out.append((uid, flags, raw))
+        uid_s = _uid_from_fetch_meta(meta_b)
+        if not uid_s:
+            continue
+        flags = _flags_from_fetch_meta(meta_b)
+        out.append((int(uid_s), flags, raw))
     return out
 
 
-def _fetch_rfc822_batch(conn_imap, uids: list[int]) -> tuple[list[tuple[int, str, bytes]], str | None]:
+def _imap_safe_logout(conn) -> None:
+    try:
+        conn.logout()
+    except Exception:
+        pass
+
+
+def _imap_uid_search_all(conn, folder: str, *, reconnect) -> tuple[list[int], Any]:
+    try:
+        status, data = conn.uid("SEARCH", None, "ALL")
+        if status == "OK" and data and data[0]:
+            return sorted(int(x) for x in data[0].split()), conn
+        if status != "OK":
+            logger.warning("UID SEARCH ALL non-OK for %s: %s", folder, status)
+        return [], conn
+    except Exception as e:
+        logger.warning("UID SEARCH ALL failed for %s: %s; reconnecting", folder, e)
+        _imap_safe_logout(conn)
+        fresh = reconnect()
+        fresh.select(_q(folder), readonly=True)
+        try:
+            status, data = fresh.uid("SEARCH", None, "ALL")
+            if status == "OK" and data and data[0]:
+                return sorted(int(x) for x in data[0].split()), fresh
+        except Exception as retry_e:
+            logger.warning("UID SEARCH ALL retry failed for %s: %s", folder, retry_e)
+        return [], fresh
+
+
+def _fetch_body_batch(
+    conn_imap,
+    uids: list[int],
+    *,
+    folder: str,
+    reconnect,
+    chunk_delay_ms: int = 0,
+) -> tuple[list[tuple[int, str, bytes]], str | None, Any]:
     if not uids:
-        return [], None
+        return [], None, conn_imap
     out: list[tuple[int, str, bytes]] = []
     last_error: str | None = None
+    fetch_item = "(BODY.PEEK[] FLAGS)"
+
+    def _fetch_chunk(chunk: list[int]) -> tuple[list[tuple[int, str, bytes]], str | None, Any]:
+        nonlocal conn_imap
+        uid_set = ",".join(str(u) for u in chunk)
+        try:
+            status, data = conn_imap.uid("FETCH", uid_set, fetch_item)
+            if status == "OK" and data:
+                return _parse_body_fetch_grouped(data), None, conn_imap
+        except Exception as e:
+            logger.warning("UID FETCH batch failed for %s uids %s: %s; reconnecting", folder, uid_set, e)
+            _imap_safe_logout(conn_imap)
+            conn_imap = reconnect()
+            conn_imap.select(_q(folder), readonly=True)
+            try:
+                status, data = conn_imap.uid("FETCH", uid_set, fetch_item)
+                if status == "OK" and data:
+                    return _parse_body_fetch_grouped(data), None, conn_imap
+            except Exception as retry_e:
+                return [], f"FETCH batch failed after reconnect for uids {uid_set}: {retry_e}", conn_imap
+        err = f"FETCH batch failed for uids {uid_set}"
+        per_uid: list[tuple[int, str, bytes]] = []
+        for uid in chunk:
+            try:
+                st, one = conn_imap.uid("FETCH", str(uid), fetch_item)
+                if st == "OK" and one:
+                    per_uid.extend(_parse_body_fetch_grouped(one))
+                else:
+                    err = f"FETCH failed for uid {uid}"
+            except Exception as e:
+                logger.warning("UID FETCH uid=%s failed: %s; reconnecting", uid, e)
+                _imap_safe_logout(conn_imap)
+                conn_imap = reconnect()
+                conn_imap.select(_q(folder), readonly=True)
+                try:
+                    st, one = conn_imap.uid("FETCH", str(uid), fetch_item)
+                    if st == "OK" and one:
+                        per_uid.extend(_parse_body_fetch_grouped(one))
+                    else:
+                        err = f"FETCH failed for uid {uid}"
+                except Exception as retry_e:
+                    err = f"FETCH failed for uid {uid}: {retry_e}"
+        return per_uid, err if not per_uid else None, conn_imap
+
     for i in range(0, len(uids), _FETCH_CHUNK):
         chunk = uids[i:i + _FETCH_CHUNK]
-        uid_set = ",".join(str(u) for u in chunk)
-        status, data = conn_imap.uid("FETCH", uid_set, "(RFC822 FLAGS)")
-        if status == "OK" and data:
-            out.extend(_parse_fetch_items(data))
-            continue
-        last_error = f"FETCH batch failed for uids {uid_set}"
-        for uid in chunk:
-            st, one = conn_imap.uid("FETCH", str(uid), "(RFC822 FLAGS)")
-            if st == "OK" and one:
-                out.extend(_parse_fetch_items(one))
-            else:
-                last_error = f"FETCH failed for uid {uid}"
-    return out, last_error
+        records, err, conn_imap = _fetch_chunk(chunk)
+        out.extend(records)
+        if err:
+            last_error = err
+        if chunk_delay_ms > 0:
+            time.sleep(chunk_delay_ms / 1000.0)
+    return out, last_error, conn_imap
 
 
 def _store_uids(
@@ -677,24 +1066,66 @@ def _store_uids(
     uids: list[int],
     max_attachment_bytes: int,
     budget_state: dict[str, int],
-) -> tuple[int, int]:
-    """Return (stored_count, new_count)."""
+    deletion_state: dict[str, int] | None = None,
+    reconnect=None,
+    chunk_delay_ms: int = 0,
+) -> tuple[int, int, Any]:
+    """Return (stored_count, new_count, conn_imap)."""
     stored = 0
     new_count = 0
-    fetched, fetch_error = _fetch_rfc822_batch(conn_imap, uids)
+    fetched, fetch_error, conn_imap = _fetch_body_batch(
+        conn_imap,
+        uids,
+        folder=folder,
+        reconnect=reconnect,
+        chunk_delay_ms=chunk_delay_ms,
+    )
     if fetch_error and not fetched:
         raise RuntimeError(fetch_error)
     for uid, flags, raw in fetched:
         try:
             parsed = _parse_message_for_store(raw)
-            attachment_rows = _extract_attachments_for_store(
-                parsed["msg"],
-                parsed.get("attachments_meta") or [],
-                folder,
-                uid,
-                max_attachment_bytes=max_attachment_bytes,
-                budget_state=budget_state,
-            )
+            existing_id_row = db.execute(
+                """
+                SELECT id FROM messages
+                WHERE owner=? AND account_id=? AND folder=? AND uid=? AND uidvalidity=?
+                """,
+                (owner or "", account_id, folder, uid, uidvalidity),
+            ).fetchone()
+            reuse = False
+            attachment_rows: list[dict[str, Any]]
+            if existing_id_row:
+                existing_atts = db.execute(
+                    """
+                    SELECT idx, filename, content_type, size, is_inline,
+                           local_path, extracted, skipped_reason
+                    FROM attachments WHERE message_row_id=? ORDER BY idx
+                    """,
+                    (int(existing_id_row[0]),),
+                ).fetchall()
+                if _can_reuse_attachments(existing_atts, parsed.get("attachments_meta") or []):
+                    attachment_rows = _normalize_attachment_rows(existing_atts)
+                    reuse = True
+                else:
+                    attachment_rows = _extract_attachments_for_store(
+                        parsed.get("msg"),
+                        parsed.get("attachments_meta") or [],
+                        folder,
+                        uid,
+                        max_attachment_bytes=max_attachment_bytes,
+                        budget_state=budget_state,
+                        attachment_parts=parsed.get("attachment_parts"),
+                    )
+            else:
+                attachment_rows = _extract_attachments_for_store(
+                    parsed.get("msg"),
+                    parsed.get("attachments_meta") or [],
+                    folder,
+                    uid,
+                    max_attachment_bytes=max_attachment_bytes,
+                    budget_state=budget_state,
+                    attachment_parts=parsed.get("attachment_parts"),
+                )
             _, is_new = _upsert_message(
                 db,
                 owner=owner,
@@ -705,13 +1136,15 @@ def _store_uids(
                 parsed=parsed,
                 flags=flags,
                 attachment_rows=attachment_rows,
+                deletion_state=deletion_state,
+                reuse_attachments=reuse,
             )
             stored += 1
             if is_new:
                 new_count += 1
         except Exception as e:
             logger.warning("store uid=%s failed: %s", uid, e)
-    return stored, new_count
+    return stored, new_count, conn_imap
 
 
 def _uid_bytes(uid: str | int | bytes) -> bytes:
@@ -751,14 +1184,11 @@ def _fetch_imap_flags(conn_imap, uids: list[int]) -> dict[int, str]:
         status, data = conn_imap.uid("FETCH", uid_set, "(FLAGS)")
         if status != "OK" or not data:
             continue
-        for item in data:
-            if not isinstance(item, tuple) or not item[0]:
+        for meta_b, _raw in _group_uid_fetch_records(data):
+            uid_s = _uid_from_fetch_meta(meta_b)
+            if not uid_s:
                 continue
-            meta_b = item[0] if isinstance(item[0], bytes) else str(item[0]).encode()
-            uid = _uid_from_fetch_meta(meta_b)
-            if uid is None:
-                continue
-            out[uid] = _flags_from_fetch_meta(meta_b)
+            out[int(uid_s)] = _flags_from_fetch_meta(meta_b)
     return out
 
 
@@ -1000,16 +1430,203 @@ def _max_stored_uid(
     return None
 
 
+def _format_uid(uid: int | None) -> str:
+    return str(uid) if uid is not None else "—"
+
+
+def _format_bytes(num: int) -> str:
+    n = int(num or 0)
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    return f"{n / (1024 * 1024 * 1024):.2f} GB"
+
+
+def format_sync_folder_log(*, item: dict[str, Any], compact: bool = False) -> str:
+    """Human-readable sync summary for one account/folder result dict."""
+    account = item.get("account") or item.get("account_id") or "?"
+    folder = item.get("folder") or "?"
+    if item.get("error"):
+        if item["error"] == "sync already in progress":
+            return f"{account}/{folder}: skipped (sync already in progress)"
+        return f"{account}/{folder}: ERROR {item['error']}"
+
+    lines: list[str] = []
+    header = f"{account} / {folder}"
+    if compact:
+        lines.append(header)
+    else:
+        lines.append(header)
+        lines.append("─" * min(len(header), 72))
+
+    server_total = int(item.get("server_total") or 0)
+    local_total = int(item.get("local_total") or 0)
+    missing = int(item.get("missing_count") or 0)
+    uid_range = (
+        f"UID {_format_uid(item.get('server_min_uid'))}–{_format_uid(item.get('server_max_uid'))}"
+        if server_total
+        else "empty mailbox"
+    )
+    local_range = (
+        f"UID {_format_uid(item.get('local_min_uid'))}–{_format_uid(item.get('local_max_uid'))}"
+        if local_total
+        else "none stored yet"
+    )
+    lines.append(
+        f"  Mailbox: {server_total:,} on server ({uid_range}) · "
+        f"{local_total:,} local ({local_range}) · {missing:,} missing"
+    )
+    if item.get("uidvalidity") is not None:
+        uv_note = " · folder purged and rebuilt" if item.get("folder_purged") else ""
+        lines.append(f"  UIDVALIDITY: {item['uidvalidity']}{uv_note}")
+
+    purge_msgs = int(item.get("purge_messages_removed") or 0)
+    purge_atts = int(item.get("purge_attachments_removed") or 0)
+    purge_files = int(item.get("purge_attachment_files_unlinked") or 0)
+    resync_files = int(item.get("resync_attachments_unlinked") or 0)
+    stale_local = int(item.get("stale_local_count") or 0)
+    deletion_parts: list[str] = []
+    if item.get("folder_purged"):
+        if purge_msgs or purge_atts or purge_files:
+            deletion_parts.append(
+                f"UIDVALIDITY purge — {purge_msgs:,} message(s), "
+                f"{purge_atts:,} attachment record(s), {purge_files:,} file(s) removed"
+            )
+        else:
+            deletion_parts.append("UIDVALIDITY purge — folder cleared and rebuilt")
+    if resync_files:
+        deletion_parts.append(
+            f"{resync_files:,} attachment file(s) replaced during message re-sync"
+        )
+    if stale_local:
+        deletion_parts.append(
+            f"{stale_local:,} local message(s) no longer on server "
+            f"(kept locally; sync does not remove them)"
+        )
+    if deletion_parts:
+        lines.append("  Deletions: " + deletion_parts[0])
+        for part in deletion_parts[1:]:
+            lines.append(f"             {part}")
+
+    mode = "full backfill" if item.get("full") else "incremental"
+    batch = int(item.get("backfill_batch") or 0)
+    flag_window = int(item.get("flag_window") or 0)
+    lines.append(
+        f"  Mode: {mode} · batch cap {batch} · flag window {flag_window}"
+    )
+
+    fwd = int(item.get("forward_fetched") or 0)
+    back = int(item.get("backfill_fetched") or 0)
+    gap = int(item.get("gap_fetched") or 0)
+    new_fwd = int(item.get("new") or 0)
+    new_back = int(item.get("backfilled") or 0)
+    new_gap = int(item.get("gap_new") or 0)
+    lines.append(
+        f"  Phases — forward: {fwd} fetched ({new_fwd} new) · "
+        f"backfill: {back} fetched ({new_back} new) · "
+        f"gap repair: {gap} fetched ({new_gap} new)"
+    )
+
+    pushed = int(item.get("flags_pushed") or 0)
+    pulled = int(item.get("flags_pulled") or 0)
+    flags_total = int(item.get("flags_updated") or 0)
+    lines.append(
+        f"  Flags: {flags_total} updated ({pushed} pushed to server, {pulled} pulled from server)"
+    )
+
+    att_ext = int(item.get("attachments_extracted") or 0)
+    att_skip = int(item.get("attachments_skipped") or 0)
+    att_bytes = int(item.get("attachments_written_bytes") or 0)
+    lines.append(
+        f"  Attachments: {att_ext} extracted ({_format_bytes(att_bytes)} written, {att_skip} skipped)"
+    )
+
+    stored_total = int(item.get("stored") or 0)
+    complete = "yes" if item.get("backfill_complete") else "no"
+    activity = (
+        f"{stored_total} message(s) processed this pass"
+        if stored_total
+        else "no messages fetched (mailbox up to date for this pass)"
+    )
+    lines.append(f"  Result: {activity} · backfill_complete={complete}")
+
+    if compact:
+        return " | ".join(line.strip() for line in lines[1:])
+    return "\n".join(lines)
+
+
+def format_sync_all_log(result: dict[str, Any], *, duration_seconds: float | None = None) -> str:
+    """Multi-line log for a full sync_all() result."""
+    if not result.get("ok"):
+        if result.get("busy"):
+            return "Local email sync skipped: sync already in progress"
+        err = result.get("error") or "sync failed"
+        return f"Local email sync failed: {err}"
+
+    items = result.get("results") or []
+    skipped = result.get("skipped") or []
+    folders_synced = int(result.get("folders_synced") or len(items))
+    folders_planned = int(result.get("folders_planned") or (folders_synced + len(skipped)))
+    account_count = len({item.get("account_id") for item in items} | {s.get("account_id") for s in skipped})
+    duration = duration_seconds if duration_seconds is not None else result.get("duration_seconds")
+
+    if result.get("partial"):
+        budget = int(result.get("max_sync_seconds") or 0)
+        header = (
+            f"Local email sync (partial): {folders_synced}/{folders_planned} folder(s) "
+            f"across {account_count} account(s)"
+        )
+        if duration is not None:
+            header += f" · {float(duration):.1f}s"
+        if result.get("budget_hit") and budget > 0:
+            header += f" · stopped at time budget ({budget}s)"
+    else:
+        header = f"Local email sync: {folders_synced} folder(s) across {account_count} account(s)"
+        if duration is not None:
+            header += f" · {float(duration):.1f}s"
+
+    lines = [header, ""]
+    truncated = 0
+    max_chars = 3500
+    for item in items:
+        block = format_sync_folder_log(item=item)
+        if len("\n".join(lines) + block) > max_chars and len(items) > 1:
+            account = item.get("account") or item.get("account_id") or "?"
+            folder = item.get("folder") or "?"
+            lines.append(f"{account} / {folder}: [log truncated — see folder sync_state in DB]")
+            truncated += 1
+        else:
+            lines.append(block)
+            lines.append("")
+
+    for skip in skipped:
+        account = skip.get("account") or skip.get("account_id") or "?"
+        folder = skip.get("folder") or "?"
+        reason = skip.get("reason") or "skipped"
+        if reason == "time_budget":
+            lines.append(f"{account} / {folder}: skipped (time budget exhausted before this folder)")
+        else:
+            lines.append(f"{account} / {folder}: skipped ({reason})")
+
+    if truncated:
+        lines.append(f"… {truncated} folder log(s) truncated for Activity display")
+    return "\n".join(lines).strip()
+
+
 def sync_account_folder(
     account_id: str,
     folder: str,
     owner: str = "",
     *,
-    backfill_batch: int = 200,
-    flag_window: int = 200,
-    max_attachment_bytes: int = 52_428_800,
-    attachment_budget_bytes: int = 2_147_483_648,
+    backfill_batch: int = 50,
+    flag_window: int = 100,
+    max_attachment_bytes: int = 15_728_640,
+    attachment_budget_bytes: int = 402_653_184,
     full: bool = False,
+    chunk_delay_ms: int = 0,
 ) -> dict[str, Any]:
     summary = {
         "account_id": account_id,
@@ -1022,6 +1639,30 @@ def sync_account_folder(
         "flags_pulled": 0,
         "backfill_complete": False,
         "error": None,
+        "forward_fetched": 0,
+        "backfill_fetched": 0,
+        "gap_fetched": 0,
+        "gap_new": 0,
+        "server_total": 0,
+        "missing_count": 0,
+        "local_total": 0,
+        "local_min_uid": None,
+        "local_max_uid": None,
+        "server_min_uid": None,
+        "server_max_uid": None,
+        "uidvalidity": None,
+        "folder_purged": False,
+        "purge_messages_removed": 0,
+        "purge_attachments_removed": 0,
+        "purge_attachment_files_unlinked": 0,
+        "resync_attachments_unlinked": 0,
+        "stale_local_count": 0,
+        "attachments_extracted": 0,
+        "attachments_skipped": 0,
+        "attachments_written_bytes": 0,
+        "flag_window": flag_window,
+        "backfill_batch": backfill_batch,
+        "full": full,
     }
     lock = _folder_lock(owner, account_id, folder)
     if not lock.acquire(blocking=False):
@@ -1030,6 +1671,10 @@ def sync_account_folder(
     conn_imap = None
     try:
         conn_imap = _imap_connect(account_id, owner=owner)
+
+        def _reconnect():
+            return _imap_connect(account_id, owner=owner)
+
         status, select_data = conn_imap.select(_q(folder), readonly=True)
         if status != "OK":
             summary["error"] = f"SELECT {folder} failed"
@@ -1049,11 +1694,14 @@ def sync_account_folder(
                 err_db.close()
             return summary
 
-        status, data = conn_imap.uid("SEARCH", None, "ALL")
-        server_uids = []
-        if status == "OK" and data and data[0]:
-            server_uids = sorted(int(x) for x in data[0].split())
+        server_uids, conn_imap = _imap_uid_search_all(
+            conn_imap, folder, reconnect=_reconnect,
+        )
         server_min = server_uids[0] if server_uids else None
+        summary["server_total"] = len(server_uids)
+        summary["server_min_uid"] = server_min
+        summary["server_max_uid"] = server_uids[-1] if server_uids else None
+        summary["uidvalidity"] = uidvalidity
 
         db = _connect()
         try:
@@ -1073,28 +1721,45 @@ def sync_account_folder(
             if stale_uv or (
                 state and stored_uv is not None and int(stored_uv) != int(uidvalidity)
             ):
-                _purge_folder(db, owner, account_id, folder)
+                purge_stats = _purge_folder(db, owner, account_id, folder)
                 state = None
+                summary["folder_purged"] = True
+                summary["purge_messages_removed"] = purge_stats["messages_removed"]
+                summary["purge_attachments_removed"] = purge_stats["attachments_removed"]
+                summary["purge_attachment_files_unlinked"] = purge_stats["attachment_files_unlinked"]
                 db.commit()
 
+            _populate_server_uid_temp(db, server_uids)
             stored_max = _max_stored_uid(db, owner, account_id, folder, uidvalidity)
-            budget_state = {"remaining": attachment_budget_bytes, "written": 0}
+            budget_state = {
+                "remaining": attachment_budget_bytes,
+                "written": 0,
+                "extracted": 0,
+                "skipped": 0,
+            }
+            deletion_state: dict[str, int] = {"resync_attachments_unlinked": 0}
+            conn_box = [conn_imap]
 
             if stored_max is None:
                 forward_uids = list(reversed(server_uids))[:backfill_batch] if server_uids else []
             else:
-                forward_uids = sorted(
+                newer = sorted(
                     [u for u in server_uids if u > int(stored_max)], reverse=True,
                 )
+                forward_uids = newer if full else newer[:backfill_batch]
 
             if forward_uids:
+                summary["forward_fetched"] = len(forward_uids)
                 try:
-                    n_stored, n_new = _store_uids(
-                        conn_imap, db,
+                    n_stored, n_new, conn_box[0] = _store_uids(
+                        conn_box[0], db,
                         owner=owner, account_id=account_id, folder=folder,
                         uidvalidity=uidvalidity, uids=forward_uids,
                         max_attachment_bytes=max_attachment_bytes,
                         budget_state=budget_state,
+                        deletion_state=deletion_state,
+                        reconnect=_reconnect,
+                        chunk_delay_ms=chunk_delay_ms,
                     )
                 except RuntimeError as e:
                     summary["error"] = str(e)
@@ -1103,57 +1768,63 @@ def sync_account_folder(
                 summary["stored"] += n_stored
                 db.commit()
 
-            def _backfill_once() -> tuple[int, int]:
+            def _backfill_once() -> tuple[int, int, int]:
                 stored_min = _min_stored_uid(
                     db, owner, account_id, folder, uidvalidity,
                 )
                 if stored_min is None or server_min is None:
-                    return 0, 0
+                    return 0, 0, 0
                 if int(stored_min) <= int(server_min):
-                    return 0, 0
+                    return 0, 0, 0
                 older = sorted(
                     [u for u in server_uids if u < int(stored_min)], reverse=True,
                 )
                 if not older:
-                    return 0, 0
+                    return 0, 0, 0
                 batch = older if full else older[:backfill_batch]
                 try:
-                    return _store_uids(
-                        conn_imap, db,
+                    n_stored, n_new, conn_box[0] = _store_uids(
+                        conn_box[0], db,
                         owner=owner, account_id=account_id, folder=folder,
                         uidvalidity=uidvalidity, uids=batch,
                         max_attachment_bytes=max_attachment_bytes,
                         budget_state=budget_state,
+                        deletion_state=deletion_state,
+                        reconnect=_reconnect,
+                        chunk_delay_ms=chunk_delay_ms,
                     )
+                    return n_stored, n_new, len(batch)
                 except RuntimeError as e:
                     summary["error"] = str(e)
-                    return 0, 0
+                    return 0, 0, len(batch)
 
-            def _gap_repair_once() -> tuple[int, int]:
-                stored = _stored_uid_set(
+            def _gap_repair_once() -> tuple[int, int, int]:
+                missing = _missing_uids_anti_join(
                     db, owner, account_id, folder, uidvalidity,
-                )
-                missing = sorted(
-                    [u for u in server_uids if u not in stored], reverse=True,
+                    limit=None if full else backfill_batch,
                 )
                 if not missing:
-                    return 0, 0
-                batch = missing if full else missing[:backfill_batch]
+                    return 0, 0, 0
                 try:
-                    return _store_uids(
-                        conn_imap, db,
+                    n_stored, n_new, conn_box[0] = _store_uids(
+                        conn_box[0], db,
                         owner=owner, account_id=account_id, folder=folder,
-                        uidvalidity=uidvalidity, uids=batch,
+                        uidvalidity=uidvalidity, uids=missing,
                         max_attachment_bytes=max_attachment_bytes,
                         budget_state=budget_state,
+                        deletion_state=deletion_state,
+                        reconnect=_reconnect,
+                        chunk_delay_ms=chunk_delay_ms,
                     )
+                    return n_stored, n_new, len(missing)
                 except RuntimeError as e:
                     summary["error"] = str(e)
-                    return 0, 0
+                    return 0, 0, len(missing)
 
             if full:
                 while True:
-                    n_stored, n_new = _backfill_once()
+                    n_stored, n_new, n_batch = _backfill_once()
+                    summary["backfill_fetched"] += n_batch
                     summary["backfilled"] += n_new
                     summary["stored"] += n_stored
                     db.commit()
@@ -1167,22 +1838,34 @@ def sync_account_folder(
                     ):
                         break
                 while True:
-                    n_stored, n_new = _gap_repair_once()
+                    n_stored, n_new, n_batch = _gap_repair_once()
+                    summary["gap_fetched"] += n_batch
+                    summary["gap_new"] += n_new
                     summary["stored"] += n_stored
                     db.commit()
                     if n_new == 0:
                         break
             else:
-                n_stored, n_new = _backfill_once()
+                n_stored, n_new, n_batch = _backfill_once()
+                summary["backfill_fetched"] = n_batch
                 summary["backfilled"] = n_new
                 summary["stored"] += n_stored
                 db.commit()
-                n_stored, n_new = _gap_repair_once()
+                n_stored, n_new, n_batch = _gap_repair_once()
+                summary["gap_fetched"] = n_batch
+                summary["gap_new"] = n_new
                 summary["stored"] += n_stored
                 db.commit()
 
+            summary["attachments_written_bytes"] = budget_state.get("written", 0)
+            summary["attachments_extracted"] = budget_state.get("extracted", 0)
+            summary["attachments_skipped"] = budget_state.get("skipped", 0)
+            summary["resync_attachments_unlinked"] = deletion_state.get(
+                "resync_attachments_unlinked", 0,
+            )
+
             flag_sync = sync_flags(
-                conn_imap, folder, owner, account_id, flag_window, uidvalidity,
+                conn_box[0], folder, owner, account_id, flag_window, uidvalidity,
             )
             summary["flags_pushed"] = flag_sync["pushed"]
             summary["flags_pulled"] = flag_sync["pulled"]
@@ -1199,17 +1882,24 @@ def sync_account_folder(
             min_uid = bounds["min_uid"] if bounds else None
             max_uid = bounds["max_uid"] if bounds else None
             total = int(bounds["total"] or 0) if bounds else 0
-            stored_set = _stored_uid_set(
+            missing_count = _count_missing_uids(
                 db, owner, account_id, folder, uidvalidity,
             )
-            missing_uids = [u for u in server_uids if u not in stored_set]
+            stale_local_count = _count_stale_local_uids(
+                db, owner, account_id, folder, uidvalidity,
+            )
             backfill_complete = (
-                not missing_uids
+                missing_count == 0
                 and server_min is not None
                 and min_uid is not None
                 and int(min_uid) <= int(server_min)
             ) or not server_uids
             summary["backfill_complete"] = backfill_complete
+            summary["local_total"] = total
+            summary["local_min_uid"] = min_uid
+            summary["local_max_uid"] = max_uid
+            summary["missing_count"] = missing_count
+            summary["stale_local_count"] = stale_local_count
 
             now = datetime.now(timezone.utc).isoformat()
             db.execute(
@@ -1261,6 +1951,12 @@ def sync_account_folder(
             except Exception:
                 pass
         lock.release()
+    logger.info(
+        "local sync %s/%s: %s",
+        account_id,
+        folder,
+        format_sync_folder_log(item=summary, compact=True),
+    )
     return summary
 
 
@@ -1288,58 +1984,115 @@ def sync_all(
     folders: list[str] | None = None,
     *,
     full: bool = False,
+    max_sync_seconds: int | None = None,
 ) -> dict[str, Any]:
-    from src.settings import load_settings
+    import time as _time
 
-    settings = load_settings()
-    if not settings.get("email_local_sync_enabled", True):
-        return {"ok": False, "error": "email_local_sync_enabled is false", "results": []}
+    from src.settings import get_email_local_settings
 
-    backfill_batch = int(settings.get("email_local_sync_backfill_batch", 200))
-    flag_window = int(settings.get("email_local_sync_flag_refresh_window", 200))
-    max_attachment_bytes = int(settings.get("email_local_sync_max_attachment_bytes", 52_428_800))
-    attachment_budget_bytes = int(settings.get("email_local_sync_attachment_budget_bytes", 2_147_483_648))
-    folder_list = folders or list(settings.get("email_local_sync_folders") or ["INBOX", "Sent"])
+    owner_key = owner or ""
+    lock = _owner_sync_all_lock(owner_key)
+    if not lock.acquire(blocking=False):
+        return {
+            "ok": False,
+            "busy": True,
+            "error": "sync already in progress",
+            "results": [],
+        }
 
-    acct_rows = _enumerate_accounts(owner, accounts)
-    if not acct_rows:
-        return {"ok": False, "error": "no email accounts configured", "results": []}
+    t0 = _time.monotonic()
+    try:
+        settings = get_email_local_settings(owner or "")
+        if not settings.get("email_local_sync_enabled", True):
+            return {"ok": False, "error": "email_local_sync_enabled is false", "results": []}
 
-    results = []
-    for acc in acct_rows:
-        resolved_folders = []
-        conn_imap = None
-        try:
-            conn_imap = _imap_connect(acc.id, owner=owner or "")
-            sent_name = _detect_sent_folder(conn_imap)
-            for f in folder_list:
-                if f.lower() == "sent":
-                    resolved_folders.append(sent_name)
-                else:
-                    resolved_folders.append(f)
-        except Exception as e:
-            for f in folder_list:
-                results.append({
+        backfill_batch = int(settings.get("email_local_sync_backfill_batch", 500))
+        flag_window = int(settings.get("email_local_sync_flag_refresh_window", 100))
+        max_attachment_bytes = int(settings.get("email_local_sync_max_attachment_bytes", 15_728_640))
+        attachment_budget_bytes = int(
+            settings.get("email_local_sync_attachment_budget_bytes", 402_653_184)
+        )
+        folder_list = folders or list(
+            settings.get("email_local_sync_folders") or ["__ALL_MAIL__"]
+        )
+        account_delay = int(settings.get("email_local_sync_account_delay_ms", 500))
+        chunk_delay = int(settings.get("email_local_sync_chunk_delay_ms", 150))
+
+        deadline = None
+        effective_budget = 0
+        if not full:
+            budget = (
+                max_sync_seconds
+                if max_sync_seconds is not None
+                else int(settings.get("email_local_sync_max_sync_seconds", 180))
+            )
+            effective_budget = int(budget or 0)
+            if effective_budget > 0:
+                deadline = t0 + effective_budget
+
+        acct_rows = _enumerate_accounts(owner, accounts)
+        if not acct_rows:
+            return {"ok": False, "error": "no email accounts configured", "results": []}
+
+        planned: list[dict[str, Any]] = []
+        for acc in acct_rows:
+            resolved_folders: list[str] = []
+            connect_error: str | None = None
+            conn_imap = None
+            try:
+                conn_imap = _imap_connect(acc.id, owner=owner or "")
+                resolved_folders = _resolve_sync_folders(conn_imap, folder_list)
+            except Exception as e:
+                connect_error = str(e)
+            finally:
+                if conn_imap:
+                    try:
+                        conn_imap.logout()
+                    except Exception:
+                        pass
+            seen: set[str] = set()
+            for folder in (resolved_folders or folder_list):
+                if folder in seen:
+                    continue
+                seen.add(folder)
+                planned.append({
                     "account_id": acc.id,
                     "account": acc.name or acc.imap_user,
-                    "folder": f,
-                    "error": str(e),
+                    "folder": folder,
+                    "connect_error": connect_error,
                 })
-            continue
-        finally:
-            if conn_imap:
-                try:
-                    conn_imap.logout()
-                except Exception:
-                    pass
 
-        seen = set()
-        for folder in resolved_folders:
-            if folder in seen:
+        results: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        budget_hit = False
+        last_account_id: str | None = None
+
+        for idx, plan in enumerate(planned):
+            if deadline and _time.monotonic() >= deadline:
+                budget_hit = True
+                for rest in planned[idx:]:
+                    skipped.append({
+                        "account_id": rest["account_id"],
+                        "account": rest["account"],
+                        "folder": rest["folder"],
+                        "reason": "time_budget",
+                    })
+                break
+
+            acc_id = plan["account_id"]
+            folder = plan["folder"]
+            if plan.get("connect_error"):
+                results.append({
+                    "account_id": acc_id,
+                    "account": plan["account"],
+                    "folder": folder,
+                    "error": plan["connect_error"],
+                })
+                last_account_id = acc_id
                 continue
-            seen.add(folder)
+
             item = sync_account_folder(
-                acc.id,
+                acc_id,
                 folder,
                 owner or "",
                 backfill_batch=backfill_batch,
@@ -1347,11 +2100,158 @@ def sync_all(
                 max_attachment_bytes=max_attachment_bytes,
                 attachment_budget_bytes=attachment_budget_bytes,
                 full=full,
+                chunk_delay_ms=chunk_delay,
             )
-            item["account"] = acc.name or acc.imap_user
+            item["account"] = plan["account"]
             results.append(item)
 
-    return {"ok": True, "results": results}
+            next_account = planned[idx + 1]["account_id"] if idx + 1 < len(planned) else None
+            if (
+                account_delay > 0
+                and next_account is not None
+                and next_account != acc_id
+            ):
+                time.sleep(account_delay / 1000.0)
+            last_account_id = acc_id
+
+        duration = _time.monotonic() - t0
+        partial = budget_hit or bool(skipped)
+        if budget_hit:
+            logger.info(
+                "local sync budget hit owner=%s folders_synced=%s folders_skipped=%s elapsed=%.1fs",
+                owner_key,
+                len(results),
+                len(skipped),
+                duration,
+            )
+        return {
+            "ok": True,
+            "partial": partial,
+            "budget_hit": budget_hit,
+            "max_sync_seconds": effective_budget,
+            "folders_planned": len(planned),
+            "folders_synced": len(results),
+            "folders_skipped": len(skipped),
+            "skipped": skipped,
+            "results": results,
+            "duration_seconds": round(duration, 2),
+            "folder_count": len(results),
+            "account_count": len({r.get("account_id") for r in results}),
+        }
+    finally:
+        lock.release()
+
+
+def _build_local_query_clauses(
+    owner: str,
+    account_id: str | None,
+    folder: str,
+    *,
+    since: float | None = None,
+    until: float | None = None,
+    filter_: str | None = None,
+    has_attachments: bool | None = None,
+    table_prefix: str = "",
+) -> tuple[str, list[Any], str]:
+    db = _connect()
+    try:
+        resolved_folder = _resolve_read_folder(db, owner, account_id, folder)
+    finally:
+        db.close()
+    p = f"{table_prefix}." if table_prefix else ""
+    clauses = [f"{p}owner=?", f"{p}folder=?"]
+    params: list[Any] = [owner or "", resolved_folder]
+    if account_id:
+        clauses.append(f"{p}account_id=?")
+        params.append(account_id)
+    if since is not None:
+        clauses.append(f"{p}date_epoch >= ?")
+        params.append(float(since))
+    if until is not None:
+        clauses.append(f"{p}date_epoch < ?")
+        params.append(float(until))
+    filt = (filter_ or "all").lower()
+    if filt == "unread":
+        clauses.append(f"{p}is_read=0")
+    elif filt == "unanswered":
+        clauses.append(f"{p}is_answered=0")
+    elif filt == "flagged":
+        clauses.append(f"{p}is_flagged=1")
+    if has_attachments is True:
+        clauses.append(f"{p}has_attachments=1")
+    return " AND ".join(clauses), params, resolved_folder
+
+
+def _epoch_to_iso(epoch: float | None) -> str:
+    if not epoch:
+        return ""
+    try:
+        return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat()
+    except Exception:
+        return ""
+
+
+def normalize_local_list_row(row: dict[str, Any], folder: str) -> dict[str, Any]:
+    """Map a local store row to the live list envelope shape."""
+    epoch = row.get("date_epoch") or 0.0
+    return {
+        "uid": str(row.get("uid") or ""),
+        "message_id": row.get("message_id") or "",
+        "subject": row.get("subject") or "(no subject)",
+        "from_name": row.get("from_name") or row.get("from_addr") or "",
+        "from_address": row.get("from_addr") or "",
+        "to": row.get("to_addrs") or "",
+        "cc": row.get("cc_addrs") or "",
+        "date": _epoch_to_iso(epoch),
+        "date_display": row.get("date_raw") or "",
+        "date_epoch": float(epoch or 0.0),
+        "size": int(row.get("size") or 0),
+        "is_read": bool(row.get("is_read")),
+        "is_answered": bool(row.get("is_answered")),
+        "is_flagged": bool(row.get("is_flagged")),
+        "has_attachments": bool(row.get("has_attachments")),
+        "folder": row.get("folder") or folder,
+        "snippet": row.get("snippet") or "",
+        "local_id": row.get("id"),
+    }
+
+
+def _local_attachments_for_read(atts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    for a in atts:
+        out.append({
+            "index": a.get("idx"),
+            "filename": a.get("filename") or "",
+            "content_type": a.get("content_type") or "application/octet-stream",
+            "size": int(a.get("size") or 0),
+            "is_inline": bool(a.get("is_inline")),
+            "local_path": a.get("local_path"),
+        })
+    return out
+
+
+def _format_local_read_response(row: dict[str, Any], atts: list[dict[str, Any]]) -> dict[str, Any]:
+    epoch = row.get("date_epoch") or 0.0
+    body = row.get("body_text") or ""
+    body_html = row.get("body_html") or ""
+    return {
+        "uid": str(row.get("uid") or ""),
+        "folder": row.get("folder") or "",
+        "message_id": (row.get("message_id") or "").strip(),
+        "subject": row.get("subject") or "(no subject)",
+        "from_name": row.get("from_name") or row.get("from_addr") or "",
+        "from_address": row.get("from_addr") or "",
+        "to": row.get("to_addrs") or "",
+        "cc": row.get("cc_addrs") or "",
+        "date": _epoch_to_iso(epoch),
+        "in_reply_to": (row.get("in_reply_to") or "").strip(),
+        "references": (row.get("references_hdr") or "").strip(),
+        "body": body,
+        "body_html": body_html,
+        "attachments": _local_attachments_for_read(atts),
+        "related_attachments": [],
+        "local_id": row.get("id"),
+    }
 
 
 def query_local_emails(
@@ -1362,35 +2262,48 @@ def query_local_emails(
     offset: int = 0,
     since: float | None = None,
     until: float | None = None,
-) -> list[dict[str, Any]]:
+    filter_: str | None = None,
+    has_attachments: bool | None = None,
+    include_total: bool = False,
+) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], int, str]:
+    where, params, resolved_folder = _build_local_query_clauses(
+        owner,
+        account_id,
+        folder,
+        since=since,
+        until=until,
+        filter_=filter_,
+        has_attachments=has_attachments,
+    )
     db = _connect()
     try:
-        resolved_folder = _resolve_read_folder(db, owner, account_id, folder)
-        clauses = ["owner=?", "folder=?"]
-        params: list[Any] = [owner or "", resolved_folder]
-        if account_id:
-            clauses.append("account_id=?")
-            params.append(account_id)
-        if since is not None:
-            clauses.append("date_epoch >= ?")
-            params.append(float(since))
-        if until is not None:
-            clauses.append("date_epoch < ?")
-            params.append(float(until))
-        where = " AND ".join(clauses)
-        params.extend([int(limit), int(offset)])
+        total = 0
+        if include_total:
+            total = int(
+                db.execute(
+                    f"SELECT COUNT(*) FROM messages WHERE {where}",
+                    params,
+                ).fetchone()[0]
+            )
+        qparams = list(params)
+        qparams.extend([int(limit), int(offset)])
         rows = db.execute(
             f"""
-            SELECT id, uid, account_id, subject, from_name, from_addr,
-                   date_raw, snippet, has_attachments, is_read, date_epoch
+            SELECT id, uid, account_id, folder, subject, from_name, from_addr,
+                   to_addrs, cc_addrs, message_id,
+                   date_raw, snippet, has_attachments, is_read, is_answered,
+                   is_flagged, size, date_epoch
             FROM messages
             WHERE {where}
             ORDER BY date_epoch DESC
             LIMIT ? OFFSET ?
             """,
-            params,
+            qparams,
         ).fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        if include_total:
+            return result, total, resolved_folder
+        return result
     finally:
         db.close()
 
@@ -1412,6 +2325,140 @@ def get_local_email(owner: str, row_id: int) -> dict[str, Any] | None:
         ).fetchall()
         msg["attachments"] = [dict(a) for a in atts]
         return msg
+    finally:
+        db.close()
+
+
+def get_local_email_by_uid(
+    owner: str,
+    account_id: str | None,
+    folder: str,
+    uid: str | int,
+) -> dict[str, Any] | None:
+    db = _connect()
+    try:
+        resolved_folder = _resolve_read_folder(db, owner, account_id, folder)
+        clauses = ["owner=?", "folder=?", "uid=?"]
+        params: list[Any] = [owner or "", resolved_folder, int(uid)]
+        if account_id:
+            clauses.append("account_id=?")
+            params.append(account_id)
+        where = " AND ".join(clauses)
+        row = db.execute(
+            f"SELECT * FROM messages WHERE {where} ORDER BY uidvalidity DESC LIMIT 1",
+            params,
+        ).fetchone()
+        if not row:
+            return None
+        msg = dict(row)
+        atts = db.execute(
+            "SELECT idx, filename, content_type, size, is_inline, local_path, extracted, skipped_reason "
+            "FROM attachments WHERE message_row_id=? ORDER BY idx",
+            (int(msg["id"]),),
+        ).fetchall()
+        return _format_local_read_response(msg, [dict(a) for a in atts])
+    finally:
+        db.close()
+
+
+def _fts_query_from_text(q: str) -> str | None:
+    q = (q or "").strip()
+    if len(q) < 2:
+        return None
+    tokens = re.findall(r"[\w@.+-]+", q, flags=re.UNICODE)
+    if not tokens:
+        return None
+    parts = []
+    for tok in tokens[:12]:
+        safe = tok.replace('"', '""')
+        parts.append(f'"{safe}"*')
+    return " OR ".join(parts)
+
+
+def search_local_emails(
+    owner: str,
+    q: str,
+    *,
+    account_id: str | None = None,
+    folder: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int, str]:
+    where, params, resolved_folder = _build_local_query_clauses(
+        owner,
+        account_id,
+        folder or "INBOX",
+        table_prefix="m",
+    )
+    db = _connect()
+    try:
+        fts_q = _fts_query_from_text(q)
+        rows: list[sqlite3.Row] = []
+        total = 0
+        if fts_q:
+            try:
+                total = int(
+                    db.execute(
+                        f"""
+                        SELECT COUNT(*)
+                        FROM messages_fts
+                        JOIN messages m ON m.id = messages_fts.rowid
+                        WHERE messages_fts MATCH ? AND {where}
+                        """,
+                        [fts_q, *params],
+                    ).fetchone()[0]
+                )
+                qparams: list[Any] = [fts_q, *params, int(limit), int(offset)]
+                rows = db.execute(
+                    f"""
+                    SELECT m.id, m.uid, m.account_id, m.folder, m.subject, m.from_name, m.from_addr,
+                           m.to_addrs, m.cc_addrs, m.message_id,
+                           m.date_raw, m.snippet, m.has_attachments, m.is_read, m.is_answered,
+                           m.is_flagged, m.size, m.date_epoch
+                    FROM messages_fts
+                    JOIN messages m ON m.id = messages_fts.rowid
+                    WHERE messages_fts MATCH ? AND {where}
+                    ORDER BY bm25(messages_fts), m.date_epoch DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    qparams,
+                ).fetchall()
+            except Exception as e:
+                logger.debug("local email FTS search failed, falling back to LIKE: %s", e)
+                rows = []
+                total = 0
+        if not rows:
+            like = f"%{q.strip()}%"
+            like_where = (
+                f"{where} AND (m.subject LIKE ? OR m.from_name LIKE ? OR m.from_addr LIKE ? "
+                f"OR m.snippet LIKE ? OR m.body_text LIKE ?)"
+            )
+            like_params = [like, like, like, like, like]
+            total = int(
+                db.execute(
+                    f"SELECT COUNT(*) FROM messages m WHERE {like_where}",
+                    [*params, *like_params],
+                ).fetchone()[0]
+            )
+            qparams = [*params, *like_params, int(limit), int(offset)]
+            rows = db.execute(
+                f"""
+                SELECT m.id, m.uid, m.account_id, m.folder, m.subject, m.from_name, m.from_addr,
+                       m.to_addrs, m.cc_addrs, m.message_id,
+                       m.date_raw, m.snippet, m.has_attachments, m.is_read, m.is_answered,
+                       m.is_flagged, m.size, m.date_epoch
+                FROM messages m
+                WHERE {like_where}
+                ORDER BY m.date_epoch DESC
+                LIMIT ? OFFSET ?
+                """,
+                qparams,
+            ).fetchall()
+        emails = [
+            normalize_local_list_row(dict(r), resolved_folder)
+            for r in rows
+        ]
+        return emails, total, resolved_folder
     finally:
         db.close()
 

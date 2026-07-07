@@ -684,6 +684,21 @@ async def _execute_tool_block_impl(
         logger.info(f"Tool blocked by user: {tool}")
         return desc, result
 
+    from src.tool_security import (
+        LIVE_IMAP_READ_TOOLS,
+        is_email_local_only,
+        local_only_live_email_block_message,
+    )
+    if is_email_local_only(owner):
+        live_policy = {
+            n for t in LIVE_IMAP_READ_TOOLS for n in email_tool_policy_names(t)
+        }
+        if not policy_names.isdisjoint(live_policy):
+            desc = f"{tool}: BLOCKED (local-only email mode)"
+            result = {"error": local_only_live_email_block_message(), "exit_code": 1}
+            logger.info("Tool blocked by local-only email mode: %s owner=%r", tool, owner)
+            return desc, result
+
     if tool_policy and any(tool_policy.blocks(name) for name in policy_names):
         desc = f"{tool}: BLOCKED"
         result = {
