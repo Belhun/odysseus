@@ -479,7 +479,19 @@ FUNCTION_TOOL_SCHEMAS = [
                             "required": ["label"]
                         }
                     },
-                    "multi": {"type": "boolean", "description": "Set true ONLY when the question explicitly allows choosing more than one option. Otherwise omit it or set false. Default false."}
+                    "multi": {"type": "boolean", "description": "Set true ONLY when the question explicitly allows choosing more than one option. Otherwise omit it or set false. Default false."},
+                    "confirmation": {
+                        "type": "object",
+                        "description": "Optional gated-action block. When set, ask_user mints a confirmation_token the user must approve before a privileged tool runs.",
+                        "properties": {
+                            "domain": {"type": "string", "description": "Gate domain, e.g. finance, phonepi, email"},
+                            "tool": {"type": "string", "description": "Tool name that will run after approval, e.g. manage_finance"},
+                            "action": {"type": "string", "description": "Gated action name inside the tool"},
+                            "payload": {"type": "object", "description": "Exact args that the tool must use after approval"},
+                            "approve_labels": {"type": "array", "items": {"type": "string"}, "description": "Option labels that count as approval"},
+                        },
+                        "required": ["domain", "tool", "action", "payload"],
+                    },
                 },
                 "required": ["question", "options"]
             }
@@ -571,7 +583,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "manage_finance",
-            "description": "Read and manage local finance data: accounts, transactions, spending by category, budgets, and trends. Use for spending questions, budget checks, and transaction lookups. Bank CSV/OFX import is UI-only — use ui_control open_panel finance to open the Import tab. Prefer spending_report for 'where did my money go' questions; use list_transactions only when the user needs specific rows (max 50).",
+            "description": "Read and manage local finance data: accounts, transactions, spending by category, budgets, and trends. Use for spending questions, budget checks, and transaction lookups. Bank CSV/OFX import is UI-only — use ui_control open_panel finance to open the Import tab. Prefer spending_report for 'where did my money go' questions; use list_transactions only when the user needs specific rows (max 50). To add a category, use ask_user with a confirmation block first; after approval pass confirmation_token on create_category.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -584,6 +596,7 @@ FUNCTION_TOOL_SCHEMAS = [
                             "budget_status",
                             "trends",
                             "list_categories",
+                            "create_category",
                             "list_import_batches",
                             "categorize_transaction",
                             "set_budget",
@@ -594,6 +607,15 @@ FUNCTION_TOOL_SCHEMAS = [
                     "month": {"type": "string", "description": "YYYY-MM for spending/budget/trends filters"},
                     "account_id": {"type": "string", "description": "Filter transactions by account id or prefix"},
                     "category_id": {"type": "string", "description": "Category id or prefix"},
+                    "name": {"type": "string", "description": "Category name for create_category"},
+                    "category_name": {"type": "string", "description": "Alias for name on create_category"},
+                    "is_income": {"type": "boolean", "description": "Income flag for top-level create_category (subcategories inherit from parent)"},
+                    "parent_id": {"type": "string", "description": "Parent category id or prefix for create_category (one subcategory level)"},
+                    "color": {"type": "string", "description": "Hex color for create_category (default #5b8abf)"},
+                    "confirmation_token": {
+                        "type": "string",
+                        "description": "Required for gated actions like create_category — token from ask_user after user approval",
+                    },
                     "transaction_id": {"type": "string", "description": "Transaction id or prefix for categorize_transaction"},
                     "search": {"type": "string", "description": "Payee search text for list_transactions"},
                     "limit": {"type": "integer", "description": "Max transactions to return (default 25, max 50)"},

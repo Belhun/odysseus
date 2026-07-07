@@ -811,7 +811,7 @@ async def _execute_tool_block_impl(
         result = await do_manage_calendar(content, owner=owner)
     elif tool == "manage_finance":
         desc = "manage_finance"
-        result = await do_manage_finance(content, owner=owner)
+        result = await do_manage_finance(content, owner=owner, session_id=session_id)
     elif tool == "download_model":
         desc = "download_model"
         result = await do_download_model(content, owner=owner)
@@ -953,7 +953,9 @@ async def _execute_tool_block_impl(
     elif tool in dynamic_handlers:
         first_line = content.split(chr(10))[0][:80]
         desc = f"registry: {tool} {first_line}".strip()
-        res = await _direct_fallback(tool, content, progress_cb=progress_cb)
+        res = await _direct_fallback(
+            tool, content, progress_cb=progress_cb, session_id=session_id, owner=owner,
+        )
 
         if isinstance(res, tuple):
             desc, result = res

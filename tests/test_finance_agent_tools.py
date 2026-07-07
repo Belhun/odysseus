@@ -9,9 +9,11 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 import integrations.finance.database as finance_db
-from integrations.finance.models import FinanceAccount, FinanceBase, FinanceCategory, FinanceTransaction
+from integrations.finance.confirmation_gate import register_finance_confirmation_gate
 from integrations.finance.install import run_install
+from integrations.finance.models import FinanceAccount, FinanceBase, FinanceCategory, FinanceTransaction
 from integrations.finance.uninstall import run_uninstall
+from src.confirmation_gates import approve_pending_choice, mint_confirmation
 from src.tools.finance import do_manage_finance
 from tests.fixtures.finance.synthetic_samples import WELLS_FARGO_SAMPLE
 
@@ -26,6 +28,14 @@ def finance_tool_env(monkeypatch, tmp_path):
         lambda: plugins_root / "finance" / "finance.db",
     )
     monkeypatch.setattr("src.settings.FEATURES_FILE", str(tmp_path / "features.json"))
+    monkeypatch.setattr(
+        "src.confirmation_gates.store.CONFIRMATION_PENDING_FILE",
+        str(tmp_path / "confirmation_pending.json"),
+    )
+    from src.confirmation_gates.store import reset_store_for_tests
+
+    reset_store_for_tests()
+    register_finance_confirmation_gate()
     finance_db.reset_engine_cache()
     run_install()
 
@@ -105,6 +115,124 @@ async def test_manage_finance_list_accounts_and_spending(finance_tool_env):
     )
     assert txs.get("exit_code") == 0
     assert "WHOLE FOODS" in txs.get("response", "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_categorize_by_prefix_and_name(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        acct = FinanceAccount(
+            id="dd8bb9fa-1234-5678-9abc-def012345678",
+            owner=owner,
+            name="Wells Fargo",
+            account_type="checking",
+        )
+        cat = FinanceCategory(
+            id="5b3cda32-abcd-ef01-2345-6789abcdef01",
+            owner=owner,
+            name="Dining",
+            is_income=False,
+        )
+        tx = FinanceTransaction(
+            id="6d7d3c81-aaaa-bbbb-cccc-ddddeeeeffff",
+            owner=owner,
+            account_id=acct.id,
+            date=__import__("datetime").date(2026, 6, 30),
+            amount_cents=-1630,
+            payee="BEST PIZZA",
+            dedup_hash="pizza1",
+        )
+        db.add_all([acct, cat, tx])
+        db.commit()
+    finally:
+        db.close()
+
+    by_prefix = await do_manage_finance(
+        json.dumps({
+            "action": "categorize_transaction",
+            "transaction_id": "6d7d3c81",
+            "category_id": "5b3cda32",
+        }),
+        owner=owner,
+    )
+    assert by_prefix.get("exit_code") == 0
+    assert "Dining" in (by_prefix.get("response") or "")
+
+    by_name = await do_manage_finance(
+        json.dumps({
+            "action": "categorize_transaction",
+            "transaction_id": "6d7d3c81",
+            "category_id": "Dining",
+        }),
+        owner=owner,
+    )
+    assert by_name.get("exit_code") == 0
+
+    filtered = await do_manage_finance(
+        json.dumps({
+            "action": "list_transactions",
+            "account_id": "dd8bb9fa",
+            "limit": 5,
+        }),
+        owner=owner,
+    )
+    assert filtered.get("exit_code") == 0
+    assert "BEST PIZZA" in (filtered.get("response") or "")
+    assert "No matching transactions" not in (filtered.get("response") or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_create_category_requires_confirmation(finance_tool_env):
+    owner = finance_tool_env["owner"]
+
+    blocked = await do_manage_finance(
+        json.dumps({"action": "create_category", "name": "Pet Supplies"}),
+        owner=owner,
+        session_id="sess-finance",
+    )
+    assert blocked.get("exit_code") == 1
+    assert "confirmation" in (blocked.get("error") or "").lower()
+
+    token, _ = mint_confirmation(
+        session_id="sess-finance",
+        owner=owner,
+        domain="finance",
+        tool_name="manage_finance",
+        action="create_category",
+        payload={"name": "Pet Supplies"},
+    )
+    approve_pending_choice(
+        token=token,
+        session_id="sess-finance",
+        owner=owner,
+        choice="Yes, create it",
+    )
+
+    created = await do_manage_finance(
+        json.dumps({
+            "action": "create_category",
+            "name": "Pet Supplies",
+            "confirmation_token": token,
+        }),
+        owner=owner,
+        session_id="sess-finance",
+    )
+    assert created.get("exit_code") == 0
+    assert "Pet Supplies" in (created.get("response") or "")
+
+    dup = await do_manage_finance(
+        json.dumps({
+            "action": "create_category",
+            "name": "Pet Supplies",
+            "confirmation_token": token,
+        }),
+        owner=owner,
+        session_id="sess-finance",
+    )
+    assert dup.get("exit_code") == 1
 
 
 @pytest.mark.asyncio

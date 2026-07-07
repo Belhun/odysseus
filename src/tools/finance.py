@@ -35,7 +35,24 @@ def _require_owner(owner: Optional[str]) -> str:
     return owner
 
 
-async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
+def _resolve_category(db, user: str, category_ref: str):
+    """Resolve a category by full id, id prefix, or name (case-insensitive)."""
+    from integrations.finance.models import FinanceCategory
+
+    ref = str(category_ref).strip()
+    if not ref:
+        return None
+    q = db.query(FinanceCategory).filter(FinanceCategory.owner == user)
+    cat = q.filter(FinanceCategory.id == ref).first()
+    if cat:
+        return cat
+    cat = q.filter(FinanceCategory.id.startswith(ref)).first()
+    if cat:
+        return cat
+    return q.filter(FinanceCategory.name.ilike(ref)).first()
+
+
+async def do_manage_finance(content: str, owner: Optional[str] = None, session_id: Optional[str] = None) -> Dict:
     """Read and update local finance data (accounts, transactions, budgets)."""
     from src.plugins.registry import is_plugin_active
 
@@ -58,6 +75,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
         "categories": "list_categories",
         "imports": "list_import_batches",
         "categorize": "categorize_transaction",
+        "create_category": "create_category",
     }
     action = _ALIASES.get(action, action)
 
@@ -70,7 +88,12 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
         FinanceImportBatch,
         FinanceTransaction,
     )
-    from integrations.finance.services.categories import ensure_default_categories
+    from integrations.finance.services.categories import (
+        create_category_for_owner,
+        ensure_default_categories,
+        format_category_path,
+        ordered_category_list,
+    )
     from integrations.finance.services.import_service import account_balance_cents
     from integrations.finance.services.reports import month_bounds, month_key, monthly_trends, spending_by_category
 
@@ -97,9 +120,16 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
             limit = min(int(args.get("limit") or 25), _MAX_TX_LIMIT)
             q = db.query(FinanceTransaction).filter(FinanceTransaction.owner == user)
             if args.get("account_id"):
-                q = q.filter(FinanceTransaction.account_id == args["account_id"])
+                account_ref = str(args["account_id"]).strip()
+                q = q.filter(FinanceTransaction.account_id.startswith(account_ref))
             if args.get("category_id"):
-                q = q.filter(FinanceTransaction.category_id == args["category_id"])
+                cat = _resolve_category(db, user, str(args["category_id"]))
+                if cat:
+                    q = q.filter(FinanceTransaction.category_id == cat.id)
+                else:
+                    q = q.filter(
+                        FinanceTransaction.category_id.startswith(str(args["category_id"]).strip())
+                    )
             month = args.get("month")
             if month:
                 start, end = month_bounds(str(month)[:7])
@@ -113,17 +143,22 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
                 .limit(limit)
                 .all()
             )
-            cat_map = {
-                c.id: c.name
-                for c in db.query(FinanceCategory).filter(FinanceCategory.owner == user).all()
+            cats = db.query(FinanceCategory).filter(FinanceCategory.owner == user).all()
+            cats_by_id = {c.id: c for c in cats}
+            cat_map = {c.id: format_category_path(c, cats_by_id) for c in cats}
+            acct_map = {
+                a.id: a.name
+                for a in db.query(FinanceAccount).filter(FinanceAccount.owner == user).all()
             }
             if not txs:
                 return {"response": "No matching transactions.", "exit_code": 0}
             lines = [f"Transactions (showing {len(txs)} of {total}):"]
             for tx in txs:
                 cat = cat_map.get(tx.category_id) or "Uncategorized"
+                acct = acct_map.get(tx.account_id) or tx.account_id[:8]
                 lines.append(
-                    f"- {tx.date} | {_fmt_cents(tx.amount_cents)} | {tx.payee or '(no payee)'} | {cat} [{tx.id[:8]}]"
+                    f"- {tx.date} | {_fmt_cents(tx.amount_cents)} | {tx.payee or '(no payee)'} | "
+                    f"{cat} | acct={acct} [{tx.id[:8]}]"
                 )
             if total > limit:
                 lines.append(f"(Capped at {limit}. Use search/month filters to narrow.)")
@@ -160,16 +195,71 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
 
         if action == "list_categories":
             ensure_default_categories(db, user)
-            cats = (
-                db.query(FinanceCategory)
-                .filter(FinanceCategory.owner == user)
-                .order_by(FinanceCategory.name)
-                .all()
-            )
+            cats = db.query(FinanceCategory).filter(FinanceCategory.owner == user).all()
             if not cats:
                 return {"response": "No categories.", "exit_code": 0}
-            lines = [f"- [{c.id[:8]}] {c.name}" + (" (income)" if c.is_income else "") for c in cats]
+            cats_by_id = {c.id: c for c in cats}
+            lines = []
+            for c in ordered_category_list(cats):
+                path = format_category_path(c, cats_by_id)
+                indent = "  " if c.parent_id else ""
+                lines.append(
+                    f"- {indent}[{c.id[:8]}] {path}" + (" (income)" if c.is_income else "")
+                )
             return {"response": "Categories:\n" + "\n".join(lines), "exit_code": 0}
+
+        if action == "create_category":
+            name = (args.get("name") or args.get("category_name") or "").strip()
+            if not name:
+                return {"error": "create_category requires name", "exit_code": 1}
+
+            parent_id = args.get("parent_id")
+            gate_args = {"action": "create_category", "name": name}
+            if parent_id:
+                gate_args["parent_id"] = str(parent_id)
+
+            from src.confirmation_gates import consume_confirmation, require_confirmed_action
+
+            gate_err = require_confirmed_action(
+                session_id=session_id,
+                owner=user,
+                domain="finance",
+                tool_name="manage_finance",
+                action="create_category",
+                tool_args=gate_args,
+                confirmation_token=args.get("confirmation_token"),
+            )
+            if gate_err:
+                return {"error": gate_err, "exit_code": 1}
+
+            ensure_default_categories(db, user)
+            if parent_id:
+                parent = _resolve_category(db, user, str(parent_id))
+                if not parent:
+                    return {"error": "Parent category not found", "exit_code": 1}
+                parent_id = parent.id
+            try:
+                cat = create_category_for_owner(
+                    db,
+                    user,
+                    name,
+                    is_income=bool(args.get("is_income")),
+                    color=str(args.get("color") or "#5b8abf"),
+                    parent_id=parent_id,
+                )
+            except ValueError as exc:
+                return {"error": str(exc), "exit_code": 1}
+
+            token = str(args.get("confirmation_token") or "").strip()
+            if token and session_id:
+                consume_confirmation(token=token, session_id=session_id, owner=user)
+
+            cats_by_id = {c.id: c for c in db.query(FinanceCategory).filter(FinanceCategory.owner == user).all()}
+            path = format_category_path(cat, cats_by_id)
+            return {
+                "response": f"Created category {path} [{cat.id[:8]}].",
+                "exit_code": 0,
+            }
 
         if action == "list_import_batches":
             q = db.query(FinanceImportBatch).filter(FinanceImportBatch.owner == user)
@@ -195,10 +285,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
             ).first()
             if not tx:
                 return {"error": "Transaction not found", "exit_code": 1}
-            cat = db.query(FinanceCategory).filter(
-                FinanceCategory.owner == user,
-                FinanceCategory.id == category_id,
-            ).first()
+            cat = _resolve_category(db, user, str(category_id))
             if not cat:
                 return {"error": "Category not found", "exit_code": 1}
             tx.category_id = cat.id
@@ -216,10 +303,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
                 limit_cents = int(round(float(args["limit_dollars"]) * 100))
             if not category_id or limit_cents is None:
                 return {"error": "set_budget requires category_id and limit_cents (or limit_dollars)", "exit_code": 1}
-            cat = db.query(FinanceCategory).filter(
-                FinanceCategory.owner == user,
-                FinanceCategory.id.startswith(str(category_id)),
-            ).first()
+            cat = _resolve_category(db, user, str(category_id))
             if not cat:
                 return {"error": "Category not found", "exit_code": 1}
             existing = db.query(FinanceCategoryBudget).filter(
@@ -248,10 +332,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
             category_id = args.get("category_id")
             if not pattern or not category_id:
                 return {"error": "create_rule requires pattern and category_id", "exit_code": 1}
-            cat = db.query(FinanceCategory).filter(
-                FinanceCategory.owner == user,
-                FinanceCategory.id.startswith(str(category_id)),
-            ).first()
+            cat = _resolve_category(db, user, str(category_id))
             if not cat:
                 return {"error": "Category not found", "exit_code": 1}
             rule = FinanceCategorizationRule(
@@ -271,8 +352,8 @@ async def do_manage_finance(content: str, owner: Optional[str] = None) -> Dict:
         return {
             "error": (
                 f"Unknown action '{action}'. Valid: list_accounts, list_transactions, "
-                "spending_report, budget_status, trends, list_categories, list_import_batches, "
-                "categorize_transaction, set_budget, create_rule."
+                "spending_report, budget_status, trends, list_categories, create_category, "
+                "list_import_batches, categorize_transaction, set_budget, create_rule."
             ),
             "exit_code": 1,
         }
