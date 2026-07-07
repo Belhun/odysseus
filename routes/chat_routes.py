@@ -882,25 +882,6 @@ def setup_chat_routes(
         ):
             disabled_tools.add("web_search")
             disabled_tools.add("web_fetch")
-        if _explicit_web_intent:
-            # A direct lookup/search request should not drift into personal
-            # tools or shell fallbacks. We still keep web_search/web_fetch
-            # available even when the frontend toggle is stale/falsy because
-            # the user's words are the stronger signal.
-            disabled_tools.update({
-                "bash", "python",
-                "search_chats", "manage_skills", "manage_memory",
-                "read_file", "write_file", "edit_file",
-                "create_document", "edit_document", "update_document",
-                "send_email", "reply_to_email",
-                "manage_notes", "manage_calendar", "manage_tasks",
-                "api_call", "builtin_browser",
-            })
-            disabled_tools.discard("web_search")
-            disabled_tools.discard("web_fetch")
-        elif _search_enabled:
-            disabled_tools.discard("web_search")
-            disabled_tools.discard("web_fetch")
 
         # Nobody/incognito mode: deny tools that would expose the user's
         # persistent memory, past chats, or other identity-linked data.
@@ -952,8 +933,7 @@ def setup_chat_routes(
         _global_disabled = get_setting("disabled_tools", [])
         if _global_disabled and isinstance(_global_disabled, list):
             explicit_web_allowed = (
-                _explicit_web_intent
-                or (allow_web_search is not None and str(allow_web_search).lower() == "true")
+                allow_web_search is not None and str(allow_web_search).lower() == "true"
             )
             if explicit_web_allowed:
                 disabled_tools.update(t for t in _global_disabled if t not in {"web_search", "web_fetch"})
@@ -1410,9 +1390,7 @@ def setup_chat_routes(
                     _max_rounds = max(1, min(_max_rounds, 200))
 
                     _forced_tools = None
-                    if _explicit_web_intent:
-                        _forced_tools = {"web_search", "web_fetch"}
-                    elif _search_enabled:
+                    if allow_web_search is not None and str(allow_web_search).lower() == "true":
                         _forced_tools = {"web_search", "web_fetch"}
 
                     async for chunk in stream_agent_loop(
