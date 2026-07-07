@@ -495,7 +495,7 @@ Local finance plugin: accounts, spending by category, budgets, trends, transacti
 Actions: `list_accounts`, `list_transactions`, `spending_report`, `budget_status`, `trends`, `list_categories`, `create_category`, `list_import_batches`, `categorize_transaction`, `set_budget`, `create_rule`. \
 For "how much did I spend on groceries" use `spending_report` (defaults to current month). \
 For specific payees use `list_transactions` with `search` (max 50 rows). \
-New categories: use ask_user with a `confirmation` block; after the user approves, call `create_category` with the returned `confirmation_token`. Use `parent_id` for subcategories (one level under a top-level category). \
+New categories: use ask_user with a `confirmation` block. For multiple categories, include an `items` array in `confirmation.payload` (each item: name, optional parent_id/color). After approval, either call `create_categories` once with the full `categories` array, or call `create_category` repeatedly with the same `confirmation_token` until every approved item is created. Use `parent_id` for subcategories (one level under a top-level category). \
 Bank CSV/OFX import has no tool path — `ui_control open_panel finance` opens the Import UI.""",
     "create_session": "- ```create_session``` — Create a new chat. Line 1 = chat name, line 2 = model name. Use for background/parallel work.",
     "list_sessions": "- ```list_sessions``` — List chats sorted MOST-RECENT FIRST (the UI calls them 'chats') with clickable chat-title links. Output includes a relative \"last active\" timestamp per row, so the first row is the user's most recent chat. Content = optional filter keyword (matches chat name). When answering, preserve the `[title](#session-id)` links exactly; do not convert them into plain text.",
@@ -871,6 +871,7 @@ _EXPLICIT_CONTINUATION_RE = re.compile(
     r"^\s*(?:"
     r"yes|y|yeah|yep|ok|okay|sure|do it|go ahead|continue|carry on|"
     r"run it|launch it|start it|use that|that one|same|the same|"
+    r"let'?s go|let'?s do it|"
     r"first|second|third|the first one|the second one|the third one|"
     r"[123]|[abc]"
     # `\s*[.!?]*\s*$` put two \s-matching quantifiers around `[.!?]*`, which
@@ -881,6 +882,17 @@ _EXPLICIT_CONTINUATION_RE = re.compile(
     r")\s*(?:[.!?]+\s*)?$",
     re.IGNORECASE,
 )
+_APPROVAL_CONTINUATION_RE = re.compile(
+    r"^\s*(?:yes|yeah|yep|ok|okay|sure|approve|approved|confirm|confirmed)\s*,\s*\S",
+    re.IGNORECASE,
+)
+_CONFIRMATION_HINT_RE = re.compile(
+    r"\[System: The user approved confirmation \S+ for (\w+)\.(\w+)\.(\w+)",
+    re.IGNORECASE,
+)
+_GATE_TOOL_PIN_MAP = {
+    ("finance", "manage_finance"): "manage_finance",
+}
 _RETRY_CONTINUATION_RE = re.compile(
     r"\b(?:try again|retry|again|rerun|re-run|run it again|launch it again|"
     r"start it again|failed|fails?|died|crashed|broke|insta|instantly)\b",
@@ -896,7 +908,24 @@ _COOKBOOK_CONTEXT_RE = re.compile(
 
 def _is_explicit_continuation(text: str) -> bool:
     """Only these terse replies may inherit older user turns for tool retrieval."""
-    return bool(_EXPLICIT_CONTINUATION_RE.match(str(text or "").strip()))
+    s = str(text or "").strip()
+    if not s:
+        return False
+    if _CONFIRMATION_HINT_RE.search(s):
+        return True
+    if _EXPLICIT_CONTINUATION_RE.match(s):
+        return True
+    if _APPROVAL_CONTINUATION_RE.match(s):
+        return True
+    return bool(re.match(r"^\s*let'?s\s+(?:go|do it)\s*(?:[.!?]+\s*)?$", s, re.IGNORECASE))
+
+
+def _confirmation_pinned_tools(text: str) -> Set[str]:
+    """Pin gated tools when the user just approved a confirmation token."""
+    pinned: Set[str] = set()
+    for domain, tool_name, _action in _CONFIRMATION_HINT_RE.findall(str(text or "")):
+        pinned.add(_GATE_TOOL_PIN_MAP.get((domain.lower(), tool_name), tool_name))
+    return pinned
 
 
 def _is_casual_low_signal(text: str) -> bool:
@@ -2601,6 +2630,26 @@ async def stream_agent_loop(
             _relevant_tools.update({"web_search", "web_fetch"})
         if "ui" in (_intent.get("domains") or set()):
             _relevant_tools.add("ui_control")
+
+    if not guide_only:
+        _confirmed_tools = _confirmation_pinned_tools(_last_user)
+        if _confirmed_tools:
+            if _relevant_tools is None:
+                from src.tool_index import ALWAYS_AVAILABLE
+                _relevant_tools = set(ALWAYS_AVAILABLE)
+            _relevant_tools.update(_confirmed_tools)
+            logger.info(
+                "[agent-intent] pinned tools from approved confirmation: %s",
+                sorted(_confirmed_tools),
+            )
+        elif bool(_intent.get("continuation")) and _relevant_tools is not None:
+            ql = str(_intent.get("retrieval_query") or "").lower()
+            if any(kw in ql for kw in (
+                "finance", "category", "categories", "transaction",
+                "wells fargo", "manage_finance", "categorize",
+            )):
+                _relevant_tools.update(_DOMAIN_TOOL_MAP.get("notes_calendar_tasks", set()))
+                logger.info("[agent-intent] continuation pinned finance tools from recent context")
 
     # If this turn targets the open document, keep editing tools available
     # regardless of which selection path (RAG, keyword, caller-provided) ran.

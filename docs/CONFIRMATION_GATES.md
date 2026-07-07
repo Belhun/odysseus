@@ -139,6 +139,45 @@ After the user clicks an approve label:
 2. Server marks the token approved and appends a system hint telling the model which token to pass.
 3. Agent calls the tool with the **same payload** plus `confirmation_token`.
 
+### Batch approvals (multiple gated calls, one user click)
+
+For workflows like creating several finance categories, put an `items` array in
+`confirmation.payload`. The minted token gets `max_uses = len(items)` and stays
+valid until every approved item is consumed.
+
+```json
+{
+  "question": "Create these 3 categories?",
+  "options": [
+    {"label": "Yes, create them all!"},
+    {"label": "No"}
+  ],
+  "confirmation": {
+    "domain": "finance",
+    "tool": "manage_finance",
+    "action": "create_category",
+    "payload": {
+      "items": [
+        {"name": "Entertainment"},
+        {"name": "Subscriptions", "parent_id": "fc042fb1"},
+        {"name": "Video Gaming", "parent_id": "fc042fb1"}
+      ]
+    },
+    "approve_labels": ["Yes, create them all!"]
+  }
+}
+```
+
+After approval you can either:
+
+1. Call `create_category` repeatedly with the **same** `confirmation_token` (one
+   category per call, matching an approved item), or
+2. Call `create_categories` once with the full `categories` array (finance batch
+   action; consumes the whole token in one shot).
+
+You can also set `"max_uses": 5` explicitly when the approved work is not a
+fixed `items` list.
+
 ## Validator contract
 
 `PayloadValidator = Callable[[dict, dict], Optional[str]]`
@@ -155,7 +194,8 @@ Keep validators **strict on fields that matter** (recipient, amount, subject) an
 |----------|-----|
 | User must click | Token only becomes `approved` when UI sends token + matching choice label |
 | Session scoped | Token records `session_id` + `owner` |
-| Single use | `consume_confirmation` deletes token after success |
+| Single use | `consume_confirmation` deletes token after success (or after last use in a batch) |
+| Multi-use batch | `confirmation.payload.items` sets `max_uses`; reuse the same token for each approved item |
 | TTL | Default 10 minutes; expired tokens pruned on read |
 | Payload binding | Per-action validator compares approved vs actual args |
 

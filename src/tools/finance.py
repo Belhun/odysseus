@@ -76,6 +76,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
         "imports": "list_import_batches",
         "categorize": "categorize_transaction",
         "create_category": "create_category",
+        "create_categories": "create_categories",
     }
     action = _ALIASES.get(action, action)
 
@@ -218,6 +219,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
             if parent_id:
                 gate_args["parent_id"] = str(parent_id)
 
+            from integrations.finance.confirmation_gate import category_consumed_item_key
             from src.confirmation_gates import consume_confirmation, require_confirmed_action
 
             gate_err = require_confirmed_action(
@@ -252,12 +254,90 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
             token = str(args.get("confirmation_token") or "").strip()
             if token and session_id:
-                consume_confirmation(token=token, session_id=session_id, owner=user)
+                consume_confirmation(
+                    token=token,
+                    session_id=session_id,
+                    owner=user,
+                    consumed_item_key=category_consumed_item_key(gate_args),
+                )
 
             cats_by_id = {c.id: c for c in db.query(FinanceCategory).filter(FinanceCategory.owner == user).all()}
             path = format_category_path(cat, cats_by_id)
             return {
                 "response": f"Created category {path} [{cat.id[:8]}].",
+                "exit_code": 0,
+            }
+
+        if action == "create_categories":
+            raw_categories = args.get("categories")
+            if not isinstance(raw_categories, list) or not raw_categories:
+                return {"error": "create_categories requires a non-empty categories array", "exit_code": 1}
+
+            normalized: list[dict] = []
+            for entry in raw_categories:
+                if not isinstance(entry, dict):
+                    return {"error": "Each category must be an object with at least name", "exit_code": 1}
+                name = str(entry.get("name") or entry.get("category_name") or "").strip()
+                if not name:
+                    return {"error": "Each category must include name", "exit_code": 1}
+                item = {"name": name}
+                if entry.get("parent_id"):
+                    item["parent_id"] = str(entry["parent_id"])
+                if entry.get("color"):
+                    item["color"] = str(entry["color"])
+                if entry.get("is_income") is not None:
+                    item["is_income"] = bool(entry["is_income"])
+                normalized.append(item)
+
+            gate_args = {"action": "create_categories", "categories": normalized}
+            from src.confirmation_gates import consume_confirmation, require_confirmed_action
+
+            gate_err = require_confirmed_action(
+                session_id=session_id,
+                owner=user,
+                domain="finance",
+                tool_name="manage_finance",
+                action="create_categories",
+                tool_args=gate_args,
+                confirmation_token=args.get("confirmation_token"),
+            )
+            if gate_err:
+                return {"error": gate_err, "exit_code": 1}
+
+            ensure_default_categories(db, user)
+            created_lines: list[str] = []
+            for item in normalized:
+                parent_id = item.get("parent_id")
+                resolved_parent_id = None
+                if parent_id:
+                    parent = _resolve_category(db, user, str(parent_id))
+                    if not parent:
+                        return {"error": f"Parent category not found for {item['name']}", "exit_code": 1}
+                    resolved_parent_id = parent.id
+                try:
+                    cat = create_category_for_owner(
+                        db,
+                        user,
+                        item["name"],
+                        is_income=bool(item.get("is_income")),
+                        color=str(item.get("color") or "#5b8abf"),
+                        parent_id=resolved_parent_id,
+                    )
+                except ValueError as exc:
+                    return {"error": str(exc), "exit_code": 1}
+                created_lines.append(f"- {item['name']} [{cat.id[:8]}]")
+
+            token = str(args.get("confirmation_token") or "").strip()
+            if token and session_id:
+                consume_confirmation(
+                    token=token,
+                    session_id=session_id,
+                    owner=user,
+                    consume_all=True,
+                )
+
+            return {
+                "response": "Created categories:\n" + "\n".join(created_lines),
                 "exit_code": 0,
             }
 
@@ -353,7 +433,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
             "error": (
                 f"Unknown action '{action}'. Valid: list_accounts, list_transactions, "
                 "spending_report, budget_status, trends, list_categories, create_category, "
-                "list_import_batches, categorize_transaction, set_budget, create_rule."
+                "create_categories, list_import_batches, categorize_transaction, set_budget, create_rule."
             ),
             "exit_code": 1,
         }

@@ -583,7 +583,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "manage_finance",
-            "description": "Read and manage local finance data: accounts, transactions, spending by category, budgets, and trends. Use for spending questions, budget checks, and transaction lookups. Bank CSV/OFX import is UI-only — use ui_control open_panel finance to open the Import tab. Prefer spending_report for 'where did my money go' questions; use list_transactions only when the user needs specific rows (max 50). To add a category, use ask_user with a confirmation block first; after approval pass confirmation_token on create_category.",
+            "description": "Read and manage local finance data: accounts, transactions, spending by category, budgets, and trends. Use for spending questions, budget checks, and transaction lookups. Bank CSV/OFX import is UI-only — use ui_control open_panel finance to open the Import tab. Prefer spending_report for 'where did my money go' questions; use list_transactions only when the user needs specific rows (max 50). To add categories, use ask_user with a confirmation block first. For multiple categories, put an `items` array in confirmation.payload (or use create_categories with a `categories` array after approval). Reuse the same confirmation_token for each create_category call, or create them all at once with create_categories.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -597,6 +597,7 @@ FUNCTION_TOOL_SCHEMAS = [
                             "trends",
                             "list_categories",
                             "create_category",
+                            "create_categories",
                             "list_import_batches",
                             "categorize_transaction",
                             "set_budget",
@@ -612,6 +613,19 @@ FUNCTION_TOOL_SCHEMAS = [
                     "is_income": {"type": "boolean", "description": "Income flag for top-level create_category (subcategories inherit from parent)"},
                     "parent_id": {"type": "string", "description": "Parent category id or prefix for create_category (one subcategory level)"},
                     "color": {"type": "string", "description": "Hex color for create_category (default #5b8abf)"},
+                    "categories": {
+                        "type": "array",
+                        "description": "Batch category objects for create_categories. Each needs name; optional parent_id, color, is_income.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "parent_id": {"type": "string"},
+                                "color": {"type": "string"},
+                                "is_income": {"type": "boolean"},
+                            },
+                        },
+                    },
                     "confirmation_token": {
                         "type": "string",
                         "description": "Required for gated actions like create_category — token from ask_user after user approval",

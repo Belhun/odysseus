@@ -83,9 +83,25 @@ class AskUserTool:
 
         output = f"Asked the user: {question}\nOptions: {labels}\nAwaiting their selection."
         if ask_payload.get("confirmation_token"):
+            batch_note = ""
+            if isinstance(confirmation_req, dict):
+                items = confirmation_req.get("items")
+                max_uses = confirmation_req.get("max_uses")
+                if isinstance(items, list) and len(items) > 1:
+                    batch_note = (
+                        f" Batch approval covers {len(items)} items; reuse the same "
+                        f"confirmation_token for each gated call, or use a single "
+                        f"create_categories call with the full categories array."
+                    )
+                elif max_uses and int(max_uses) > 1:
+                    batch_note = (
+                        f" This token allows {int(max_uses)} gated calls; reuse the same "
+                        f"confirmation_token until all approved work is done."
+                    )
             output += (
                 f"\nConfirmation token minted. After the user approves, pass "
-                f'confirmation_token="{ask_payload["confirmation_token"]}" in the gated tool call.'
+                f'confirmation_token="{ask_payload["confirmation_token"]}" in each gated tool call.'
+                f"{batch_note}"
             )
 
         result = {
