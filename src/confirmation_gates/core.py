@@ -90,6 +90,49 @@ def _normalize_payload(data: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _batch_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize batch items from a confirmation payload."""
+    raw = payload.get("items")
+    if not isinstance(raw, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or entry.get("category_name") or "").strip()
+        if not name:
+            continue
+        item: dict[str, Any] = {"name": name}
+        if entry.get("parent_id"):
+            item["parent_id"] = str(entry["parent_id"]).strip()
+        if entry.get("color"):
+            item["color"] = str(entry["color"]).strip()
+        if entry.get("is_income") is not None:
+            item["is_income"] = bool(entry["is_income"])
+        items.append(item)
+    return items
+
+
+def _resolve_max_uses(payload: dict[str, Any], gate: ToolGateRegistration) -> int:
+    """How many gated calls one approved token may authorize."""
+    explicit = payload.get("max_uses")
+    if explicit is not None:
+        try:
+            return max(1, int(explicit))
+        except (TypeError, ValueError):
+            pass
+    items = _batch_items(payload)
+    if items:
+        return len(items)
+    return 1
+
+
+def _item_key(item: dict[str, Any]) -> str:
+    name = str(item.get("name") or "").strip().lower()
+    parent = str(item.get("parent_id") or "").strip().lower()
+    return f"{name}|{parent}"
+
+
 def _choice_matches(choice: str, approve_labels: list[str]) -> bool:
     choice_lc = (choice or "").strip().lower()
     if not choice_lc:
@@ -132,6 +175,9 @@ def mint_confirmation(
     if not labels:
         labels = list(DEFAULT_APPROVE_LABELS)
 
+    normalized_payload = _normalize_payload(payload)
+    max_uses = _resolve_max_uses(normalized_payload, gate)
+
     put_record(
         token,
         {
@@ -141,13 +187,16 @@ def mint_confirmation(
             "domain": domain.strip().lower(),
             "tool_name": tool_name.strip(),
             "action": action.strip(),
-            "payload": _normalize_payload(payload),
+            "payload": normalized_payload,
             "approve_labels": labels,
             "created_at": now,
             "expires_at": now + float(ttl_seconds or gate.ttl_seconds),
             "approved": False,
             "approved_choice": None,
             "consumed": False,
+            "max_uses": max_uses,
+            "uses_remaining": max_uses,
+            "consumed_items": [],
         },
     )
     return token, None
@@ -182,10 +231,17 @@ def approve_pending_choice(
     domain = rec.get("domain", "")
     tool_name = rec.get("tool_name", "")
     action = rec.get("action", "")
+    max_uses = int(rec.get("max_uses") or 1)
+    batch_hint = ""
+    if max_uses > 1:
+        batch_hint = (
+            f" This token authorizes up to {max_uses} gated calls; "
+            f"reuse the same confirmation_token for each approved item until all are done."
+        )
     return (
         f"[System: The user approved confirmation {token[:8]}… for "
         f"{domain}.{tool_name}.{action}. You MUST include "
-        f'confirmation_token="{token}" in that tool call.]'
+        f'confirmation_token="{token}" in each gated tool call.{batch_hint}]'
     )
 
 
@@ -216,7 +272,8 @@ def require_confirmed_action(
     rec = get_record(token)
     if not rec:
         return "Confirmation token not found or expired. Ask the user again."
-    if rec.get("consumed"):
+    uses_remaining = int(rec.get("uses_remaining") or 0)
+    if rec.get("consumed") or uses_remaining <= 0:
         return "Confirmation token already used. Ask the user again if needed."
     if not rec.get("approved"):
         return "Confirmation token is not approved yet. Wait for the user's choice."
@@ -224,19 +281,57 @@ def require_confirmed_action(
         return "Confirmation token does not match this session."
     if rec.get("domain") != domain.strip().lower() or rec.get("tool_name") != tool_name.strip():
         return "Confirmation token is for a different tool."
-    if rec.get("action") != action.strip():
-        return "Confirmation token is for a different action."
+    token_action = str(rec.get("action") or "").strip()
+    requested_action = action.strip()
+    if token_action != requested_action:
+        payload_items = _batch_items(dict(rec.get("payload") or {}))
+        batch_alias = (
+            token_action == "create_category"
+            and requested_action == "create_categories"
+            and bool(payload_items)
+            and requested_action in gate.actions
+        )
+        if not batch_alias:
+            return "Confirmation token is for a different action."
 
     validator = gate.actions[action]
-    err = validator(dict(rec.get("payload") or {}), _normalize_payload(tool_args))
+    payload_for_validator = dict(rec.get("payload") or {})
+    payload_for_validator["_consumed_items"] = list(rec.get("consumed_items") or [])
+    err = validator(payload_for_validator, _normalize_payload(tool_args))
     return err
 
 
-def consume_confirmation(*, token: str, session_id: str, owner: str) -> None:
+def consume_confirmation(
+    *,
+    token: str,
+    session_id: str,
+    owner: str,
+    consumed_item_key: Optional[str] = None,
+    consume_all: bool = False,
+) -> None:
     """Mark a confirmation token used after the gated action succeeds."""
     rec = get_record(token)
     if not rec:
         return
     if rec.get("session_id") != session_id or rec.get("owner") != owner:
         return
-    delete_record(token)
+
+    if consume_all:
+        delete_record(token)
+        return
+
+    uses_remaining = int(rec.get("uses_remaining") or 1) - 1
+    consumed_items = list(rec.get("consumed_items") or [])
+    if consumed_item_key:
+        consumed_items.append(consumed_item_key)
+
+    if uses_remaining <= 0:
+        delete_record(token)
+        return
+
+    update_record(
+        token,
+        uses_remaining=uses_remaining,
+        consumed_items=consumed_items,
+        consumed=False,
+    )

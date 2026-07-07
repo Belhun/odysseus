@@ -237,6 +237,102 @@ async def test_manage_finance_create_category_requires_confirmation(finance_tool
 
 @pytest.mark.asyncio
 @pytest.mark.area_routes
+async def test_manage_finance_batch_create_categories_with_one_token(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    items = [
+        {"name": "Family Transfers"},
+        {"name": "Investigate"},
+    ]
+
+    token, _ = mint_confirmation(
+        session_id="sess-batch",
+        owner=owner,
+        domain="finance",
+        tool_name="manage_finance",
+        action="create_category",
+        payload={"items": items},
+    )
+    approve_pending_choice(
+        token=token,
+        session_id="sess-batch",
+        owner=owner,
+        choice="Yes, create them all!",
+    )
+
+    first = await do_manage_finance(
+        json.dumps({
+            "action": "create_category",
+            "name": "Family Transfers",
+            "confirmation_token": token,
+        }),
+        owner=owner,
+        session_id="sess-batch",
+    )
+    assert first.get("exit_code") == 0
+
+    second = await do_manage_finance(
+        json.dumps({
+            "action": "create_category",
+            "name": "Investigate",
+            "confirmation_token": token,
+        }),
+        owner=owner,
+        session_id="sess-batch",
+    )
+    assert second.get("exit_code") == 0
+
+    blocked = await do_manage_finance(
+        json.dumps({
+            "action": "create_category",
+            "name": "Investigate",
+            "confirmation_token": token,
+        }),
+        owner=owner,
+        session_id="sess-batch",
+    )
+    assert blocked.get("exit_code") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_create_categories_batch_action(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    categories = [
+        {"name": "Business Income"},
+        {"name": "Personal Income"},
+    ]
+
+    token, _ = mint_confirmation(
+        session_id="sess-batch2",
+        owner=owner,
+        domain="finance",
+        tool_name="manage_finance",
+        action="create_category",
+        payload={"items": categories},
+    )
+    approve_pending_choice(
+        token=token,
+        session_id="sess-batch2",
+        owner=owner,
+        choice="Yes",
+    )
+
+    created = await do_manage_finance(
+        json.dumps({
+            "action": "create_categories",
+            "categories": categories,
+            "confirmation_token": token,
+        }),
+        owner=owner,
+        session_id="sess-batch2",
+    )
+    assert created.get("exit_code") == 0
+    assert "Business Income" in (created.get("response") or "")
+    assert "Personal Income" in (created.get("response") or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
 async def test_manage_finance_owner_scoped(finance_tool_env):
     owner = finance_tool_env["owner"]
     db = finance_tool_env["session_factory"]()

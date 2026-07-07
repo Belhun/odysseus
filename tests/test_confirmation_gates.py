@@ -119,3 +119,51 @@ async def test_payload_mismatch_rejected():
     )
     assert gate_err
     assert "does not match" in gate_err.lower()
+
+
+@pytest.mark.asyncio
+async def test_batch_token_allows_multiple_uses():
+    token, err = mint_confirmation(
+        session_id="sess-batch",
+        owner="alice",
+        domain="finance",
+        tool_name="manage_finance",
+        action="create_category",
+        payload={
+            "items": [
+                {"name": "Entertainment"},
+                {"name": "Business"},
+            ]
+        },
+    )
+    assert not err
+    approve_pending_choice(token=token, session_id="sess-batch", owner="alice", choice="Yes")
+
+    for name in ("Entertainment", "Business"):
+        gate_err = require_confirmed_action(
+            session_id="sess-batch",
+            owner="alice",
+            domain="finance",
+            tool_name="manage_finance",
+            action="create_category",
+            tool_args={"name": name},
+            confirmation_token=token,
+        )
+        assert gate_err is None
+        consume_confirmation(
+            token=token,
+            session_id="sess-batch",
+            owner="alice",
+            consumed_item_key=f"{name.lower()}|",
+        )
+
+    gate_err = require_confirmed_action(
+        session_id="sess-batch",
+        owner="alice",
+        domain="finance",
+        tool_name="manage_finance",
+        action="create_category",
+        tool_args={"name": "Entertainment"},
+        confirmation_token=token,
+    )
+    assert gate_err
