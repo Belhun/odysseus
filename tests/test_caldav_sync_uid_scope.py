@@ -74,3 +74,32 @@ def test_pending_takes_precedence():
         assert _find_existing_event(db, {"shared@svc": sentinel}, "shared@svc", "calB") is sentinel
     finally:
         db.close()
+
+
+def test_cross_calendar_same_owner_refreshes_without_insert():
+    """Subscribed calendars can return the same uid; sync must update, not INSERT."""
+    from src.caldav_sync import _apply_caldav_event_fields, _find_owner_event_by_uid
+
+    _setup()
+    db = _TS()
+    try:
+        assert _find_owner_event_by_uid(db, "shared@svc", "alice") is not None
+        assert _find_owner_event_by_uid(db, "shared@svc", "bob") is None
+        ev = db.query(CalendarEvent).filter(CalendarEvent.uid == "shared@svc").one()
+        _apply_caldav_event_fields(
+            ev,
+            summary="Updated title",
+            description="",
+            location="",
+            start_dt=ev.dtstart,
+            end_dt=ev.dtend,
+            all_day=False,
+            row_is_utc=False,
+            rrule="",
+            remote_href="https://example.com/shared.ics",
+            remote_etag="etag-1",
+        )
+        assert ev.summary == "Updated title"
+        assert ev.calendar_id == "calA"
+    finally:
+        db.close()
