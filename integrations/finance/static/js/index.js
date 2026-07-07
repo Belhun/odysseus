@@ -21,6 +21,7 @@ let _categories = [];
 let _activeAccountId = null;
 let _activeTab = 'transactions';
 let _preview = null;
+let _showCategoryForm = false;
 
 function _el(id) {
   return document.getElementById(id);
@@ -45,8 +46,8 @@ function _getModal() {
   _modal.id = 'finance-modal';
   _modal.className = 'modal';
   _modal.innerHTML = `
-    <div class="modal-content finance-modal-content" style="width:min(1100px,96vw);max-height:90vh;display:flex;flex-direction:column;">
-      <div class="modal-header finance-modal-header" style="cursor:move;">
+    <div class="modal-content finance-modal-content">
+      <div class="modal-header">
         <h2 style="margin:0;font-size:1.1rem;">Finance</h2>
         <button type="button" class="modal-close" id="finance-close-btn" aria-label="Close">&times;</button>
       </div>
@@ -62,7 +63,15 @@ function _getModal() {
       <div id="finance-panel" style="flex:1;overflow:auto;padding:12px;"></div>
     </div>`;
   document.body.appendChild(_modal);
-  makeWindowDraggable(_modal.querySelector('.finance-modal-content'), _modal.querySelector('.finance-modal-header'));
+  const content = _modal.querySelector('.finance-modal-content');
+  const header = _modal.querySelector('.modal-header');
+  if (content && header) {
+    makeWindowDraggable(_modal, {
+      content,
+      header,
+      skipSelector: 'button, input, select, textarea, label',
+    });
+  }
   _el('finance-close-btn')?.addEventListener('click', closeFinance);
   _modal.addEventListener('click', (e) => { if (e.target === _modal) closeFinance(); });
   _el('finance-add-account-btn')?.addEventListener('click', _promptNewAccount);
@@ -95,6 +104,102 @@ async function _loadCategories() {
   _categories = data.categories || [];
 }
 
+function _orderedCategories() {
+  const tops = _categories.filter((c) => !c.parent_id).sort((a, b) => a.name.localeCompare(b.name));
+  const out = [];
+  for (const top of tops) {
+    out.push(top);
+    _categories
+      .filter((c) => c.parent_id === top.id)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .forEach((child) => out.push(child));
+  }
+  const seen = new Set(out.map((c) => c.id));
+  _categories.filter((c) => !seen.has(c.id)).forEach((c) => out.push(c));
+  return out;
+}
+
+function _categoryOptionLabel(cat) {
+  return cat.parent_id ? `  ↳ ${cat.name}` : (cat.display_name || cat.name);
+}
+
+function _categoryOptionsHtml(selectedId) {
+  return _orderedCategories().map((c) =>
+    `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${_escHtml(_categoryOptionLabel(c))}</option>`
+  ).join('');
+}
+
+function _topLevelCategoryOptionsHtml(selectedId = '') {
+  const tops = _categories
+    .filter((c) => !c.parent_id)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return `<option value="">Top level</option>${tops.map((c) =>
+    `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${_escHtml(c.name)}</option>`
+  ).join('')}`;
+}
+
+function _categoryFormHtml() {
+  return `
+    <div id="finance-category-form" style="margin-bottom:12px;padding:10px;border:1px solid var(--border-color,#333);border-radius:6px;">
+      <div style="font-weight:600;margin-bottom:8px;">New category</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+        <label style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:140px;">
+          <span style="font-size:0.8rem;opacity:0.85;">Name</span>
+          <input id="finance-cat-name" type="text" placeholder="e.g. Fast Food" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:4px;min-width:160px;">
+          <span style="font-size:0.8rem;opacity:0.85;">Parent (subcategory)</span>
+          <select id="finance-cat-parent">${_topLevelCategoryOptionsHtml()}</select>
+        </label>
+        <label id="finance-cat-income-wrap" style="display:flex;align-items:center;gap:6px;font-size:0.85rem;padding-bottom:6px;">
+          <input id="finance-cat-income" type="checkbox" /> Income
+        </label>
+        <button type="button" id="finance-cat-save" class="btn-primary">Save</button>
+        <button type="button" id="finance-cat-cancel" class="btn-secondary">Cancel</button>
+      </div>
+      <p id="finance-cat-error" style="color:var(--danger,#e74c3c);font-size:0.85rem;margin:8px 0 0;"></p>
+    </div>`;
+}
+
+function _bindCategoryForm() {
+  const parentSel = _el('finance-cat-parent');
+  const incomeWrap = _el('finance-cat-income-wrap');
+  const syncIncome = () => {
+    if (incomeWrap) incomeWrap.style.display = parentSel?.value ? 'none' : 'flex';
+  };
+  parentSel?.addEventListener('change', syncIncome);
+  syncIncome();
+
+  _el('finance-cat-cancel')?.addEventListener('click', () => {
+    _showCategoryForm = false;
+    _renderTransactions();
+  });
+  _el('finance-cat-save')?.addEventListener('click', async () => {
+    const name = _el('finance-cat-name')?.value?.trim();
+    const errEl = _el('finance-cat-error');
+    if (!name) {
+      if (errEl) errEl.textContent = 'Enter a category name.';
+      return;
+    }
+    const parentId = parentSel?.value || null;
+    const body = { name };
+    if (parentId) body.parent_id = parentId;
+    else if (_el('finance-cat-income')?.checked) body.is_income = true;
+    try {
+      await _api('/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      _showCategoryForm = false;
+      await _loadCategories();
+      _renderTransactions();
+    } catch (err) {
+      if (errEl) errEl.textContent = err.message || String(err);
+    }
+  });
+}
+
 async function _promptNewAccount() {
   const name = prompt('Account name (e.g. Wells Fargo Checking):');
   if (!name?.trim()) return;
@@ -125,9 +230,7 @@ async function _renderTransactions() {
   const data = await _api(`/transactions?account_id=${encodeURIComponent(_activeAccountId)}&limit=200&search=${encodeURIComponent(search)}`);
   const rows = (data.transactions || []).map((tx) => {
     const amtClass = tx.amount_cents < 0 ? 'color:var(--danger,#e74c3c)' : 'color:var(--success,#2ecc71)';
-    const catOpts = _categories.map((c) =>
-      `<option value="${c.id}" ${c.id === tx.category_id ? 'selected' : ''}>${c.name}</option>`
-    ).join('');
+    const catOpts = _categoryOptionsHtml(tx.category_id);
     return `<tr>
       <td>${tx.date || ''}</td>
       <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(tx.payee)}">${_escHtml(tx.payee)}</td>
@@ -136,9 +239,11 @@ async function _renderTransactions() {
     </tr>`;
   }).join('');
   panel.innerHTML = `
-    <div style="margin-bottom:8px;display:flex;gap:8px;">
-      <input id="finance-tx-search" placeholder="Search payee…" value="${search.replace(/"/g, '&quot;')}" style="flex:1;" />
+    <div style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <input id="finance-tx-search" placeholder="Search payee…" value="${search.replace(/"/g, '&quot;')}" style="flex:1;min-width:160px;" />
+      <button type="button" id="finance-add-category-btn" class="btn-secondary">+ Category</button>
     </div>
+    ${_showCategoryForm ? _categoryFormHtml() : ''}
     <table class="finance-table" style="width:100%;border-collapse:collapse;font-size:0.9rem;">
       <thead><tr><th>Date</th><th>Payee</th><th style="text-align:right;">Amount</th><th>Category</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="4">No transactions yet. Import a CSV from your bank.</td></tr>'}</tbody>
@@ -148,6 +253,11 @@ async function _renderTransactions() {
     clearTimeout(panel._searchTimer);
     panel._searchTimer = setTimeout(() => _renderTransactions(), 300);
   });
+  _el('finance-add-category-btn')?.addEventListener('click', () => {
+    _showCategoryForm = true;
+    _renderTransactions();
+  });
+  if (_showCategoryForm) _bindCategoryForm();
   panel.querySelectorAll('.finance-cat-select').forEach((sel) => {
     sel.addEventListener('change', async () => {
       await _api(`/transactions/${sel.dataset.txCat}`, {
@@ -336,7 +446,7 @@ export async function openFinance() {
     const panel = _el('finance-panel');
     if (panel) panel.innerHTML = `<p style="color:var(--danger,#e74c3c);">${err.message || err}</p>`;
   }
-  const Modals = await import('./modalManager.js');
+  const Modals = await import('/static/js/modalManager.js');
   Modals.register('finance-modal', {
     railBtnId: 'rail-finance',
     sidebarBtnId: 'tool-finance-btn',

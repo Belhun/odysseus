@@ -9,6 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from integrations.finance.models import FinanceCategory, FinanceCategoryBudget, FinanceTransaction
+from integrations.finance.services.categories import format_category_path
 
 
 def month_key(d: date) -> str:
@@ -58,7 +59,8 @@ def spending_by_category(db: Session, owner: str, month: str) -> list[dict]:
         remaining = (limit_cents - spent) if limit_cents is not None else None
         out.append({
             "category_id": category_id,
-            "category_name": cat.name if cat else "Uncategorized",
+            "category_name": format_category_path(cat, cats) if cat else "Uncategorized",
+            "parent_id": cat.parent_id if cat else None,
             "color": cat.color if cat else "#888",
             "spent_cents": spent,
             "transaction_count": int(count or 0),

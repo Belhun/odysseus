@@ -605,6 +605,25 @@ def setup_chat_routes(
             _verify_session_owner(request, session)
             sess = session_manager.get_session(session)
             owner = effective_user(request)
+            conf_token = (
+                str(form_data.get("confirmation_token") or (body or {}).get("confirmation_token") or "")
+                .strip()
+            )
+            conf_choice = (
+                str(form_data.get("confirmation_choice") or (body or {}).get("confirmation_choice") or message or "")
+                .strip()
+            )
+            if conf_token:
+                from src.confirmation_gates import approve_pending_choice
+
+                hint = approve_pending_choice(
+                    token=conf_token,
+                    session_id=session,
+                    owner=owner,
+                    choice=conf_choice,
+                )
+                if hint:
+                    message = f"{message}\n\n{hint}" if (message or "").strip() else hint
             if _clear_orphaned_session_endpoint(sess, owner=owner):
                 raise HTTPException(400, "Selected model endpoint was removed. Pick another model in Settings.")
             # Issue #587: picker shows a model from the endpoint cache but

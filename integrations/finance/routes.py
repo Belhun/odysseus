@@ -19,7 +19,12 @@ from integrations.finance.models import (
     FinanceImportBatch,
     FinanceTransaction,
 )
-from integrations.finance.services.categories import ensure_default_categories
+from integrations.finance.services.categories import (
+    create_category_for_owner,
+    ensure_default_categories,
+    format_category_path,
+    ordered_category_list,
+)
 from integrations.finance.services.import_service import (
     account_balance_cents,
     build_import_preview,
@@ -146,6 +151,10 @@ def _transaction_dict(tx: FinanceTransaction, category_name: str | None = None) 
 
 
 def setup_finance_routes() -> APIRouter:
+    from integrations.finance.confirmation_gate import register_finance_confirmation_gate
+
+    register_finance_confirmation_gate()
+
     router = APIRouter(
         prefix="/api/finance",
         tags=["finance"],
@@ -246,19 +255,20 @@ def setup_finance_routes() -> APIRouter:
             cats = (
                 db.query(FinanceCategory)
                 .filter(FinanceCategory.owner == user)
-                .order_by(FinanceCategory.display_order, FinanceCategory.name)
                 .all()
             )
+            cats_by_id = {c.id: c for c in cats}
             return {
                 "categories": [
                     {
                         "id": c.id,
                         "name": c.name,
+                        "display_name": format_category_path(c, cats_by_id),
                         "parent_id": c.parent_id,
                         "is_income": bool(c.is_income),
                         "color": c.color,
                     }
-                    for c in cats
+                    for c in ordered_category_list(cats)
                 ]
             }
         finally:
@@ -270,17 +280,18 @@ def setup_finance_routes() -> APIRouter:
         db = get_session_factory()()
         try:
             _require_owned_category(db, user, body.parent_id)
-            cat = FinanceCategory(
-                id=str(uuid.uuid4()),
-                owner=user,
-                name=body.name.strip(),
-                parent_id=body.parent_id,
-                is_income=body.is_income,
-                color=body.color,
-            )
-            db.add(cat)
-            db.commit()
-            return {"id": cat.id, "name": cat.name}
+            try:
+                cat = create_category_for_owner(
+                    db,
+                    user,
+                    body.name,
+                    is_income=body.is_income,
+                    color=body.color,
+                    parent_id=body.parent_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            return {"id": cat.id, "name": cat.name, "parent_id": cat.parent_id}
         finally:
             db.close()
 
@@ -360,7 +371,8 @@ def setup_finance_routes() -> APIRouter:
         try:
             q = db.query(FinanceTransaction).filter(FinanceTransaction.owner == user)
             if account_id:
-                q = q.filter(FinanceTransaction.account_id == account_id)
+                account_ref = str(account_id).strip()
+                q = q.filter(FinanceTransaction.account_id.startswith(account_ref))
             if category_id:
                 q = q.filter(FinanceTransaction.category_id == category_id)
             if month:
@@ -372,10 +384,9 @@ def setup_finance_routes() -> APIRouter:
                 q = q.filter(FinanceTransaction.payee.ilike(like))
             total = q.count()
             txs = q.order_by(FinanceTransaction.date.desc(), FinanceTransaction.created_at.desc()).offset(offset).limit(limit).all()
-            cat_map = {
-                c.id: c.name
-                for c in db.query(FinanceCategory).filter(FinanceCategory.owner == user).all()
-            }
+            cats = db.query(FinanceCategory).filter(FinanceCategory.owner == user).all()
+            cats_by_id = {c.id: c for c in cats}
+            cat_map = {c.id: format_category_path(c, cats_by_id) for c in cats}
             return {
                 "total": total,
                 "transactions": [_transaction_dict(tx, cat_map.get(tx.category_id)) for tx in txs],

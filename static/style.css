@@ -5258,6 +5258,7 @@ body.bg-pattern-sparkles {
       #tasks-modal,
       #memory-modal,
       #doclib-modal,
+      #finance-modal,
       #compare-model-overlay,
       #research-overlay,
       #theme-modal,
@@ -5288,6 +5289,7 @@ body.bg-pattern-sparkles {
     }
     .memory-modal-content,
     .tasks-modal-content,
+    .finance-modal-content,
     .preset-modal-content,
     #cookbook-modal .modal-content,
     #theme-popup,
@@ -5339,6 +5341,19 @@ body.bg-pattern-sparkles {
          title bar scrolls away with the content instead of following. */
       position: static;
       top: auto;
+    }
+    /* Finance — wider default than the generic 520px tool sheet; flex column
+       with the tab panel scrolling inside (same pattern as Tasks). */
+    #finance-modal .finance-modal-content {
+      width: min(1100px, 92vw);
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #finance-modal #finance-panel {
+      flex: 1 1 auto;
+      min-height: 0;
     }
     .modal-header h4 {
       margin:0;
@@ -6979,7 +6994,8 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       #memory-modal .memory-modal-content,
       #settings-modal .settings-modal-content,
       #email-lib-modal .modal-content,
-      #doclib-modal .doclib-modal-content {
+      #doclib-modal .doclib-modal-content,
+      #finance-modal .finance-modal-content {
         max-height: 100vh !important;
         max-height: 100dvh !important;
         height: 100vh !important;
@@ -7029,7 +7045,8 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       #email-lib-modal .modal-content,
       #doclib-modal .modal-content,
       #gallery-modal .modal-content,
-      #tasks-modal .modal-content {
+      #tasks-modal .modal-content,
+      #finance-modal .finance-modal-content {
         /* vh-first as fallback for very old browsers, then dvh wins so
            the modal shrinks/grows with the mobile URL bar. Wrong order
            previously made the expanded chat preview extend below the
@@ -7046,7 +7063,8 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
       #email-lib-modal,
       #doclib-modal,
       #gallery-modal,
-      #tasks-modal {
+      #tasks-modal,
+      #finance-modal {
         padding-top: 0 !important;
         align-items: stretch !important;
       }
@@ -7062,6 +7080,14 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
         flex-direction: column !important;
       }
       #tasks-modal .modal-body {
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+      }
+      #finance-modal .finance-modal-content {
+        display: flex !important;
+        flex-direction: column !important;
+      }
+      #finance-modal #finance-panel {
         flex: 1 1 auto !important;
         min-height: 0 !important;
       }

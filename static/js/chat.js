@@ -1054,6 +1054,11 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       const fd = new FormData();
       fd.append('message', _finalMsgWithInject);
       fd.append('session', streamSessionId);
+      const _conf = chatRenderer.consumePendingConfirmation?.();
+      if (_conf?.token) {
+        fd.append('confirmation_token', _conf.token);
+        fd.append('confirmation_choice', _conf.choice || _finalMsgWithInject);
+      }
       if (ids.length) fd.append('attachments', JSON.stringify(ids));
       // Auto-save & send active doc ID so the backend sees latest content
       if (documentModule && activeDocIdForSend) {
