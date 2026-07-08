@@ -2826,6 +2826,8 @@ async function initEmailAccountsSettings() {
   if (tasksBtn && tasksBtn.dataset.bound !== '1') {
     tasksBtn.dataset.bound = '1';
     tasksBtn.addEventListener('click', async () => {
+      // Close settings first so Tasks isn't hidden behind this modal.
+      if (modalEl && !modalEl.classList.contains('hidden')) close();
       try {
         const mod = await import('./tasks.js');
         const openTasks = mod.openTasks || (mod.default && mod.default.openTasks);
@@ -2834,6 +2836,43 @@ async function initEmailAccountsSettings() {
       } catch (_) {
         document.getElementById('tool-tasks-btn')?.click();
       }
+    });
+  }
+  const localOnlyToggle = el('set-email-local-only');
+  const localOnlyMsg = el('set-email-local-only-msg');
+  if (localOnlyToggle && localOnlyToggle.dataset.bound !== '1') {
+    localOnlyToggle.dataset.bound = '1';
+    (async () => {
+      try {
+        const emailApi = await import('./emailApi.js');
+        localOnlyToggle.checked = await emailApi.loadLocalOnlyMode();
+      } catch (_) {}
+    })();
+    localOnlyToggle.addEventListener('change', async () => {
+      const on = localOnlyToggle.checked;
+      try {
+        const emailApi = await import('./emailApi.js');
+        await emailApi.setLocalOnlyMode(on);
+        if (localOnlyMsg) {
+          localOnlyMsg.textContent = on ? 'Local only on' : 'Local only off';
+          localOnlyMsg.style.color = 'var(--green,#50fa7b)';
+          setTimeout(() => { if (localOnlyMsg) localOnlyMsg.textContent = ''; }, 2000);
+        }
+        const libToggle = document.getElementById('email-lib-local-only');
+        if (libToggle) libToggle.checked = on;
+        try {
+          window.dispatchEvent(new CustomEvent('odysseus:email-local-only-changed', { detail: { on } }));
+        } catch (_) {}
+      } catch (e) {
+        localOnlyToggle.checked = !on;
+        if (localOnlyMsg) {
+          localOnlyMsg.textContent = 'Save failed';
+          localOnlyMsg.style.color = 'var(--red)';
+        }
+      }
+    });
+    window.addEventListener('odysseus:email-local-only-changed', (e) => {
+      if (e.detail && typeof e.detail.on === 'boolean') localOnlyToggle.checked = e.detail.on;
     });
   }
   const listEl = el('set-email-accounts-list');

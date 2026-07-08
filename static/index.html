@@ -1972,6 +1972,12 @@
           </div>
 
           <div class="admin-card">
+            <h2 style="display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:1px;opacity:0.6;flex-shrink:0"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>Local only<span style="flex:1"></span><label class="admin-switch" title="List and read from the local mirror instead of live IMAP"><input type="checkbox" id="set-email-local-only"><span class="admin-slider"></span></label></h2>
+            <div class="admin-toggle-sub" style="margin-bottom:4px;">When on, the email library and agent use the local mirror only. Unpause <strong>Email Local Sync</strong> in Tasks so the mirror stays fresh.</div>
+            <span id="set-email-local-only-msg" style="font-size:11px;"></span>
+          </div>
+
+          <div class="admin-card">
             <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.6"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Writing Style</h2>
             <div class="admin-toggle-sub" style="margin-bottom:8px">AI-extracted from your sent emails. Used when AI drafts replies.</div>
             <div class="settings-col">
@@ -1986,7 +1992,7 @@
 
           <div class="admin-card" id="set-local-email-rules-card">
             <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.6"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>Local email rules</h2>
-            <div class="admin-toggle-sub" style="margin-bottom:8px">Configure which folders sync into the local mirror and how backfill runs. Toggle Local only in the email library header to read from the mirror instead of live IMAP.</div>
+            <div class="admin-toggle-sub" style="margin-bottom:8px">Configure which folders sync into the local mirror and how backfill runs.</div>
             <div class="settings-col">
               <div class="settings-row" style="align-items:center;">
                 <label class="settings-label">Mirror sync enabled</label>

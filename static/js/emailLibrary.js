@@ -2596,6 +2596,9 @@ function _wireLocalOnlyToggle() {
       await _updateLocalSyncChip();
       _libListCache.clear();
       await _loadEmailsFresh({ force: true });
+      try {
+        window.dispatchEvent(new CustomEvent('odysseus:email-local-only-changed', { detail: { on: toggle.checked } }));
+      } catch (_) {}
     } catch (_) {
       toggle.checked = !toggle.checked;
     }
