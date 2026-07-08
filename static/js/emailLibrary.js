@@ -680,9 +680,11 @@ function _acct() {
 // results and __scheduled__ are deliberately not cached.
 const _libListCache = new Map();
 const _LIB_CACHE_MAX = 24;
+const _LIB_ACCOUNTS_TTL_MS = 60_000;
 let _libPrewarmTimer = null;
 let _libPrewarmPromise = null;
 let _libLastPrewarmAt = 0;
+let _libAccountsLoadedAt = 0;
 
 function _libCacheKeyFor(accountId, folder, filter, hasAttachments) {
   return [
@@ -748,23 +750,18 @@ async function _prewarmDefaultEmailView() {
   const ck = _libCacheKeyFor(accountId, folder, filter, false);
   if (_libCacheGet(ck)) return;
 
-  // The accounts request is cheap and warms the account strip for first open.
-  // Then the list request warms both the client cache and the backend IMAP/read
-  // cache. Failure stays silent: no configured mail should not nag on app boot.
+  // Warm accounts first so list/prewarm requests carry account_id (avoids
+  // hitting the default mailbox for every background fetch).
   try {
-    const accountsRes = await fetch(`${API_BASE}/api/email/accounts`, { credentials: 'same-origin' });
-    if (accountsRes.ok) {
-      const accountsData = await accountsRes.json().catch(() => ({}));
-      if (Array.isArray(accountsData.accounts)) state._libAccounts = accountsData.accounts.filter(a => a.enabled !== false);
-    }
+    await _loadAccounts();
   } catch (_) {}
 
   const res = await emailApi.listEmails({
     folder,
-    limit: 500,
+    limit: 100,
     offset: 0,
     filter,
-    accountId,
+    accountId: state._libAccountId || '',
   });
   if (!res.ok) return;
   const data = await res.json().catch(() => null);
@@ -1424,23 +1421,38 @@ export function openEmailLibrary(opts = {}) {
   })();
 }
 
-async function _loadAccounts() {
-  try {
-    const r = await fetch(`${API_BASE}/api/email/accounts`);
-    if (!r.ok) return;
-    const d = await r.json();
-    state._libAccounts = (d.accounts || []).filter(a => a.enabled !== false);
-  } catch (_) { state._libAccounts = []; }
-  // The 'Default' chip is gone — pick an explicit account so the email
-  // list and any per-email actions (open in new tab, mark read, etc.)
-  // always carry an account_id and can't desync from the server's
-  // is_default state.
+function _ensureDefaultAccount() {
   if (!state._libAccountId && state._libAccounts.length) {
     const def = state._libAccounts.find(a => a.is_default) || state._libAccounts[0];
-    state._libAccountId = def.id;
+    state._libAccountId = def?.id || null;
     _publishActiveAccount();
   }
+}
+
+async function _loadAccounts({ force = false } = {}) {
+  const hasCachedAccounts = Array.isArray(state._libAccounts) && state._libAccounts.length > 0;
+  const accountsFresh = _libAccountsLoadedAt && (Date.now() - _libAccountsLoadedAt) < _LIB_ACCOUNTS_TTL_MS;
+  if (!force && hasCachedAccounts && accountsFresh) {
+    _ensureDefaultAccount();
+    _renderAccountsStrip();
+    return;
+  }
+  try {
+    const r = await fetch(`${API_BASE}/api/email/accounts`, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error(`accounts ${r.status}`);
+    const d = await r.json();
+    state._libAccounts = (d.accounts || []).filter(a => a.enabled !== false);
+    _libAccountsLoadedAt = Date.now();
+  } catch (_) {
+    if (!hasCachedAccounts) state._libAccounts = [];
+  }
+  _ensureDefaultAccount();
   _renderAccountsStrip();
+}
+
+/** Load accounts + publish active account id before inbox/prewarm list calls. */
+export async function bootstrapEmailAccounts({ force = false } = {}) {
+  await _loadAccounts({ force });
 }
 
 function _renderAccountsStrip() {
