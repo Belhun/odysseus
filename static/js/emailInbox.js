@@ -5,7 +5,7 @@
 
 import spinnerModule from './spinner.js';
 import sessionModule from './sessions.js';
-import { initEmailLibrary, openEmailLibrary, closeEmailLibrary, isOpen as isLibOpen, prewarmEmailLibrary } from './emailLibrary.js';
+import { initEmailLibrary, openEmailLibrary, closeEmailLibrary, isOpen as isLibOpen, prewarmEmailLibrary, bootstrapEmailAccounts } from './emailLibrary.js';
 import * as Modals from './modalManager.js';
 import { applyEdgeDock } from './modalSnap.js';
 import { buildReplyAllCc } from './emailLibrary/replyRecipients.js';
@@ -197,9 +197,13 @@ function _bindEvents() {
   }
 
   // Initial unread count check, refresh every 60s
-  _refreshUnreadCount();
+  bootstrapEmailAccounts()
+    .catch(() => {})
+    .finally(() => {
+      _refreshUnreadCount();
+      prewarmEmailLibrary({ delay: 3000 });
+    });
   setInterval(_refreshUnreadCount, 60000);
-  prewarmEmailLibrary({ delay: 3000 });
 
   // Deep-link: #email=<folder>:<uid> opens the library and expands that card
   _maybeOpenFromHash();
