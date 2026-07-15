@@ -1117,6 +1117,42 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "read_local_emails",
+            "description": "Read emails from the local mirror (fast, full history, offline). List with limit/offset, search with q, or full=true with uid (preferred) or id for one message body + attachment local paths. When Local only mode is on, this is the only read/search path.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "folder": {"type": "string", "description": "Folder (default INBOX)"},
+                    "account": {"type": "string", "description": "Account name/email/id from list_email_accounts"},
+                    "limit": {"type": "integer", "description": "Max rows (default 10)"},
+                    "offset": {"type": "integer", "description": "Skip N newest rows for paging (default 0)"},
+                    "since": {"type": "string", "description": "Optional start date (natural language or ISO)"},
+                    "until": {"type": "string", "description": "Optional end date (natural language or ISO)"},
+                    "q": {"type": "string", "description": "Search the local mirror (FTS)"},
+                    "full": {"type": "boolean", "description": "Fetch full body for one message"},
+                    "uid": {"type": "string", "description": "IMAP UID when full=true (preferred over id)"},
+                    "id": {"type": "integer", "description": "Local SQLite row id when full=true"},
+                },
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sync_local_emails",
+            "description": "Sync the local email mirror now (INBOX + Sent). Returns per-folder summary. Background task keeps it fresh; use for on-demand catch-up.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Optional account name/email/id"},
+                    "full": {"type": "boolean", "description": "Backfill full history in one run (default true for manual sync)"},
+                },
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "reply_to_email",
             "description": "SEND a reply email immediately by UID. Do not use this when the user asks to write/draft/open/start a reply; use ui_control action=open_email_reply with body instead so the user can review. Only use when the user explicitly says to send now. Use the exact UID from the latest read_email/list_emails result; never invent UID 1. Automatically threads with In-Reply-To/References headers.",
             "parameters": {

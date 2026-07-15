@@ -1055,6 +1055,10 @@ async def _startup_event():
             await register_builtin_servers(mcp_manager)
         except BaseException as e:
             logger.warning(f"Built-in MCP registration failed (non-critical): {type(e).__name__}: {e}")
+        # Do not wrap connect_all_enabled in asyncio.wait_for. mcp.client.stdio
+        # uses an internal anyio task group; cross-task cancellation from
+        # wait_for raises "Attempted to exit cancel scope in a different task
+        # than it was entered in" and can destabilize the event loop.
         try:
             await mcp_manager.connect_all_enabled()
         except asyncio.TimeoutError:
