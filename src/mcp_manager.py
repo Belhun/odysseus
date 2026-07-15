@@ -481,7 +481,7 @@ class McpManager:
             return {"error": f"MCP server not connected: {server_id}", "exit_code": 1}
 
         try:
-            result = await self._do_call(session, tool_name, arguments, server_id=server_id)
+            result = await self._do_call(session, tool_name, arguments)
         except Exception as e:
             # Auto-reconnect for builtin servers whose subprocess may have died
             if self.is_builtin(server_id):
@@ -491,7 +491,7 @@ class McpManager:
                     session = self._sessions.get(server_id)
                     if session:
                         try:
-                            result = await self._do_call(session, tool_name, arguments, server_id=server_id)
+                            result = await self._do_call(session, tool_name, arguments)
                         except Exception as e2:
                             logger.error(f"MCP tool call failed after reconnect: {qualified_name}: {e2}")
                             return {"error": str(e2), "exit_code": 1}
@@ -506,11 +506,8 @@ class McpManager:
 
         return result
 
-    async def _do_call(self, session, tool_name: str, arguments: Dict, server_id: str = "") -> Dict:
+    async def _do_call(self, session, tool_name: str, arguments: Dict) -> Dict:
         """Execute a single MCP tool call and return result dict."""
-        import time as _time
-        from core.perf_emit import emit
-        t0 = _time.perf_counter()
         result = await session.call_tool(tool_name, arguments)
         output_parts = []
         images = []
@@ -535,17 +532,6 @@ class McpManager:
         }
         if images:
             result_dict["images"] = images
-        try:
-            emit(
-                "mcp.tool.completed",
-                server_id=server_id,
-                tool_name=tool_name,
-                duration_ms=round((_time.perf_counter() - t0) * 1000, 2),
-                is_error=is_error,
-                exit_code=result_dict.get("exit_code", 0),
-            )
-        except Exception:
-            pass
         return result_dict
 
     async def _reconnect_builtin(self, server_id: str) -> bool:

@@ -26,6 +26,19 @@ import tasksModule from './js/tasks.js?v=20260630tasksactivity';
 import calendarModule from './js/calendar.js';
 import notesModule from './js/notes.js';
 import adminModule from './js/admin.js';
+
+let financeModule = null;
+
+async function _loadFinanceModule() {
+  if (financeModule) return financeModule;
+  try {
+    const mod = await import('/static/plugins/finance/js/index.js');
+    financeModule = mod.default || mod;
+    return financeModule;
+  } catch (_) {
+    return null;
+  }
+}
 import settingsModule from './js/settings.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
 import './js/modalManager.js';
@@ -1041,6 +1054,20 @@ function initializeEventListeners() {
     });
   }
 
+  // Finance tool button
+  const toolFinanceBtn = el('tool-finance-btn');
+  if (toolFinanceBtn) {
+    toolFinanceBtn.addEventListener('click', async () => {
+      const mod = await _loadFinanceModule();
+      if (!mod) return;
+      const Modals = await import('./js/modalManager.js');
+      if (!Modals.toggle('finance-modal')) {
+        if (mod.isFinanceOpen()) mod.closeFinance();
+        else mod.openFinance();
+      }
+    });
+  }
+
   // Gallery tool button
   const toolGalleryBtn = el('tool-gallery-btn');
   if (toolGalleryBtn) {
@@ -1221,6 +1248,7 @@ function initializeEventListeners() {
     },
     '/memory':   () => document.getElementById('tool-memory-btn')?.click(),
     '/gallery':  () => document.getElementById('tool-gallery-btn')?.click(),
+    '/finance':  async () => { const b = el('tool-finance-btn'); if (b) b.click(); },
     '/tasks':    () => document.getElementById('tool-tasks-btn')?.click(),
     '/library':  () => sessionModule && sessionModule.openLibrary && sessionModule.openLibrary(),
   };
@@ -1501,10 +1529,13 @@ function initializeEventListeners() {
         deep_research:   ['research-toggle-btn', 'tool-research-btn', 'overflow-research-btn', 'rail-research'],
         document_editor: ['overflow-doc-btn', 'rail-documents'],
         gallery:         ['tool-gallery-btn', 'rail-gallery'],
+        finance:         ['tool-finance-btn', 'rail-finance'],
       };
       Object.entries(map).forEach(([key, ids]) => {
         if (features[key] === false) {
           ids.forEach(id => { const e = el(id); if (e) e.style.display = 'none'; });
+        } else if (features[key] === true) {
+          ids.forEach(id => { const e = el(id); if (e) e.style.display = ''; });
         }
       });
       // Re-apply the user's Appearance UI-vis preferences after the
@@ -2615,6 +2646,7 @@ function initializeEventListeners() {
     'tool-compare':        '#tool-compare-btn',
     'tool-cookbook':       '#tool-cookbook-btn',
     'tool-research':       '#tool-research-btn',
+    'tool-finance':        '#tool-finance-btn',
     'tool-gallery':        '#tool-gallery-btn',
     'tool-library':        '#tool-library-btn',
     'tool-memory':         '#tool-memory-btn',
@@ -3663,6 +3695,7 @@ function startOdysseusApp() {
     'rail-memory':    'tool-memory-btn',
     'rail-theme':     'tool-theme-btn',
     'rail-email':     'email-section-title',
+    'rail-finance':   'tool-finance-btn',
   };
   Object.entries(_railToolMap).forEach(([railId, toolId]) => {
     const railBtn = el(railId);

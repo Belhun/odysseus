@@ -425,13 +425,13 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ui_control",
-            "description": "Control the user interface. Actions: toggle (turn tools on/off), open_panel (open a modal: documents/library, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook), open_email_reply (open an email reply draft document; DOES NOT send. For 'write/draft a reply saying X', include body with the drafted reply), set_mode, switch_model, set_theme (built-in presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute), create_theme (CREATE any custom theme with a name + colors object — pick distinctive, evocative hex colors that match the requested aesthetic, NOT generic defaults. The theme auto-applies after creation). When a user asks for ANY theme not in the built-in preset list, ALWAYS use create_theme.",
+            "description": "Control the user interface. Actions: toggle (turn tools on/off), open_panel (open a modal: documents/library, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook, finance/banking/budget), open_email_reply (open an email reply draft document; DOES NOT send. For 'write/draft a reply saying X', include body with the drafted reply), set_mode, switch_model, set_theme (built-in presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute), create_theme (CREATE any custom theme with a name + colors object — pick distinctive, evocative hex colors that match the requested aesthetic, NOT generic defaults. The theme auto-applies after creation). When a user asks for ANY theme not in the built-in preset list, ALWAYS use create_theme.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["toggle", "open_panel", "open_email_reply", "set_mode", "switch_model", "set_theme", "create_theme", "get_toggles"],
                                "description": "The UI action. Use set_theme for presets, create_theme to build a custom theme with any hex colors"},
-                    "name": {"type": "string", "description": "For toggle: web, bash, research, incognito, document_editor (aliases: shell, search, deepresearch, documents). For open_panel: documents, gallery, email, sessions, notes, brain/memories, skills, settings, cookbook. For open_email_reply: email UID. For set_theme: a preset theme name. For create_theme: the custom theme name."},
+                    "name": {"type": "string", "description": "For toggle: web, bash, research, incognito, document_editor (aliases: shell, search, deepresearch, documents). For open_panel: documents, gallery, email, sessions, notes, brain/memories, skills, settings, cookbook, finance. For open_email_reply: email UID. For set_theme: a preset theme name. For create_theme: the custom theme name."},
                     "value": {"type": "string", "description": "Value: on/off for toggle, agent/chat for set_mode, model name for switch_model, theme name for set_theme, or folder for open_email_reply"},
                     "uid": {"type": "string", "description": "Email UID for open_email_reply"},
                     "folder": {"type": "string", "description": "Email folder for open_email_reply (default INBOX)"},
@@ -488,7 +488,19 @@ FUNCTION_TOOL_SCHEMAS = [
                             "required": ["label"]
                         }
                     },
-                    "multi": {"type": "boolean", "description": "Set true ONLY when the question explicitly allows choosing more than one option. Otherwise omit it or set false. Default false."}
+                    "multi": {"type": "boolean", "description": "Set true ONLY when the question explicitly allows choosing more than one option. Otherwise omit it or set false. Default false."},
+                    "confirmation": {
+                        "type": "object",
+                        "description": "Optional gated-action block. When set, ask_user mints a confirmation_token the user must approve before a privileged tool runs.",
+                        "properties": {
+                            "domain": {"type": "string", "description": "Gate domain, e.g. finance, phonepi, email"},
+                            "tool": {"type": "string", "description": "Tool name that will run after approval, e.g. manage_finance"},
+                            "action": {"type": "string", "description": "Gated action name inside the tool"},
+                            "payload": {"type": "object", "description": "Exact args that the tool must use after approval"},
+                            "approve_labels": {"type": "array", "items": {"type": "string"}, "description": "Option labels that count as approval"},
+                        },
+                        "required": ["domain", "tool", "action", "payload"],
+                    },
                 },
                 "required": ["question", "options"]
             }
@@ -575,6 +587,70 @@ FUNCTION_TOOL_SCHEMAS = [
                 "required": ["action"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_finance",
+            "description": "Read and manage local finance data: accounts, transactions, spending by category, budgets, and trends. Use for spending questions, budget checks, and transaction lookups. Bank CSV/OFX import is UI-only — use ui_control open_panel finance to open the Import tab. Prefer spending_report for 'where did my money go' questions; use list_transactions only when the user needs specific rows (max 50). To add categories, use ask_user with a confirmation block first. For multiple categories, put an `items` array in confirmation.payload (or use create_categories with a `categories` array after approval). Reuse the same confirmation_token for each create_category call, or create them all at once with create_categories.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "list_accounts",
+                            "list_transactions",
+                            "spending_report",
+                            "budget_status",
+                            "trends",
+                            "list_categories",
+                            "create_category",
+                            "create_categories",
+                            "list_import_batches",
+                            "categorize_transaction",
+                            "set_budget",
+                            "create_rule",
+                        ],
+                        "description": "Action to perform",
+                    },
+                    "month": {"type": "string", "description": "YYYY-MM for spending/budget/trends filters"},
+                    "account_id": {"type": "string", "description": "Filter transactions by account id or prefix"},
+                    "category_id": {"type": "string", "description": "Category id or prefix"},
+                    "name": {"type": "string", "description": "Category name for create_category"},
+                    "category_name": {"type": "string", "description": "Alias for name on create_category"},
+                    "is_income": {"type": "boolean", "description": "Income flag for top-level create_category (subcategories inherit from parent)"},
+                    "parent_id": {"type": "string", "description": "Parent category id or prefix for create_category (one subcategory level)"},
+                    "color": {"type": "string", "description": "Hex color for create_category (default #5b8abf)"},
+                    "categories": {
+                        "type": "array",
+                        "description": "Batch category objects for create_categories. Each needs name; optional parent_id, color, is_income.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "parent_id": {"type": "string"},
+                                "color": {"type": "string"},
+                                "is_income": {"type": "boolean"},
+                            },
+                        },
+                    },
+                    "confirmation_token": {
+                        "type": "string",
+                        "description": "Required for gated actions like create_category — token from ask_user after user approval",
+                    },
+                    "transaction_id": {"type": "string", "description": "Transaction id or prefix for categorize_transaction"},
+                    "search": {"type": "string", "description": "Payee search text for list_transactions"},
+                    "limit": {"type": "integer", "description": "Max transactions to return (default 25, max 50)"},
+                    "months": {"type": "integer", "description": "Months of history for trends (default 6)"},
+                    "limit_cents": {"type": "integer", "description": "Budget limit in cents for set_budget"},
+                    "limit_dollars": {"type": "number", "description": "Budget limit in dollars for set_budget"},
+                    "pattern": {"type": "string", "description": "Payee match pattern for create_rule"},
+                    "priority": {"type": "integer", "description": "Rule priority for create_rule"},
+                },
+                "required": ["action"],
+            },
+        },
     },
     {
         "type": "function",
