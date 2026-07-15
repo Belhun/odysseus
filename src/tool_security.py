@@ -39,6 +39,12 @@ LOCAL_EMAIL_TOOLS = frozenset({
     "sync_local_emails",
 })
 
+LIVE_IMAP_READ_TOOLS = frozenset({
+    "list_emails",
+    "read_email",
+    "search_emails",
+})
+
 
 # Tools regular/public users must not execute directly. These either expose
 # server/runtime access, sensitive user data, external messaging, persistent
@@ -274,3 +280,31 @@ def blocked_tools_for_owner(owner: Optional[str]) -> Set[str]:
     if owner_is_admin_or_single_user(owner):
         return set()
     return set(NON_ADMIN_BLOCKED_TOOLS)
+
+
+def is_email_local_only(owner: Optional[str]) -> bool:
+    """True when the user has Local only email mode enabled."""
+    try:
+        from src.settings import get_user_setting
+        return bool(get_user_setting("email_local_only", owner or "", False))
+    except Exception:
+        return False
+
+
+def local_only_live_email_block_message() -> str:
+    return (
+        "Local only email mode is enabled. Live IMAP read tools (list_emails, "
+        "read_email, search_emails) are blocked. Run sync_local_emails to refresh "
+        "the local mirror, then use read_local_emails with uid (IMAP UID, not the "
+        "local row id) for full bodies, or pass q to search the local store."
+    )
+
+
+def live_imap_read_disabled_tools(owner: Optional[str]) -> Set[str]:
+    """Policy names to deny when Local only mode is on."""
+    if not is_email_local_only(owner):
+        return set()
+    disabled: set[str] = set()
+    for tool in LIVE_IMAP_READ_TOOLS:
+        disabled.update(email_tool_policy_names(tool))
+    return disabled

@@ -74,7 +74,7 @@ async def test_read_local_emails_negative_limit_clamped(local_db, monkeypatch):
 
     captured = {}
 
-    def fake_query(owner, account_id=None, folder="INBOX", limit=10, offset=0, since=None, until=None):
+    def fake_query(owner, account_id=None, folder="INBOX", limit=10, offset=0, since=None, until=None, **kwargs):
         captured["limit"] = limit
         return []
 

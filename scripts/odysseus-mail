@@ -296,6 +296,8 @@ def cmd_sync_local(args) -> None:
     from routes.email_local_store import sync_all
     result = sync_all(owner=args.owner or "", full=True)
     emit(result, args)
+    if result.get("busy"):
+        sys.exit(2)
     if not result.get("ok"):
         sys.exit(1)
 
@@ -412,7 +414,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     psl = sub.add_parser(
         "sync-local",
-        help="one full pass of the local email mirror (INBOX + Sent)",
+        help="one full pass of the local email mirror (INBOX + Sent); exit 0=ok, 1=failed, 2=busy",
         parents=[common],
     )
     psl.add_argument("--owner", default="", help="Owner scope for multi-user installs")

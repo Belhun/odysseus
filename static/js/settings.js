@@ -2339,6 +2339,7 @@ function initAll() {
   initAccount();
   initIntegrations();
   initEmailSettings();
+  initLocalEmailRules();
   initEmailAccountsSettings();
   initReminderSettings();
   initUnifiedIntegrations();
@@ -2825,6 +2826,8 @@ async function initEmailAccountsSettings() {
   if (tasksBtn && tasksBtn.dataset.bound !== '1') {
     tasksBtn.dataset.bound = '1';
     tasksBtn.addEventListener('click', async () => {
+      // Close settings first so Tasks isn't hidden behind this modal.
+      if (modalEl && !modalEl.classList.contains('hidden')) close();
       try {
         const mod = await import('./tasks.js');
         const openTasks = mod.openTasks || (mod.default && mod.default.openTasks);
@@ -2833,6 +2836,43 @@ async function initEmailAccountsSettings() {
       } catch (_) {
         document.getElementById('tool-tasks-btn')?.click();
       }
+    });
+  }
+  const localOnlyToggle = el('set-email-local-only');
+  const localOnlyMsg = el('set-email-local-only-msg');
+  if (localOnlyToggle && localOnlyToggle.dataset.bound !== '1') {
+    localOnlyToggle.dataset.bound = '1';
+    (async () => {
+      try {
+        const emailApi = await import('./emailApi.js');
+        localOnlyToggle.checked = await emailApi.loadLocalOnlyMode();
+      } catch (_) {}
+    })();
+    localOnlyToggle.addEventListener('change', async () => {
+      const on = localOnlyToggle.checked;
+      try {
+        const emailApi = await import('./emailApi.js');
+        await emailApi.setLocalOnlyMode(on);
+        if (localOnlyMsg) {
+          localOnlyMsg.textContent = on ? 'Local only on' : 'Local only off';
+          localOnlyMsg.style.color = 'var(--green,#50fa7b)';
+          setTimeout(() => { if (localOnlyMsg) localOnlyMsg.textContent = ''; }, 2000);
+        }
+        const libToggle = document.getElementById('email-lib-local-only');
+        if (libToggle) libToggle.checked = on;
+        try {
+          window.dispatchEvent(new CustomEvent('odysseus:email-local-only-changed', { detail: { on } }));
+        } catch (_) {}
+      } catch (e) {
+        localOnlyToggle.checked = !on;
+        if (localOnlyMsg) {
+          localOnlyMsg.textContent = 'Save failed';
+          localOnlyMsg.style.color = 'var(--red)';
+        }
+      }
+    });
+    window.addEventListener('odysseus:email-local-only-changed', (e) => {
+      if (e.detail && typeof e.detail.on === 'boolean') localOnlyToggle.checked = e.detail.on;
     });
   }
   const listEl = el('set-email-accounts-list');
@@ -3277,6 +3317,127 @@ async function initEmailSettings() {
     } catch (e) {
       if (msg) msg.textContent = 'Failed';
     }
+  });
+}
+
+async function initLocalEmailRules() {
+  const card = el('set-local-email-rules-card');
+  if (!card) return;
+
+  const folderSel = el('set-local-sync-folders');
+  const backfillIn = el('set-local-backfill-batch');
+  const maxAttIn = el('set-local-max-attachment-mb');
+  const budgetIn = el('set-local-attachment-budget-mb');
+  const syncNote = el('set-local-sync-enabled-note');
+  const msg = el('set-local-email-rules-msg');
+
+  const PRESETS = [
+    { value: '__ALL_MAIL__', label: 'All Mail (recommended)' },
+    { value: 'INBOX', label: 'INBOX' },
+    { value: 'Sent', label: 'Sent' },
+  ];
+
+  const populateFolders = (imapFolders, selected) => {
+    if (!folderSel) return;
+    const selectedSet = new Set(Array.isArray(selected) ? selected : []);
+    folderSel.innerHTML = '';
+    const addOpt = (value, label) => {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      opt.selected = selectedSet.has(value);
+      folderSel.appendChild(opt);
+    };
+    PRESETS.forEach(p => addOpt(p.value, p.label));
+    (imapFolders || []).forEach(f => {
+      const name = f.name || f;
+      if (!name || PRESETS.some(p => p.value === name)) return;
+      addOpt(name, name);
+    });
+  };
+
+  try {
+    const [prefsRes, settingsRes, foldersRes] = await Promise.all([
+      fetch('/api/prefs/email_local_sync_folders', { credentials: 'same-origin' }),
+      fetch('/api/auth/settings', { credentials: 'same-origin' }),
+      fetch('/api/email/folders', { credentials: 'same-origin' }).catch(() => null),
+    ]);
+    let selectedFolders = ['__ALL_MAIL__'];
+    if (prefsRes.ok) {
+      const prefData = await prefsRes.json();
+      if (Array.isArray(prefData.value) && prefData.value.length) {
+        selectedFolders = prefData.value;
+      }
+    }
+    let globalSettings = {};
+    if (settingsRes.ok) {
+      globalSettings = await settingsRes.json();
+    }
+    if (syncNote) {
+      const enabled = globalSettings.email_local_sync_enabled !== false;
+      syncNote.textContent = enabled
+        ? 'Enabled globally (admin can disable in app settings)'
+        : 'Disabled globally — enable email_local_sync_enabled in admin settings';
+    }
+    let imapFolders = [];
+    if (foldersRes && foldersRes.ok) {
+      const fd = await foldersRes.json();
+      imapFolders = fd.folders || [];
+    }
+    populateFolders(imapFolders, selectedFolders);
+
+    const backfillPref = await fetch('/api/prefs/email_local_sync_backfill_batch', { credentials: 'same-origin' });
+    if (backfillPref.ok) {
+      const bd = await backfillPref.json();
+      if (backfillIn && bd.value != null) backfillIn.value = bd.value;
+    } else if (backfillIn) {
+      backfillIn.value = globalSettings.email_local_sync_backfill_batch || 500;
+    }
+
+    const maxBytes = globalSettings.email_local_sync_max_attachment_bytes || 15_728_640;
+    const budgetBytes = globalSettings.email_local_sync_attachment_budget_bytes || 402_653_184;
+    if (maxAttIn) maxAttIn.value = Math.round(maxBytes / (1024 * 1024));
+    if (budgetIn) budgetIn.value = Math.round(budgetBytes / (1024 * 1024));
+  } catch (_) {
+    populateFolders([], ['__ALL_MAIL__']);
+  }
+
+  el('set-local-email-rules-save')?.addEventListener('click', async () => {
+    if (msg) msg.textContent = 'Saving…';
+    try {
+      const selected = folderSel
+        ? Array.from(folderSel.selectedOptions).map(o => o.value).filter(Boolean)
+        : ['__ALL_MAIL__'];
+      const folders = selected.length ? selected : ['__ALL_MAIL__'];
+      const backfill = parseInt(backfillIn?.value, 10) || 500;
+      await fetch('/api/prefs/email_local_sync_folders', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: folders }),
+      });
+      await fetch('/api/prefs/email_local_sync_backfill_batch', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: Math.max(1, Math.min(500, backfill)) }),
+      });
+      const maxMb = parseInt(maxAttIn?.value, 10) || 15;
+      const budgetMb = parseInt(budgetIn?.value, 10) || 384;
+      await fetch('/api/auth/settings', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email_local_sync_max_attachment_bytes: maxMb * 1024 * 1024,
+          email_local_sync_attachment_budget_bytes: budgetMb * 1024 * 1024,
+        }),
+      });
+      if (msg) msg.textContent = '✓ Saved';
+    } catch (e) {
+      if (msg) msg.textContent = 'Failed to save';
+    }
+    setTimeout(() => { if (msg) msg.textContent = ''; }, 3000);
   });
 }
 

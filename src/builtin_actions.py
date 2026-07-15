@@ -2758,23 +2758,16 @@ async def action_sync_local_emails(owner: str, **kwargs) -> Tuple[str, bool]:
 
     import asyncio
     result = await asyncio.to_thread(sync_all, owner, full=False)
+    if result.get("busy"):
+        raise TaskNoop("sync already in progress")
     if not result.get("ok"):
         err = result.get("error") or "sync failed"
         if "no email accounts" in str(err).lower():
             raise TaskNoop(err)
         return err, False
-    lines = []
-    for item in result.get("results") or []:
-        if item.get("error"):
-            lines.append(f"{item.get('account', item.get('account_id'))}/{item.get('folder')}: error {item['error']}")
-        else:
-            lines.append(
-                f"{item.get('account', item.get('account_id'))}/{item.get('folder')}: "
-                f"+{item.get('new', 0)} new, {item.get('backfilled', 0)} backfilled, "
-                f"flags {item.get('flags_updated', 0)}, "
-                f"backfill_complete={item.get('backfill_complete', False)}"
-            )
-    return "\n".join(lines) or "Local email sync complete", True
+    from routes.email_local_store import format_sync_all_log
+
+    return format_sync_all_log(result, duration_seconds=result.get("duration_seconds")), True
 
 
 BUILTIN_ACTIONS = {
