@@ -289,6 +289,19 @@ def cmd_poll_summary(args) -> None:
     emit({"message": msg or "(no output)"}, args)
 
 
+# ─── sync-local ──────────────────────────────────────────────────────
+
+def cmd_sync_local(args) -> None:
+    """One full pass of the local email mirror (INBOX + Sent)."""
+    from routes.email_local_store import sync_all
+    result = sync_all(owner=args.owner or "", full=True)
+    emit(result, args)
+    if result.get("busy"):
+        sys.exit(2)
+    if not result.get("ok"):
+        sys.exit(1)
+
+
 # ─── send ────────────────────────────────────────────────────────────
 
 def cmd_send(args) -> None:
@@ -398,6 +411,14 @@ def _build_parser() -> argparse.ArgumentParser:
     psm.add_argument("--spam", action="store_true", default=False, help="also run AI spam-classify step")
     psm.add_argument("--days", type=int, default=1, help="how far back to scan (default 1)")
     psm.set_defaults(func=cmd_poll_summary)
+
+    psl = sub.add_parser(
+        "sync-local",
+        help="one full pass of the local email mirror (INBOX + Sent); exit 0=ok, 1=failed, 2=busy",
+        parents=[common],
+    )
+    psl.add_argument("--owner", default="", help="Owner scope for multi-user installs")
+    psl.set_defaults(func=cmd_sync_local)
 
     return p
 

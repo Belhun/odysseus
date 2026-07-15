@@ -621,7 +621,7 @@ async def _execute_tool_block_impl(
         do_list_serve_presets, do_serve_preset, do_adopt_served_model,
         do_list_cookbook_servers,
         do_edit_image, do_trigger_research, do_manage_research, do_resolve_contact,
-        do_manage_contact,
+        do_manage_contact, do_read_local_emails, do_sync_local_emails,
         do_vault_search, do_vault_get, do_vault_unlock,
         do_app_api,
     )
@@ -683,6 +683,21 @@ async def _execute_tool_block_impl(
         result = {"error": f"Tool '{tool}' is disabled by user.", "exit_code": 1}
         logger.info(f"Tool blocked by user: {tool}")
         return desc, result
+
+    from src.tool_security import (
+        LIVE_IMAP_READ_TOOLS,
+        is_email_local_only,
+        local_only_live_email_block_message,
+    )
+    if is_email_local_only(owner):
+        live_policy = {
+            n for t in LIVE_IMAP_READ_TOOLS for n in email_tool_policy_names(t)
+        }
+        if not policy_names.isdisjoint(live_policy):
+            desc = f"{tool}: BLOCKED (local-only email mode)"
+            result = {"error": local_only_live_email_block_message(), "exit_code": 1}
+            logger.info("Tool blocked by local-only email mode: %s owner=%r", tool, owner)
+            return desc, result
 
     if tool_policy and any(tool_policy.blocks(name) for name in policy_names):
         desc = f"{tool}: BLOCKED"
@@ -869,6 +884,12 @@ async def _execute_tool_block_impl(
     elif tool == "manage_contact":
         desc = "manage_contact"
         result = await do_manage_contact(content, owner=owner)
+    elif tool == "read_local_emails":
+        desc = "read_local_emails"
+        result = await do_read_local_emails(content, owner=owner)
+    elif tool == "sync_local_emails":
+        desc = "sync_local_emails"
+        result = await do_sync_local_emails(content, owner=owner)
     elif tool == "vault_search":
         desc = "vault_search"
         result = await do_vault_search(content, owner=owner)
