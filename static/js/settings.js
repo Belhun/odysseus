@@ -2342,6 +2342,7 @@ function initAll() {
   initLocalEmailRules();
   initEmailAccountsSettings();
   initReminderSettings();
+  initPluginIntegrations();
   initUnifiedIntegrations();
 }
 
@@ -3717,6 +3718,107 @@ python3 -m zipfile -e /tmp/odysseus-claude-skill.zip ~/.claude/
 python3 ~/.claude/skills/odysseus/scripts/odysseus_api.py capabilities`,
   },
 };
+
+let _pluginsInited = false;
+
+async function initPluginIntegrations() {
+  if (_pluginsInited) return;
+  _pluginsInited = true;
+  const listEl = el('plugin-integrations-list');
+  if (!listEl) return;
+
+  async function renderPlugins() {
+    try {
+      const res = await fetch('/api/plugins/catalog', { credentials: 'same-origin' });
+      if (!res.ok) {
+        listEl.innerHTML = '';
+        return;
+      }
+      const data = await res.json();
+      const plugins = data.plugins || [];
+      if (!plugins.length) {
+        listEl.innerHTML = '';
+        return;
+      }
+      listEl.innerHTML = `
+        <div style="font-size:11px;font-weight:600;opacity:0.55;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.4px;">Optional plugins</div>
+        ${plugins.map((p) => {
+          const installed = !!p.installed;
+          const btnLabel = installed ? 'Installed' : 'Install';
+          const btnDisabled = installed ? 'disabled' : '';
+          return `<div class="intg-card plugin-card" data-plugin-id="${p.id}" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb, var(--fg) 3%, transparent);margin-bottom:8px;">
+            <span style="color:var(--accent, var(--red));flex-shrink:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;font-weight:600">${p.name || p.id}</div>
+              <div style="font-size:11px;opacity:0.55;line-height:1.35">${p.description || ''}</div>
+              ${installed ? `<div style="font-size:10px;opacity:0.45;margin-top:2px;">v${p.installed_version || p.version}</div>` : ''}
+            </div>
+            <button type="button" class="admin-btn-sm plugin-install-btn" data-plugin-id="${p.id}" ${btnDisabled} style="white-space:nowrap;">${btnLabel}</button>
+            ${installed ? `<button type="button" class="admin-btn-sm plugin-uninstall-btn" data-plugin-id="${p.id}" style="white-space:nowrap;opacity:0.7;">Uninstall</button>` : ''}
+          </div>`;
+        }).join('')}`;
+      listEl.querySelectorAll('.plugin-install-btn:not([disabled])').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const pluginId = btn.dataset.pluginId;
+          btn.disabled = true;
+          btn.textContent = 'Installing…';
+          try {
+            const r = await fetch(`/api/plugins/${pluginId}/install`, { method: 'POST', credentials: 'same-origin' });
+            const body = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(body.detail || 'Install failed');
+            const restartMsg = body.reload_required
+              ? 'Restart the Odysseus server, then reload this page.'
+              : 'Reload this page to use the new feature.';
+            const already = body.already_installed ? ' (already installed)' : '';
+            uiModule.showToast(`Installed v${body.version || ''}${already} — ${restartMsg}`, 10000);
+            if (!body.reload_required && body.plugin_id === 'finance') {
+              try {
+                const fr = await fetch('/api/auth/features', { credentials: 'same-origin' });
+                if (fr.ok) {
+                  const features = await fr.json();
+                  ['tool-finance-btn', 'rail-finance'].forEach((id) => {
+                    const node = el(id);
+                    if (node) node.style.display = features.finance === false ? 'none' : '';
+                  });
+                }
+              } catch (_) {}
+            }
+            await renderPlugins();
+          } catch (err) {
+            uiModule.showToast(err.message || String(err), 5000);
+            btn.disabled = false;
+            btn.textContent = 'Install';
+          }
+        });
+      });
+      listEl.querySelectorAll('.plugin-uninstall-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const pluginId = btn.dataset.pluginId;
+          if (!await window.styledConfirm(`Uninstall ${pluginId}? Your data can be kept on disk.`, { confirmText: 'Uninstall', danger: true })) return;
+          const r = await fetch(`/api/plugins/${pluginId}/uninstall`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ remove_data: false }),
+          });
+          const body = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            uiModule.showToast(body.detail || 'Uninstall failed', 5000);
+            return;
+          }
+          uiModule.showToast(body.reload_required
+            ? 'Uninstalled — restart the Odysseus server, then reload this page.'
+            : 'Uninstalled — reload this page.', 8000);
+          await renderPlugins();
+        });
+      });
+    } catch (_) {
+      listEl.innerHTML = '';
+    }
+  }
+
+  await renderPlugins();
+}
 
 let _unifiedInited = false;
 
@@ -6086,7 +6188,7 @@ export function close() {
   _tryOpen();
 })();
 
-const settingsModule = { open, close, initIntegrations, initUnifiedIntegrations, syncAdminVisibility, refreshAiModelEndpoints };
+const settingsModule = { open, close, initIntegrations, initPluginIntegrations, initUnifiedIntegrations, syncAdminVisibility, refreshAiModelEndpoints };
 
 
 export default settingsModule;

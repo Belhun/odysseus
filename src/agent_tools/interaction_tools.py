@@ -11,8 +11,12 @@ class AskUserTool:
         no filesystem. It returns an `ask_user` payload that the agent loop turns
         into an `ask_user` SSE event and then ENDS the turn, so the chat waits for
         the user's selection (their choice arrives as the next message).
+
+        Optional ``confirmation`` block mints a session-scoped token for gated
+        tool actions (see docs/CONFIRMATION_GATES.md).
         """
         question, options, multi = "", [], False
+        confirmation_req = None
         raw = (content or "").strip()
         try:
             parsed = json.loads(raw) if raw else {}
@@ -22,6 +26,7 @@ class AskUserTool:
         if isinstance(parsed, dict):
             question = str(parsed.get("question", "")).strip()
             multi = bool(parsed.get("multi") or parsed.get("multiSelect"))
+            confirmation_req = parsed.get("confirmation")
             for opt in (parsed.get("options") or []):
                 if isinstance(opt, dict):
                     label = str(opt.get("label", "")).strip()
@@ -47,9 +52,61 @@ class AskUserTool:
         options = options[:6]  # keep the choice list sane
         desc = f"ask_user: {question[:80]}"
         labels = ", ".join(o["label"] for o in options)
+        ask_payload = {"question": question, "options": options, "multi": multi}
+
+        if isinstance(confirmation_req, dict) and confirmation_req.get("domain"):
+            from src.confirmation_gates import mint_confirmation
+
+            session_id = (ctx or {}).get("session_id") or ""
+            owner = (ctx or {}).get("owner") or ""
+            token, mint_err = mint_confirmation(
+                session_id=session_id,
+                owner=owner,
+                domain=str(confirmation_req.get("domain", "")),
+                tool_name=str(confirmation_req.get("tool") or confirmation_req.get("tool_name") or ""),
+                action=str(confirmation_req.get("action", "")),
+                payload=dict(confirmation_req.get("payload") or {}),
+                approve_labels=confirmation_req.get("approve_labels"),
+                ttl_seconds=confirmation_req.get("ttl_seconds"),
+            )
+            if mint_err:
+                return "ask_user: invalid confirmation", {
+                    "error": mint_err,
+                    "exit_code": 1,
+                }
+            ask_payload["confirmation_token"] = token
+            ask_payload["confirmation"] = {
+                "domain": confirmation_req.get("domain"),
+                "tool": confirmation_req.get("tool") or confirmation_req.get("tool_name"),
+                "action": confirmation_req.get("action"),
+            }
+
+        output = f"Asked the user: {question}\nOptions: {labels}\nAwaiting their selection."
+        if ask_payload.get("confirmation_token"):
+            batch_note = ""
+            if isinstance(confirmation_req, dict):
+                items = confirmation_req.get("items")
+                max_uses = confirmation_req.get("max_uses")
+                if isinstance(items, list) and len(items) > 1:
+                    batch_note = (
+                        f" Batch approval covers {len(items)} items; reuse the same "
+                        f"confirmation_token for each gated call, or use a single "
+                        f"create_categories call with the full categories array."
+                    )
+                elif max_uses and int(max_uses) > 1:
+                    batch_note = (
+                        f" This token allows {int(max_uses)} gated calls; reuse the same "
+                        f"confirmation_token until all approved work is done."
+                    )
+            output += (
+                f"\nConfirmation token minted. After the user approves, pass "
+                f'confirmation_token="{ask_payload["confirmation_token"]}" in each gated tool call.'
+                f"{batch_note}"
+            )
+
         result = {
-            "ask_user": {"question": question, "options": options, "multi": multi},
-            "output": f"Asked the user: {question}\nOptions: {labels}\nAwaiting their selection.",
+            "ask_user": ask_payload,
+            "output": output,
             "exit_code": 0,
         }
         logger.info("Tool executed: %s (%d options, multi=%s)", desc, len(options), multi)
