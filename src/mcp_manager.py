@@ -9,7 +9,9 @@ import json
 import logging
 import os
 import re
+import asyncio 
 from typing import Any, Dict, List, Optional, Set, Tuple
+from src.database import McpServer, SessionLocal
 
 from src.runtime_paths import get_app_root
 
@@ -31,17 +33,6 @@ def _format_mcp_connection_error(name: str, command: str = "", args: Optional[Li
         )
 
     return raw_error
-
-
-def _format_mcp_call_error(error: Exception) -> str:
-    """Return a useful tool-call error when the MCP SDK gives an empty message."""
-    msg = str(error).strip()
-    if msg:
-        return msg
-    name = type(error).__name__
-    if name in ("ClosedResourceError", "BrokenResourceError", "EndOfStream"):
-        return f"{name}: MCP server subprocess is not running (try Reconnect in Admin → MCP)"
-    return f"{name}: MCP tool call failed"
 
 
 # Caps for rendering untrusted MCP tool schemas into the agent prompt (issue #2660).
@@ -203,57 +194,65 @@ class McpManager:
             )
 
             stack = AsyncExitStack()
+            registered = False
+
             try:
                 transport = await stack.enter_async_context(stdio_client(server_params))
                 read_stream, write_stream = transport
                 session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
 
                 await session.initialize()
-
-                # Discover tools
                 tools_result = await session.list_tools()
-            except BaseException:
-                await stack.aclose()
-                raise
-            tools = []
-            for tool in tools_result.tools:
-                tools.append({
-                    "name": tool.name,
-                    "description": tool.description or "",
-                    "input_schema": tool.inputSchema if hasattr(tool, 'inputSchema') else {},
-                    # MCP tool annotations (readOnlyHint / destructiveHint) drive
-                    # plan-mode read-only gating. Absent on many servers, so we
-                    # fall back to a name heuristic in mcp_tool_is_readonly().
-                    "annotations": getattr(tool, 'annotations', None),
-                })
 
-            self._sessions[server_id] = session
-            self._stacks[server_id] = stack
-            self._tools[server_id] = tools
-            # Extract identity hints from env vars (e.g. email address, API name)
-            # so tool descriptions can distinguish between multiple instances of
-            # the same MCP server (e.g. two email accounts).
-            identity_hints = []
-            for k, v in (env or {}).items():
-                k_lower = k.lower()
-                if any(x in k_lower for x in ['email_address', 'account', 'user', 'username']):
-                    identity_hints.append(v)
-            identity = ", ".join(identity_hints) if identity_hints else ""
+                tools = []
+                for tool in tools_result.tools:
+                    tools.append({
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "input_schema": tool.inputSchema if hasattr(tool, "inputSchema") else {},
+                        # MCP tool annotations (readOnlyHint / destructiveHint) drive
+                        # plan-mode read-only gating. Absent on many servers, so we
+                        # fall back to a name heuristic in mcp_tool_is_readonly().
+                        "annotations": getattr(tool, "annotations", None),
+                    })
 
-            self._connections[server_id] = {
-                "status": "connected",
-                "name": name,
-                "transport": "stdio",
-                "tool_count": len(tools),
-                "identity": identity,
-            }
+                # Extract identity hints from env vars (e.g. email address, API name)
+                # so tool descriptions can distinguish between multiple instances of
+                # the same MCP server (e.g. two email accounts).
+                identity_hints = []
+                for k, v in (env or {}).items():
+                    k_lower = k.lower()
+                    if any(x in k_lower for x in ["email_address", "account", "user", "username"]):
+                        identity_hints.append(v)
+                identity = ", ".join(identity_hints) if identity_hints else ""
+
+                self._sessions[server_id] = session
+                self._stacks[server_id] = stack
+                self._tools[server_id] = tools
+                self._connections[server_id] = {
+                    "status": "connected",
+                    "name": name,
+                    "transport": "stdio",
+                    "tool_count": len(tools),
+                    "identity": identity,
+                }
+
+                registered = True
+
+            finally:
+                if not registered:
+                    await stack.aclose()
 
             logger.info(f"MCP server connected: {name} ({server_id}) - {len(tools)} tools via stdio")
             return True
 
         except ImportError:
             logger.warning("MCP package not installed. Install with: pip install mcp")
-            self._connections[server_id] = {"status": "error", "error": "mcp package not installed", "name": name}
+            self._connections[server_id] = {
+                "status": "error",
+                "error": "mcp package not installed",
+                "name": name,
+            }
             return False
 
     async def _connect_sse(self, server_id: str, name: str, url: str) -> bool:
@@ -264,42 +263,46 @@ class McpManager:
             from contextlib import AsyncExitStack
 
             stack = AsyncExitStack()
+            registered = False
+
             try:
                 transport = await stack.enter_async_context(sse_client(url))
                 read_stream, write_stream = transport
                 session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
 
                 await session.initialize()
-
-                # Discover tools
                 tools_result = await session.list_tools()
-            except BaseException:
-                await stack.aclose()
-                raise
-            tools = []
-            for tool in tools_result.tools:
-                tools.append({
-                    "name": tool.name,
-                    "description": tool.description or "",
-                    "input_schema": tool.inputSchema if hasattr(tool, 'inputSchema') else {},
-                    # MCP tool annotations (readOnlyHint / destructiveHint) drive
-                    # plan-mode read-only gating. Absent on many servers, so we
-                    # fall back to a name heuristic in mcp_tool_is_readonly().
-                    "annotations": getattr(tool, 'annotations', None),
-                })
 
-            self._sessions[server_id] = session
-            self._stacks[server_id] = stack
-            self._tools[server_id] = tools
-            self._connections[server_id] = {
-                "status": "connected",
-                "name": name,
-                "transport": "sse",
-                "tool_count": len(tools),
-            }
+                tools = []
+                for tool in tools_result.tools:
+                    tools.append({
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "input_schema": tool.inputSchema if hasattr(tool, 'inputSchema') else {},
+                        # MCP tool annotations (readOnlyHint / destructiveHint) drive
+                        # plan-mode read-only gating. Absent on many servers, so we
+                        # fall back to a name heuristic in mcp_tool_is_readonly().
+                        "annotations": getattr(tool, 'annotations', None),
+                    })
 
-            logger.info(f"MCP server connected: {name} ({server_id}) - {len(tools)} tools via SSE")
-            return True
+                self._sessions[server_id] = session
+                self._stacks[server_id] = stack
+                self._tools[server_id] = tools
+                self._connections[server_id] = {
+                    "status": "connected",
+                    "name": name,
+                    "transport": "sse",
+                    "tool_count": len(tools),
+                }
+
+                registered = True
+
+                logger.info(f"MCP server connected: {name} ({server_id}) - {len(tools)} tools via SSE")
+                return True
+
+            finally:
+                if not registered:
+                    await stack.aclose()
 
         except ImportError:
             logger.warning("MCP package not installed. Install with: pip install mcp")
@@ -405,10 +408,6 @@ class McpManager:
         if stack:
             try:
                 await stack.aclose()
-            except RuntimeError as e:
-                if "cancel scope" not in str(e).lower():
-                    raise
-                logger.warning(f"Error closing MCP server {server_id}: {e}")
             except Exception as e:
                 logger.warning(f"Error closing MCP server {server_id}: {e}")
 
@@ -424,17 +423,29 @@ class McpManager:
         for sid in ids:
             await self.disconnect_server(sid)
 
-    async def connect_all_enabled(self):
-        """Connect to all enabled MCP servers from the database."""
-        from src.database import McpServer, SessionLocal
 
+    async def connect_all_enabled(self):
         db = SessionLocal()
         try:
             servers = db.query(McpServer).filter(McpServer.is_enabled == True).all()
-            for srv in servers:
-                args = json.loads(srv.args) if srv.args else []
-                env = json.loads(srv.env) if srv.env else {}
-                await self.connect_server(
+
+            tasks = [
+                asyncio.create_task(self._connect_with_timeout(srv))
+                for srv in servers
+            ]
+
+            await asyncio.gather(*tasks)
+        finally:
+            db.close()
+
+
+    async def _connect_with_timeout(self, srv):
+        args = json.loads(srv.args) if srv.args else []
+        env = json.loads(srv.env) if srv.env else {}
+
+        try:
+            await asyncio.wait_for(
+                self.connect_server(
                     server_id=srv.id,
                     name=srv.name,
                     transport=srv.transport,
@@ -442,9 +453,16 @@ class McpManager:
                     args=args,
                     env=env,
                     url=srv.url,
-                )
-        finally:
-            db.close()
+                ),
+                timeout=20,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Timed out connecting to %s", srv.name)
+            self._connections[srv.id] = {
+                "status": "timeout",
+                "error": f"Timed out after 20 seconds",
+                "name": srv.name,
+            }
 
     async def call_tool(self, qualified_name: str, arguments: Dict) -> Dict:
         """Call an MCP tool by its qualified name (mcp__{server_id}__{tool_name}).
@@ -463,39 +481,33 @@ class McpManager:
             return {"error": f"MCP server not connected: {server_id}", "exit_code": 1}
 
         try:
-            result = await self._do_call(session, tool_name, arguments, server_id=server_id)
+            result = await self._do_call(session, tool_name, arguments)
         except Exception as e:
-            err_msg = _format_mcp_call_error(e)
-            transport = self._connections.get(server_id, {}).get("transport")
-            # Auto-reconnect stdio servers (PhonePi, builtins, etc.) when the subprocess dies.
-            if transport == "stdio":
-                logger.warning(f"MCP call failed for {qualified_name}, attempting reconnect: {err_msg}")
-                reconnected = await self._reconnect_server(server_id)
+            # Auto-reconnect for builtin servers whose subprocess may have died
+            if self.is_builtin(server_id):
+                logger.warning(f"MCP call failed for {qualified_name}, attempting reconnect: {e}")
+                reconnected = await self._reconnect_builtin(server_id)
                 if reconnected:
                     session = self._sessions.get(server_id)
                     if session:
                         try:
-                            result = await self._do_call(session, tool_name, arguments, server_id=server_id)
+                            result = await self._do_call(session, tool_name, arguments)
                         except Exception as e2:
-                            err2 = _format_mcp_call_error(e2)
-                            logger.error(f"MCP tool call failed after reconnect: {qualified_name}: {err2}")
-                            return {"error": err2, "exit_code": 1}
+                            logger.error(f"MCP tool call failed after reconnect: {qualified_name}: {e2}")
+                            return {"error": str(e2), "exit_code": 1}
                     else:
                         return {"error": f"Reconnected but no session for {server_id}", "exit_code": 1}
                 else:
                     logger.error(f"MCP reconnect failed for {server_id}")
                     return {"error": f"MCP server crashed and reconnect failed: {server_id}", "exit_code": 1}
             else:
-                logger.error(f"MCP tool call failed: {qualified_name}: {err_msg}")
-                return {"error": err_msg, "exit_code": 1}
+                logger.error(f"MCP tool call failed: {qualified_name}: {e}")
+                return {"error": str(e), "exit_code": 1}
 
         return result
 
-    async def _do_call(self, session, tool_name: str, arguments: Dict, server_id: str = "") -> Dict:
+    async def _do_call(self, session, tool_name: str, arguments: Dict) -> Dict:
         """Execute a single MCP tool call and return result dict."""
-        import time as _time
-        from core.perf_emit import emit
-        t0 = _time.perf_counter()
         result = await session.call_tool(tool_name, arguments)
         output_parts = []
         images = []
@@ -520,56 +532,12 @@ class McpManager:
         }
         if images:
             result_dict["images"] = images
-        try:
-            emit(
-                "mcp.tool.completed",
-                server_id=server_id,
-                tool_name=tool_name,
-                duration_ms=round((_time.perf_counter() - t0) * 1000, 2),
-                is_error=is_error,
-                exit_code=result_dict.get("exit_code", 0),
-            )
-        except Exception:
-            pass
         return result_dict
-
-    async def _reconnect_server(self, server_id: str) -> bool:
-        """Tear down and reconnect a crashed stdio MCP server."""
-        if self.is_builtin(server_id):
-            return await self._reconnect_builtin(server_id)
-
-        from src.database import McpServer, SessionLocal
-
-        db = SessionLocal()
-        try:
-            srv = db.query(McpServer).filter(McpServer.id == server_id).first()
-            if not srv or not srv.is_enabled:
-                return False
-            await self.disconnect_server(server_id)
-            args = json.loads(srv.args) if srv.args else []
-            env = json.loads(srv.env) if srv.env else {}
-            ok = await self.connect_server(
-                server_id=server_id,
-                name=srv.name,
-                transport=srv.transport,
-                command=srv.command,
-                args=args,
-                env=env,
-                url=srv.url,
-            )
-            if ok:
-                logger.info(f"Reconnected MCP server: {srv.name} ({server_id})")
-            return ok
-        except Exception as e:
-            logger.error(f"Failed to reconnect MCP server {server_id}: {e}")
-            return False
-        finally:
-            db.close()
 
     async def _reconnect_builtin(self, server_id: str) -> bool:
         """Tear down and reconnect a crashed builtin MCP server."""
         import sys
-        from src.builtin_mcp import _BUILTIN_SERVERS
+        from src.builtin_mcp import _BUILTIN_SERVERS, builtin_python_env
 
         if server_id not in _BUILTIN_SERVERS:
             return False
@@ -588,7 +556,7 @@ class McpManager:
                 transport="stdio",
                 command=sys.executable,
                 args=[script_path],
-                env={"PYTHONPATH": base_dir},
+                env=builtin_python_env(base_dir),
             )
             if ok:
                 logger.info(f"Reconnected builtin MCP server: {name}")
