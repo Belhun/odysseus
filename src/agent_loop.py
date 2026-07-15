@@ -493,7 +493,7 @@ List recent emails from a folder, newest first, including read messages by defau
 ```read_local_emails
 {"folder": "INBOX", "limit": 10, "offset": 0, "account": "gmail"}
 ```
-Read from the local email mirror (fast, full history). Offset paging: first call offset 0, next page offset 10, etc. Date range: since/until accept natural language. Full body: `{"full": true, "id": 42}`.""",
+Read from the local email mirror (fast, full history). Offset paging: first call offset 0, next page offset 10, etc. Date range: since/until accept natural language. Search: pass `q`. Full body: `{"full": true, "uid": "90186"}` (preferred) or `{"full": true, "id": 42}`. When Local only mode is on, this is the only read/search path.""",
     "sync_local_emails": """\
 ```sync_local_emails
 {"full": true, "account": "gmail"}
@@ -2137,6 +2137,19 @@ def _build_base_prompt(
         elif compact:
             agent_prompt = _assemble_prompt(set(TOOL_SECTIONS.keys()), disabled, compact=True)
 
+    try:
+        from src.tool_security import is_email_local_only
+        if is_email_local_only(owner):
+            agent_prompt = agent_prompt.replace(
+                "Prefer `read_local_emails` for browsing and most reads (instant, full history); use live `list_emails` only when freshness matters or the folder has not synced yet.",
+                "Local only mode is ON — ONLY use `read_local_emails` (list/search/full by uid) and `sync_local_emails` for email reads; live list_emails/read_email/search_emails are blocked. Run sync_local_emails if results look stale.",
+            ).replace(
+                "Prefer `read_local_emails` for browsing when synced; use live `list_emails` when freshness matters.",
+                "Local only mode is ON — ONLY use `read_local_emails` and `sync_local_emails` for email reads; live list_emails/read_email/search_emails are blocked.",
+            )
+    except Exception:
+        pass
+
     # Inject the Level-0 skill index — one line per skill so the agent
     # knows what canonical procedures exist. Includes published skills
     # plus teacher-escalation drafts (auto-written when the student
@@ -2600,6 +2613,9 @@ async def stream_agent_loop(
         # MCP tools are namespaced dynamically, so hide all MCP schemas for
         # public/non-admin users rather than trying to enumerate every tool.
         mcp_mgr = None
+
+    from src.tool_security import live_imap_read_disabled_tools
+    disabled_tools.update(live_imap_read_disabled_tools(owner))
 
     if plan_mode:
         # Plan mode: investigate read-only, propose a plan, don't execute. The
