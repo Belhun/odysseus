@@ -6,7 +6,7 @@ import uiModule from './ui.js';
 import markdownModule from './markdown.js';
 import * as spinnerModule from './spinner.js';
 import { makeWindowDraggable } from './windowDrag.js';
-import { topPortalZ } from './toolWindowZOrder.js';
+import { nextToolWindowZ, topPortalZ } from './toolWindowZOrder.js';
 import { sortModelIds } from './modelSort.js';
 import { ordinalSuffix } from './util/ordinal.js';
 import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
@@ -598,6 +598,7 @@ const _CATEGORY_MAP = {
   email_auto_translate:       'Email',
   learn_sender_signatures:    'Email',
   check_email_urgency:        'Email',
+  sync_local_emails:          'Email',
   daily_brief:                'Assistant',
   test_skills:                'Skills',
   audit_skills:               'Skills',
@@ -2803,13 +2804,19 @@ function _renderMainView() {
 
 // ---- Modal ----
 
+function _raiseTasksModal(modal) {
+  if (!modal) return;
+  modal.style.setProperty('z-index', String(nextToolWindowZ({ exclude: modal })), 'important');
+}
+
 export function openTasks(focusId, opts) {
   startNotificationPolling();
   const o = opts || {};
   const openActivityForFailure = _taskFailurePending && !focusId && o.filter === undefined;
   _setTaskFailurePending(false);
   if (_open) {
-    // Already open — just focus the requested task / apply filter.
+    // Already open — surface above any other tool window, then focus/filter.
+    _raiseTasksModal(document.getElementById('tasks-modal'));
     if (openActivityForFailure) _switchTab('activity');
     if (o.filter !== undefined) { _taskFilter = o.filter; _renderList(); }
     if (focusId) _focusTask(focusId);
@@ -2853,6 +2860,7 @@ export function openTasks(focusId, opts) {
     </div>
   `;
   document.body.appendChild(modal);
+  _raiseTasksModal(modal);
 
   // Tab routing
   modal.querySelectorAll('.tasks-tab').forEach(btn => {

@@ -94,3 +94,45 @@ def test_sent_folder_alias_resolves_stored_name(local_db):
     rows = store.query_local_emails("", folder="Sent", limit=10)
     assert len(rows) == 1
     assert rows[0]["uid"] == 1
+
+
+def test_query_filter_unread_and_total(local_db):
+    store = local_db
+    _seed_message(store, uid=1, date_epoch=3000.0)
+    conn = store._connect()
+    try:
+        conn.execute("UPDATE messages SET is_read=1 WHERE uid=1")
+        conn.commit()
+    finally:
+        conn.close()
+    _seed_message(store, uid=2, date_epoch=2000.0)
+
+    rows, total, folder = store.query_local_emails(
+        "", folder="INBOX", filter_="unread", include_total=True, limit=10,
+    )
+    assert folder == "INBOX"
+    assert total == 1
+    assert len(rows) == 1
+    assert rows[0]["uid"] == 2
+
+
+def test_get_local_email_by_uid_read_shape(local_db):
+    store = local_db
+    _seed_message(store, uid=99, date_epoch=1000.0)
+    conn = store._connect()
+    try:
+        conn.execute(
+            "UPDATE messages SET body_text=?, subject=? WHERE uid=99",
+            ("Hello body", "Read shape"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    row = store.get_local_email_by_uid("", None, "INBOX", 99)
+    assert row is not None
+    assert row["uid"] == "99"
+    assert row["from_address"] == "alice@example.com"
+    assert row["body"] == "Hello body"
+    assert row["subject"] == "Read shape"
+    assert isinstance(row.get("attachments"), list)
