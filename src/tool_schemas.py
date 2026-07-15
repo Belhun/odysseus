@@ -1194,7 +1194,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_local_emails",
-            "description": "Read emails from the local mirror (fast, full history, offline). List with limit/offset (offset-from-latest paging) or since/until date range. Use full=true with id for one message body + attachment local paths. Prefer over list_emails for browsing; use list_emails only when you need live freshness.",
+            "description": "Read emails from the local mirror (fast, full history, offline). List with limit/offset, search with q, or full=true with uid (preferred) or id for one message body + attachment local paths. When Local only mode is on, this is the only read/search path.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1204,8 +1204,10 @@ FUNCTION_TOOL_SCHEMAS = [
                     "offset": {"type": "integer", "description": "Skip N newest rows for paging (default 0)"},
                     "since": {"type": "string", "description": "Optional start date (natural language or ISO)"},
                     "until": {"type": "string", "description": "Optional end date (natural language or ISO)"},
+                    "q": {"type": "string", "description": "Search the local mirror (FTS)"},
                     "full": {"type": "boolean", "description": "Fetch full body for one message"},
-                    "id": {"type": "integer", "description": "Local row id when full=true"},
+                    "uid": {"type": "string", "description": "IMAP UID when full=true (preferred over id)"},
+                    "id": {"type": "integer", "description": "Local SQLite row id when full=true"},
                 },
             }
         }
