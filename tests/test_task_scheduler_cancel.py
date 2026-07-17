@@ -62,6 +62,7 @@ def test_stop_task_cleans_up_queued_handle_and_run(tmp_path, monkeypatch):
         scheduler._executing_lock = asyncio.Lock()
         scheduler._run_semaphore = asyncio.Semaphore(1)
         scheduler._task_handles = {}
+        scheduler._foreground_gated = set()
         scheduler._concurrency_cap = 1
         scheduler._task_defer_counts = {}
         await scheduler._run_semaphore.acquire()
