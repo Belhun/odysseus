@@ -351,6 +351,10 @@ class TaskScheduler:
         self._run_semaphore = asyncio.Semaphore(1)
         self._concurrency_cap = 1
         self._task_handles = {}
+        # Task IDs that must yield to UI traffic (idle wait + cancel on activity).
+        # Force-runs and foreground-safe actions are omitted so they keep going
+        # while the browser is open (e.g. Email Local Sync).
+        self._foreground_gated = set()
 
     def _set_run_progress(self, run_id: str, message: str):
         """Persist short live progress text for Activity while a run is active."""
@@ -749,13 +753,18 @@ class TaskScheduler:
         finally:
             _q_db.close()
 
+        gate_foreground = (
+            not bypass_model_slot and self._task_gates_on_foreground(task_id)
+        )
+        if gate_foreground:
+            self._foreground_gated.add(task_id)
         try:
             if bypass_model_slot or not self._task_needs_model_slot(task_id):
                 await self._execute_task_locked(
                     task_id,
                     run_id,
                     release_executing=release_executing,
-                    gate_foreground=not bypass_model_slot,
+                    gate_foreground=gate_foreground,
                 )
                 return
 
@@ -764,7 +773,7 @@ class TaskScheduler:
                     task_id,
                     run_id,
                     release_executing=release_executing,
-                    gate_foreground=True,
+                    gate_foreground=gate_foreground,
                 )
         except asyncio.CancelledError:
             # If cancellation happens while queued behind the semaphore,
@@ -773,6 +782,7 @@ class TaskScheduler:
             self._defer_immediately_due_task(task_id, delay=timedelta(minutes=15))
             raise
         finally:
+            self._foreground_gated.discard(task_id)
             handle = self._task_handles.get(task_id)
             if handle is current:
                 self._task_handles.pop(task_id, None)
@@ -1288,6 +1298,27 @@ class TaskScheduler:
         "audit_skills",
         "consolidate_memory",
     })
+
+    # Pure infra that must run while the email UI is open. Browser heartbeats
+    # and /api/email/local/* polls never go idle with a tab open, so gating
+    # these on "Odysseus idle" leaves them queued forever.
+    _FOREGROUND_SAFE_ACTIONS = frozenset({
+        "sync_local_emails",
+    })
+
+    def _task_gates_on_foreground(self, task_id: str) -> bool:
+        """Return False for actions that should run while the UI is active."""
+        from core.database import SessionLocal, ScheduledTask
+
+        db = SessionLocal()
+        try:
+            task = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
+            if not task:
+                return True
+            action = (getattr(task, "action", "") or "")
+            return action not in self._FOREGROUND_SAFE_ACTIONS
+        finally:
+            db.close()
 
     def _task_needs_model_slot(self, task_id: str) -> bool:
         """Only LLM/research/model-backed actions should wait in the model
@@ -2341,15 +2372,14 @@ class TaskScheduler:
         return stopped
 
     async def stop_background_tasks_for_foreground(self, *, reason: str = "Odysseus became active") -> int:
-        """Cancel all in-process scheduler tasks because the user is active.
+        """Cancel foreground-gated scheduler tasks because the user is active.
 
-        This is intentionally blunt for scheduled/background work: when the
-        user opens or uses Odysseus, foreground interaction wins immediately.
-        Manual force-runs can be restarted by the user; automatic jobs will be
-        deferred by their cancellation path instead of stealing the app.
+        Force-runs and foreground-safe actions (e.g. Email Local Sync) are left
+        alone so they can finish while the browser tab is open. Other automatic
+        jobs defer instead of competing with the UI.
         """
         async with self._executing_lock:
-            task_ids = list(self._executing)
+            task_ids = [tid for tid in self._executing if tid in self._foreground_gated]
         stopped = 0
         for task_id in task_ids:
             handle = self._task_handles.get(task_id)
