@@ -1171,7 +1171,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "bulk_email",
-            "description": "Perform one action on many emails at once. Use this for 'delete all those', 'archive these', 'mark all read', or any bulk operation after list_emails. Always pass account when the listed emails came from a named account such as Gmail.",
+            "description": "Perform one action on many emails at once on the live mailbox and update the local mirror in the same call. Use this for 'delete all those', 'archive these', 'mark all read', or any bulk operation after list_emails/read_local_emails. Always pass account when the listed emails came from a named account such as Gmail.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1190,7 +1190,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "delete_email",
-            "description": "Delete one email by UID. For multiple messages, use bulk_email instead. Always pass account when the email came from a named account such as Gmail.",
+            "description": "Delete one email by UID on the live mailbox and remove it from the local mirror. For multiple messages, use bulk_email instead. Always pass account when the email came from a named account such as Gmail.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1207,7 +1207,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "archive_email",
-            "description": "Archive one email by UID. For multiple messages, use bulk_email instead. Always pass account when the email came from a named account such as Gmail.",
+            "description": "Archive one email by UID on the live mailbox and remove it from the local mirror source folder. For multiple messages, use bulk_email instead. Always pass account when the email came from a named account such as Gmail.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1223,7 +1223,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "mark_email_read",
-            "description": "Mark one email as read or unread by UID. For multiple messages, use bulk_email instead. Always pass account when the email came from a named account such as Gmail.",
+            "description": "Mark one email as read or unread by UID on the live mailbox and update the local mirror. For multiple messages, use bulk_email instead. Always pass account when the email came from a named account such as Gmail.",
             "parameters": {
                 "type": "object",
                 "properties": {
