@@ -2092,21 +2092,41 @@ def setup_email_routes():
 
     @router.get("/folders")
     async def list_folders(account_id: str | None = Query(None), owner: str = Depends(require_owner)):
-        """List IMAP folders."""
+        """List IMAP folders, merged with local-mirror folders when present.
+
+        Local Archive/Trash/Junk created by dual-write tools must show up in the
+        folder picker even before the next IMAP sync invents them server-side.
+        """
+        result: list[str] = []
+        imap_error = None
         try:
             with _imap(account_id, owner=owner) as conn:
                 status, folders = conn.list()
-            result = []
-            for f in folders:
+            for f in folders or []:
                 decoded = f.decode() if isinstance(f, bytes) else f
                 match = re.search(r'"([^"]*)"$|(\S+)$', decoded)
                 if match:
                     name = match.group(1) or match.group(2)
-                    result.append(name)
-            return {"folders": result}
+                    if name:
+                        result.append(name)
         except Exception as e:
+            imap_error = str(e)
             logger.error(f"list_folders failed: {e}")
+
+        try:
+            from routes.email_local_store import list_local_folders
+            local_folders = await asyncio.to_thread(list_local_folders, owner, account_id)
+            seen = {f.lower() for f in result}
+            for name in local_folders:
+                if name.lower() not in seen:
+                    result.append(name)
+                    seen.add(name.lower())
+        except Exception as e:
+            logger.debug("list_folders local merge skipped: %s", e)
+
+        if not result and imap_error:
             return {"folders": [], "error": "Mail operation failed"}
+        return {"folders": result}
 
     @router.post("/mark-answered/{uid}")
     async def mark_answered(uid: str, folder: str = Query("INBOX"), account_id: str | None = Query(None), owner: str = Depends(require_owner)):

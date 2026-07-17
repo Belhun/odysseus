@@ -1808,16 +1808,26 @@ def _archive_email(uid, folder="INBOX", account=None):
     return _move_message(uid, folder, cfg["archive_folder"], account=account, role="archive")
 
 
-def _mirror_local(action: str, uids, folder: str, *, account=None, permanent: bool = False) -> int:
-    """Best-effort dual-write of a successful live IMAP action into the local mirror.
+def _mirror_local(
+    action: str,
+    uids,
+    folder: str,
+    *,
+    account=None,
+    permanent: bool = False,
+    imap_ok: bool = True,
+) -> int:
+    """Dual-write (or local-first write) into the local email mirror.
 
-    Live IMAP is the source of truth; local mirror failures must not fail the tool.
-    Used by bulk_email and single delete/archive/mark_email_read.
+    Always runs when callers invoke it — including after IMAP failure — so Local
+    only / read_local_emails stay usable. When IMAP failed, mark actions set
+    read_dirty so a later sync can push the flag.
     """
     if not uids:
         return 0
     try:
         from routes.email_local_store import (
+            mirror_imap_move_messages,
             mirror_imap_read_state_bulk,
             mirror_imap_remove_messages,
         )
@@ -1827,14 +1837,34 @@ def _mirror_local(action: str, uids, folder: str, *, account=None, permanent: bo
         cfg = _load_config(account)
         account_id = cfg.get("account_id") or ""
         owner = _current_owner()
+        dirty = not imap_ok
         if action == "mark_read":
-            return mirror_imap_read_state_bulk(owner, account_id, folder, list(uids), True)
+            return mirror_imap_read_state_bulk(
+                owner, account_id, folder, list(uids), True, dirty=dirty,
+            )
         if action == "mark_unread":
-            return mirror_imap_read_state_bulk(owner, account_id, folder, list(uids), False)
-        if action in ("archive", "junk", "delete"):
-            # Moves and deletes leave the source folder; permanent delete also
-            # removes the source rows. Dest folders catch up on next sync.
-            return mirror_imap_remove_messages(owner, account_id, folder, list(uids))
+            return mirror_imap_read_state_bulk(
+                owner, account_id, folder, list(uids), False, dirty=True,
+            )
+        if action == "archive":
+            dest = cfg.get("archive_folder") or "Archive"
+            return mirror_imap_move_messages(
+                owner, account_id, folder, dest, list(uids),
+            )
+        if action == "junk":
+            dest = cfg.get("junk_folder") or "Junk"
+            return mirror_imap_move_messages(
+                owner, account_id, folder, dest, list(uids),
+            )
+        if action == "delete":
+            if permanent:
+                return mirror_imap_remove_messages(
+                    owner, account_id, folder, list(uids),
+                )
+            dest = cfg.get("trash_folder") or "Trash"
+            return mirror_imap_move_messages(
+                owner, account_id, folder, dest, list(uids),
+            )
     except Exception as e:
         logger.warning("email local mirror update failed action=%s: %s", action, e)
     return 0
@@ -2527,10 +2557,24 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if not uid:
                 return [TextContent(type="text", text="Error: uid is required")]
             folder = arguments.get("folder", "INBOX")
-            ok = _archive_email(uid, folder, account=acct)
+            ok = False
+            try:
+                ok = bool(_archive_email(uid, folder, account=acct))
+            except Exception as e:
+                logger.warning("archive_email IMAP failed uid=%s: %s", uid, e)
+            mirrored = _mirror_local("archive", [uid], folder, account=acct, imap_ok=ok)
             if ok:
-                _mirror_local("archive", [uid], folder, account=acct)
-            return [TextContent(type="text", text=f"{'Archived' if ok else 'Failed to archive'} UID {uid}")]
+                note = f" Local Archive updated ({mirrored})." if mirrored else ""
+                return [TextContent(type="text", text=f"Archived UID {uid}.{note}")]
+            if mirrored:
+                return [TextContent(
+                    type="text",
+                    text=(
+                        f"IMAP archive failed for UID {uid}, but it was moved to the "
+                        f"local Archive folder ({mirrored} row(s))."
+                    ),
+                )]
+            return [TextContent(type="text", text=f"Failed to archive UID {uid}")]
 
         elif name == "delete_email":
             uid = arguments.get("uid")
@@ -2538,15 +2582,29 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 return [TextContent(type="text", text="Error: uid is required")]
             folder = arguments.get("folder", "INBOX")
             permanent = bool(arguments.get("permanent", False))
-            ok = _delete_email(
-                uid,
-                folder,
-                permanent=permanent,
-                account=acct,
+            ok = False
+            try:
+                ok = bool(_delete_email(
+                    uid,
+                    folder,
+                    permanent=permanent,
+                    account=acct,
+                ))
+            except Exception as e:
+                logger.warning("delete_email IMAP failed uid=%s: %s", uid, e)
+            mirrored = _mirror_local(
+                "delete", [uid], folder, account=acct, permanent=permanent, imap_ok=ok,
             )
             if ok:
-                _mirror_local("delete", [uid], folder, account=acct, permanent=permanent)
-            return [TextContent(type="text", text=f"{'Deleted' if ok else 'Failed to delete'} UID {uid}")]
+                note = f" Local mirror updated ({mirrored})." if mirrored else ""
+                return [TextContent(type="text", text=f"Deleted UID {uid}.{note}")]
+            if mirrored:
+                dest = "removed permanently" if permanent else "moved to local Trash"
+                return [TextContent(
+                    type="text",
+                    text=f"IMAP delete failed for UID {uid}, but it was {dest} ({mirrored} row(s)).",
+                )]
+            return [TextContent(type="text", text=f"Failed to delete UID {uid}")]
 
         elif name == "mark_email_read":
             uid = arguments.get("uid")
@@ -2554,16 +2612,31 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 return [TextContent(type="text", text="Error: uid is required")]
             folder = arguments.get("folder", "INBOX")
             read = bool(arguments.get("read", True))
-            ok = _set_flag(uid, folder, "\\Seen", add=read, account=acct)
+            ok = False
+            try:
+                ok = bool(_set_flag(uid, folder, "\\Seen", add=read, account=acct))
+            except Exception as e:
+                logger.warning("mark_email_read IMAP failed uid=%s: %s", uid, e)
             state = "read" if read else "unread"
+            mirrored = _mirror_local(
+                "mark_read" if read else "mark_unread",
+                [uid],
+                folder,
+                account=acct,
+                imap_ok=ok,
+            )
             if ok:
-                _mirror_local(
-                    "mark_read" if read else "mark_unread",
-                    [uid],
-                    folder,
-                    account=acct,
-                )
-            return [TextContent(type="text", text=f"{'Marked' if ok else 'Failed to mark'} UID {uid} as {state}")]
+                note = f" Local mirror updated ({mirrored})." if mirrored else ""
+                return [TextContent(type="text", text=f"Marked UID {uid} as {state}.{note}")]
+            if mirrored:
+                return [TextContent(
+                    type="text",
+                    text=(
+                        f"IMAP mark-{state} failed for UID {uid}, but the local mirror "
+                        f"was updated ({mirrored} row(s))."
+                    ),
+                )]
+            return [TextContent(type="text", text=f"Failed to mark UID {uid} as {state}")]
 
         elif name == "bulk_email":
             action = arguments.get("action", "")
@@ -2571,48 +2644,68 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             all_unread = bool(arguments.get("all_unread", False))
             uids = arguments.get("uids") or []
             if all_unread:
-                uids = _search_uids(folder, "UNSEEN", account=acct)
+                try:
+                    uids = _search_uids(folder, "UNSEEN", account=acct)
+                except Exception as e:
+                    logger.warning("bulk_email all_unread search failed: %s", e)
+                    uids = arguments.get("uids") or []
             if not uids:
                 return [TextContent(type="text", text="No messages selected (pass uids or all_unread=true).")]
+            if action not in ("mark_read", "mark_unread", "archive", "delete", "junk"):
+                return [TextContent(type="text", text=f"Unknown bulk action: {action!r}. Use mark_read/mark_unread/archive/delete/junk.")]
             requested_n = len(uids)
             changed_n = 0
             permanent = bool(arguments.get("permanent", False))
+            imap_error = None
+            verb = {
+                "mark_read": "marked read",
+                "mark_unread": "marked unread",
+                "archive": "archived",
+                "junk": "moved to Junk",
+                "delete": "permanently deleted" if permanent else "moved to Trash",
+            }[action]
             try:
                 if action == "mark_read":
                     changed_n = _bulk_set_flag(uids, folder, "\\Seen", add=True, account=acct)
-                    verb = "marked read"
                 elif action == "mark_unread":
                     changed_n = _bulk_set_flag(uids, folder, "\\Seen", add=False, account=acct)
-                    verb = "marked unread"
                 elif action == "archive":
                     cfg = _load_config(acct)
                     changed_n = _bulk_move(uids, folder, cfg["archive_folder"], account=acct, role="archive")
-                    verb = "archived"
                 elif action == "junk":
                     cfg = _load_config(acct)
                     junk_folder = cfg.get("junk_folder") or "Junk"
                     changed_n = _bulk_move(uids, folder, junk_folder, account=acct, role="junk")
-                    verb = "moved to Junk"
                 elif action == "delete":
                     if permanent:
                         changed_n = _bulk_set_flag(uids, folder, "\\Deleted", add=True, account=acct)
-                        verb = "permanently deleted"
                     else:
                         cfg = _load_config(acct)
                         changed_n = _bulk_move(uids, folder, cfg["trash_folder"], account=acct, role="trash")
-                        verb = "moved to Trash"
-                else:
-                    return [TextContent(type="text", text=f"Unknown bulk action: {action!r}. Use mark_read/mark_unread/archive/delete/junk.")]
             except Exception as e:
-                return [TextContent(type="text", text=f"Bulk {action} failed after partial work: {e}")]
-            if changed_n <= 0:
-                return [TextContent(type="text", text=f"No matching UIDs found in {folder}; 0 of {requested_n} email(s) {verb}.")]
+                imap_error = str(e)
+                logger.warning("bulk_email IMAP failed action=%s: %s", action, e)
+
+            imap_ok = changed_n > 0 and not imap_error
             mirrored = _mirror_local(
-                action, uids, folder, account=acct, permanent=permanent,
+                action, uids, folder, account=acct, permanent=permanent, imap_ok=imap_ok,
             )
-            suffix = "" if changed_n == requested_n else f" ({changed_n} of {requested_n} requested UIDs matched)"
-            mirror_note = f" Local mirror updated ({mirrored} row(s))." if mirrored else ""
-            return [TextContent(type="text", text=f"Done — {changed_n} email(s) {verb}{suffix}.{mirror_note}")]
+            if imap_ok:
+                suffix = "" if changed_n == requested_n else f" ({changed_n} of {requested_n} requested UIDs matched)"
+                mirror_note = f" Local mirror updated ({mirrored} row(s))." if mirrored else ""
+                return [TextContent(type="text", text=f"Done — {changed_n} email(s) {verb}{suffix}.{mirror_note}")]
+            if mirrored:
+                detail = f" ({imap_error})" if imap_error else ""
+                return [TextContent(
+                    type="text",
+                    text=(
+                        f"IMAP bulk {action} failed{detail}, but the local mirror was updated "
+                        f"for {mirrored} of {requested_n} message(s)."
+                    ),
+                )]
+            if imap_error:
+                return [TextContent(type="text", text=f"Bulk {action} failed: {imap_error}")]
+            return [TextContent(type="text", text=f"No matching UIDs found in {folder}; 0 of {requested_n} email(s) {verb}.")]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]

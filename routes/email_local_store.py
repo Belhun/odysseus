@@ -1239,8 +1239,10 @@ def mirror_imap_read_state_bulk(
     folder: str,
     uids: list[str | int],
     is_read: bool,
+    *,
+    dirty: bool = False,
 ) -> int:
-    """Bulk-update local \\Seen after a live IMAP mark_read/unread."""
+    """Bulk-update local \\Seen after a mark_read/unread (IMAP and/or local-first)."""
     uid_ints: list[int] = []
     for uid in uids or []:
         try:
@@ -1254,16 +1256,80 @@ def mirror_imap_read_state_bulk(
     try:
         cur = db.execute(
             f"""
-            UPDATE messages SET is_read=?, read_dirty=0
+            UPDATE messages SET is_read=?, read_dirty=?
             WHERE owner=? AND account_id=? AND folder=? AND uid IN ({placeholders})
             """,
             (
                 1 if is_read else 0,
+                1 if dirty else 0,
                 owner or "",
                 account_id or "",
                 folder,
                 *uid_ints,
             ),
+        )
+        db.commit()
+        return cur.rowcount
+    finally:
+        db.close()
+
+
+def mirror_imap_move_messages(
+    owner: str,
+    account_id: str | None,
+    source_folder: str,
+    dest_folder: str,
+    uids: list[str | int],
+) -> int:
+    """Move local rows between folders (archive / trash / junk).
+
+    Keeps message bodies visible under the destination folder (e.g. Archive)
+    instead of deleting them from the mirror.
+    """
+    dest = (dest_folder or "").strip() or "Archive"
+    src = (source_folder or "").strip() or "INBOX"
+    if dest.lower() == src.lower():
+        return 0
+    uid_ints: list[int] = []
+    for uid in uids or []:
+        try:
+            uid_ints.append(int(uid))
+        except (TypeError, ValueError):
+            continue
+    if not uid_ints:
+        return 0
+    placeholders = ",".join("?" * len(uid_ints))
+    params = (owner or "", account_id or "", src, *uid_ints)
+    db = _connect()
+    try:
+        # Drop dest rows that would collide on UNIQUE(owner, account_id, folder, uid, uidvalidity).
+        existing = db.execute(
+            f"""
+            SELECT uid, uidvalidity FROM messages
+            WHERE owner=? AND account_id=? AND folder=? AND uid IN ({placeholders})
+            """,
+            params,
+        ).fetchall()
+        for row in existing:
+            db.execute(
+                """
+                DELETE FROM messages
+                WHERE owner=? AND account_id=? AND folder=? AND uid=? AND uidvalidity IS ?
+                """,
+                (
+                    owner or "",
+                    account_id or "",
+                    dest,
+                    int(row["uid"]),
+                    row["uidvalidity"],
+                ),
+            )
+        cur = db.execute(
+            f"""
+            UPDATE messages SET folder=?
+            WHERE owner=? AND account_id=? AND folder=? AND uid IN ({placeholders})
+            """,
+            (dest, owner or "", account_id or "", src, *uid_ints),
         )
         db.commit()
         return cur.rowcount
@@ -1277,10 +1343,10 @@ def mirror_imap_remove_messages(
     folder: str,
     uids: list[str | int],
 ) -> int:
-    """Remove local rows after live IMAP archive/delete/junk/move.
+    """Permanently remove local rows (hard delete / expunge).
 
-    Destination folders are left for the next sync to backfill; clearing the
-    source folder keeps Local only / read_local_emails from showing stale mail.
+    Soft delete/archive/junk should use mirror_imap_move_messages instead so
+    the message remains visible under Trash/Archive/Junk.
     """
     uid_ints: list[int] = []
     for uid in uids or []:
@@ -1331,6 +1397,29 @@ def mirror_imap_remove_messages(
         )
         db.commit()
         return cur.rowcount
+    finally:
+        db.close()
+
+
+def list_local_folders(owner: str, account_id: str | None = None) -> list[str]:
+    """Distinct folder names stored in the local mirror for this owner/account."""
+    clauses = ["owner=?"]
+    params: list[Any] = [owner or ""]
+    if account_id:
+        clauses.append("account_id=?")
+        params.append(account_id)
+    where = " AND ".join(clauses)
+    db = _connect()
+    try:
+        rows = db.execute(
+            f"""
+            SELECT DISTINCT folder FROM messages
+            WHERE {where} AND folder IS NOT NULL AND folder != ''
+            ORDER BY folder COLLATE NOCASE
+            """,
+            params,
+        ).fetchall()
+        return [str(r["folder"]) for r in rows if r["folder"]]
     finally:
         db.close()
 

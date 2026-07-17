@@ -94,7 +94,7 @@ def test_mirror_bulk_local_mark_and_archive(local_db, monkeypatch):
     monkeypatch.setattr(
         es,
         "_load_config",
-        lambda account=None: {"account_id": "acc1"},
+        lambda account=None: {"account_id": "acc1", "archive_folder": "Archive"},
     )
 
     marked = es._mirror_local("mark_read", [21, 22], "INBOX", account="acc1")
@@ -104,12 +104,45 @@ def test_mirror_bulk_local_mark_and_archive(local_db, monkeypatch):
 
     conn = local_db._connect()
     try:
-        rows = list(conn.execute("SELECT uid, is_read FROM messages WHERE owner=?", ("alice",)))
+        rows = {
+            int(r["uid"]): r["folder"]
+            for r in conn.execute("SELECT uid, folder, is_read FROM messages WHERE owner=?", ("alice",))
+        }
+        read_flags = {
+            int(r["uid"]): int(r["is_read"])
+            for r in conn.execute("SELECT uid, is_read FROM messages WHERE owner=?", ("alice",))
+        }
     finally:
         conn.close()
-    assert len(rows) == 1
-    assert int(rows[0]["uid"]) == 22
-    assert int(rows[0]["is_read"]) == 1
+    assert rows[21] == "Archive"
+    assert rows[22] == "INBOX"
+    assert read_flags[21] == 1
+    assert read_flags[22] == 1
+
+
+def test_archive_moves_into_archive_folder_even_if_imap_fails(local_db, monkeypatch):
+    import mcp_servers.email_server as es
+    from routes.email_local_store import list_local_folders
+
+    _seed(local_db, uid=40, subject="keep me")
+    monkeypatch.setattr(es, "_current_owner", lambda: "alice")
+    monkeypatch.setattr(
+        es,
+        "_load_config",
+        lambda account=None: {"account_id": "acc1", "archive_folder": "Archive"},
+    )
+    n = es._mirror_local("archive", [40], "INBOX", account="acc1", imap_ok=False)
+    assert n == 1
+    conn = local_db._connect()
+    try:
+        row = conn.execute(
+            "SELECT folder FROM messages WHERE owner=? AND uid=?",
+            ("alice", 40),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row["folder"] == "Archive"
+    assert "Archive" in list_local_folders("alice", "acc1")
 
 
 def test_single_tool_handlers_mirror_local(local_db, monkeypatch):
@@ -121,27 +154,37 @@ def test_single_tool_handlers_mirror_local(local_db, monkeypatch):
     _seed(local_db, uid=33, is_read=0)
 
     monkeypatch.setattr(es, "_current_owner", lambda: "alice")
-    monkeypatch.setattr(es, "_load_config", lambda account=None: {"account_id": "acc1"})
+    monkeypatch.setattr(
+        es,
+        "_load_config",
+        lambda account=None: {
+            "account_id": "acc1",
+            "archive_folder": "Archive",
+            "trash_folder": "Trash",
+        },
+    )
     monkeypatch.setattr(es, "_archive_email", lambda *a, **k: True)
     monkeypatch.setattr(es, "_delete_email", lambda *a, **k: True)
     monkeypatch.setattr(es, "_set_flag", lambda *a, **k: True)
 
-    # Same post-success dual-write path the MCP handlers use.
     assert es._set_flag("31", "INBOX", "\\Seen", add=True, account="acc1")
-    es._mirror_local("mark_read", ["31"], "INBOX", account="acc1")
+    es._mirror_local("mark_read", ["31"], "INBOX", account="acc1", imap_ok=True)
     assert es._archive_email("32", "INBOX", account="acc1")
-    es._mirror_local("archive", ["32"], "INBOX", account="acc1")
+    es._mirror_local("archive", ["32"], "INBOX", account="acc1", imap_ok=True)
     assert es._delete_email("33", "INBOX", permanent=False, account="acc1")
-    es._mirror_local("delete", ["33"], "INBOX", account="acc1")
+    es._mirror_local("delete", ["33"], "INBOX", account="acc1", permanent=False, imap_ok=True)
 
     conn = local_db._connect()
     try:
-        rows = list(conn.execute(
-            "SELECT uid, is_read FROM messages WHERE owner=? ORDER BY uid",
-            ("alice",),
-        ))
+        rows = {
+            int(r["uid"]): (r["folder"], int(r["is_read"]))
+            for r in conn.execute(
+                "SELECT uid, folder, is_read FROM messages WHERE owner=? ORDER BY uid",
+                ("alice",),
+            )
+        }
     finally:
         conn.close()
-    assert len(rows) == 1
-    assert int(rows[0]["uid"]) == 31
-    assert int(rows[0]["is_read"]) == 1
+    assert rows[31] == ("INBOX", 1)
+    assert rows[32] == ("Archive", 0)
+    assert rows[33] == ("Trash", 0)
