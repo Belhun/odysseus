@@ -8,6 +8,7 @@ Connects to local Dovecot IMAP and reads from the AI summary cache.
 
 import asyncio
 import imaplib
+import logging
 import smtplib
 import email
 import email.header
@@ -28,6 +29,8 @@ from contextvars import ContextVar
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -1805,6 +1808,42 @@ def _archive_email(uid, folder="INBOX", account=None):
     return _move_message(uid, folder, cfg["archive_folder"], account=account, role="archive")
 
 
+def _mirror_local(action: str, uids, folder: str, *, account=None, permanent: bool = False) -> int:
+    """Best-effort dual-write of a successful live IMAP action into the local mirror.
+
+    Live IMAP is the source of truth; local mirror failures must not fail the tool.
+    Used by bulk_email and single delete/archive/mark_email_read.
+    """
+    if not uids:
+        return 0
+    try:
+        from routes.email_local_store import (
+            mirror_imap_read_state_bulk,
+            mirror_imap_remove_messages,
+        )
+    except Exception:
+        return 0
+    try:
+        cfg = _load_config(account)
+        account_id = cfg.get("account_id") or ""
+        owner = _current_owner()
+        if action == "mark_read":
+            return mirror_imap_read_state_bulk(owner, account_id, folder, list(uids), True)
+        if action == "mark_unread":
+            return mirror_imap_read_state_bulk(owner, account_id, folder, list(uids), False)
+        if action in ("archive", "junk", "delete"):
+            # Moves and deletes leave the source folder; permanent delete also
+            # removes the source rows. Dest folders catch up on next sync.
+            return mirror_imap_remove_messages(owner, account_id, folder, list(uids))
+    except Exception as e:
+        logger.warning("email local mirror update failed action=%s: %s", action, e)
+    return 0
+
+
+# Back-compat alias used by tests / callers that still name the bulk helper.
+_mirror_bulk_local = _mirror_local
+
+
 def _download_attachment(uid, index, folder="INBOX", account=None):
     """Extract a specific attachment to disk and return its local path."""
     conn = None
@@ -2023,7 +2062,11 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="archive_email",
-            description="Move an email out of the inbox into the Archive folder. Use after handling an email you want to keep but no longer need in the inbox.",
+            description=(
+                "Move an email out of the inbox into the Archive folder on the live "
+                "mailbox and remove it from the local mirror source folder. Use after "
+                "handling an email you want to keep but no longer need in the inbox."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -2036,7 +2079,10 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="delete_email",
-            description="Delete an email. By default moves it to the Trash folder; pass permanent=true to expunge immediately.",
+            description=(
+                "Delete an email on the live mailbox and remove it from the local mirror. "
+                "By default moves it to the Trash folder; pass permanent=true to expunge immediately."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -2050,7 +2096,10 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="mark_email_read",
-            description="Mark an email as read (\\Seen flag) or unread (read=false).",
+            description=(
+                "Mark an email as read (\\Seen flag) or unread (read=false) on the live "
+                "mailbox and update the local mirror in the same call."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -2069,7 +2118,9 @@ async def list_tools() -> list[Tool]:
                 "'mark all as read', 'archive these', 'delete all spam', etc. Select "
                 "messages either by an explicit `uids` list OR by `all_unread: true` "
                 "(operates on every unread message in the folder). Far better than "
-                "calling mark_email_read / archive_email once per message."
+                "calling mark_email_read / archive_email once per message. Applies to "
+                "the live mailbox AND updates the local email mirror in the same call "
+                "so Local only / read_local_emails stay in sync."
             ),
             inputSchema={
                 "type": "object",
@@ -2475,28 +2526,43 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             uid = arguments.get("uid")
             if not uid:
                 return [TextContent(type="text", text="Error: uid is required")]
-            ok = _archive_email(uid, arguments.get("folder", "INBOX"), account=acct)
+            folder = arguments.get("folder", "INBOX")
+            ok = _archive_email(uid, folder, account=acct)
+            if ok:
+                _mirror_local("archive", [uid], folder, account=acct)
             return [TextContent(type="text", text=f"{'Archived' if ok else 'Failed to archive'} UID {uid}")]
 
         elif name == "delete_email":
             uid = arguments.get("uid")
             if not uid:
                 return [TextContent(type="text", text="Error: uid is required")]
+            folder = arguments.get("folder", "INBOX")
+            permanent = bool(arguments.get("permanent", False))
             ok = _delete_email(
                 uid,
-                arguments.get("folder", "INBOX"),
-                permanent=bool(arguments.get("permanent", False)),
+                folder,
+                permanent=permanent,
                 account=acct,
             )
+            if ok:
+                _mirror_local("delete", [uid], folder, account=acct, permanent=permanent)
             return [TextContent(type="text", text=f"{'Deleted' if ok else 'Failed to delete'} UID {uid}")]
 
         elif name == "mark_email_read":
             uid = arguments.get("uid")
             if not uid:
                 return [TextContent(type="text", text="Error: uid is required")]
+            folder = arguments.get("folder", "INBOX")
             read = bool(arguments.get("read", True))
-            ok = _set_flag(uid, arguments.get("folder", "INBOX"), "\\Seen", add=read, account=acct)
+            ok = _set_flag(uid, folder, "\\Seen", add=read, account=acct)
             state = "read" if read else "unread"
+            if ok:
+                _mirror_local(
+                    "mark_read" if read else "mark_unread",
+                    [uid],
+                    folder,
+                    account=acct,
+                )
             return [TextContent(type="text", text=f"{'Marked' if ok else 'Failed to mark'} UID {uid} as {state}")]
 
         elif name == "bulk_email":
@@ -2510,6 +2576,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 return [TextContent(type="text", text="No messages selected (pass uids or all_unread=true).")]
             requested_n = len(uids)
             changed_n = 0
+            permanent = bool(arguments.get("permanent", False))
             try:
                 if action == "mark_read":
                     changed_n = _bulk_set_flag(uids, folder, "\\Seen", add=True, account=acct)
@@ -2527,7 +2594,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     changed_n = _bulk_move(uids, folder, junk_folder, account=acct, role="junk")
                     verb = "moved to Junk"
                 elif action == "delete":
-                    permanent = bool(arguments.get("permanent", False))
                     if permanent:
                         changed_n = _bulk_set_flag(uids, folder, "\\Deleted", add=True, account=acct)
                         verb = "permanently deleted"
@@ -2541,8 +2607,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 return [TextContent(type="text", text=f"Bulk {action} failed after partial work: {e}")]
             if changed_n <= 0:
                 return [TextContent(type="text", text=f"No matching UIDs found in {folder}; 0 of {requested_n} email(s) {verb}.")]
+            mirrored = _mirror_local(
+                action, uids, folder, account=acct, permanent=permanent,
+            )
             suffix = "" if changed_n == requested_n else f" ({changed_n} of {requested_n} requested UIDs matched)"
-            return [TextContent(type="text", text=f"Done — {changed_n} email(s) {verb}{suffix}.")]
+            mirror_note = f" Local mirror updated ({mirrored} row(s))." if mirrored else ""
+            return [TextContent(type="text", text=f"Done — {changed_n} email(s) {verb}{suffix}.{mirror_note}")]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]

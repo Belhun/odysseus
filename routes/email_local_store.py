@@ -1230,20 +1230,104 @@ def mirror_imap_read_state(
     is_read: bool,
 ) -> int:
     """Update the local mirror after \\Seen was changed on IMAP (UI/MCP/API)."""
+    return mirror_imap_read_state_bulk(owner, account_id, folder, [uid], is_read)
+
+
+def mirror_imap_read_state_bulk(
+    owner: str,
+    account_id: str | None,
+    folder: str,
+    uids: list[str | int],
+    is_read: bool,
+) -> int:
+    """Bulk-update local \\Seen after a live IMAP mark_read/unread."""
+    uid_ints: list[int] = []
+    for uid in uids or []:
+        try:
+            uid_ints.append(int(uid))
+        except (TypeError, ValueError):
+            continue
+    if not uid_ints:
+        return 0
+    placeholders = ",".join("?" * len(uid_ints))
     db = _connect()
     try:
         cur = db.execute(
-            """
+            f"""
             UPDATE messages SET is_read=?, read_dirty=0
-            WHERE owner=? AND account_id=? AND folder=? AND uid=?
+            WHERE owner=? AND account_id=? AND folder=? AND uid IN ({placeholders})
             """,
             (
                 1 if is_read else 0,
                 owner or "",
                 account_id or "",
                 folder,
-                int(uid),
+                *uid_ints,
             ),
+        )
+        db.commit()
+        return cur.rowcount
+    finally:
+        db.close()
+
+
+def mirror_imap_remove_messages(
+    owner: str,
+    account_id: str | None,
+    folder: str,
+    uids: list[str | int],
+) -> int:
+    """Remove local rows after live IMAP archive/delete/junk/move.
+
+    Destination folders are left for the next sync to backfill; clearing the
+    source folder keeps Local only / read_local_emails from showing stale mail.
+    """
+    uid_ints: list[int] = []
+    for uid in uids or []:
+        try:
+            uid_ints.append(int(uid))
+        except (TypeError, ValueError):
+            continue
+    if not uid_ints:
+        return 0
+    placeholders = ",".join("?" * len(uid_ints))
+    params = (owner or "", account_id or "", folder, *uid_ints)
+    db = _connect()
+    try:
+        rows = db.execute(
+            f"""
+            SELECT a.local_path, m.folder, m.uid, m.id
+            FROM messages m
+            LEFT JOIN attachments a ON a.message_row_id = m.id
+            WHERE m.owner=? AND m.account_id=? AND m.folder=? AND m.uid IN ({placeholders})
+            """,
+            params,
+        ).fetchall()
+        paths: list[str] = []
+        dirs_seen: set[tuple[str, int]] = set()
+        msg_ids: list[int] = []
+        for row in rows:
+            mid = int(row["id"])
+            if mid not in msg_ids:
+                msg_ids.append(mid)
+            if row["local_path"]:
+                paths.append(row["local_path"])
+            dirs_seen.add((row["folder"], int(row["uid"])))
+        _unlink_attachment_paths(paths)
+        for folder_name, uid in dirs_seen:
+            _unlink_attachment_paths([], folder=folder_name, uid=uid)
+        if msg_ids:
+            id_ph = ",".join("?" * len(msg_ids))
+            db.execute(
+                f"DELETE FROM attachments WHERE message_row_id IN ({id_ph})",
+                msg_ids,
+            )
+        cur = db.execute(
+            f"""
+            DELETE FROM messages
+            WHERE owner=? AND account_id=? AND folder=? AND uid IN ({placeholders})
+            """,
+            params,
         )
         db.commit()
         return cur.rowcount
