@@ -274,7 +274,8 @@ _DOMAIN_RULES = {
     "email": """\
 ## Email rules
 - Email UIDs are the values after `UID:` in tool output, never list row numbers.
-- For latest/newest email, list with `max_results: 1`, `unread_only: false`, then read the returned UID if needed.
+- Prefer `read_local_emails` for browsing/search (pass `q` to search, or `full: true` + `uid` for a body). Use live `list_emails`/`read_email` only when freshness matters and they are available.
+- When Local only mode is on, live list/read are blocked — use `read_local_emails` and `sync_local_emails` only.
 - For named mailboxes/accounts, call `list_email_accounts` if needed and pass the exact `account` value.
 - Bulk email actions use `bulk_email` once with explicit UIDs; do not loop one message at a time.
 - "Write/draft a reply saying X" means open a pre-filled draft via `ui_control open_email_reply ... <body>` / structured `body`; only `reply_to_email` when the user clearly wants to send now.""",
@@ -323,7 +324,15 @@ _DOMAIN_RULES = {
 _DOMAIN_TOOL_MAP = {
     "web": set(WEB_TOOL_NAMES),
     "documents": {"create_document", "edit_document", "update_document", "suggest_document", "manage_documents"},
-    "email": {"list_email_accounts", "list_emails", "read_email", "send_email", "reply_to_email", "bulk_email", "archive_email", "delete_email", "mark_email_read", "resolve_contact", "manage_contact"},
+    # Include local mirror tools: Local only mode disables live list_emails/
+    # read_email, so domain selection must still surface read_local_emails /
+    # sync_local_emails or the agent is left write-only.
+    "email": {
+        "list_email_accounts", "list_emails", "read_email",
+        "read_local_emails", "sync_local_emails",
+        "send_email", "reply_to_email", "bulk_email", "archive_email",
+        "delete_email", "mark_email_read", "resolve_contact", "manage_contact",
+    },
     "cookbook": {"download_model", "serve_model", "serve_preset", "list_serve_presets", "list_served_models", "stop_served_model", "tail_serve_output", "list_downloads", "cancel_download", "search_hf_models", "list_cached_models", "list_cookbook_servers", "adopt_served_model"},
     "notes_calendar_tasks": {"manage_notes", "manage_calendar", "manage_tasks"},
     "ui": {"ui_control"},
@@ -333,6 +342,38 @@ _DOMAIN_TOOL_MAP = {
     "contacts": {"resolve_contact", "manage_contact"},
     "integrations": {"api_call"},
 }
+
+
+def ensure_local_email_tools_for_local_only(
+    relevant_tools: Optional[Set[str]],
+    *,
+    owner: Optional[str] = None,
+    email_domain: bool = False,
+) -> Optional[Set[str]]:
+    """When Local only mode is on and email is in play, keep the local mirror tools.
+
+    Live IMAP reads are disabled in that mode. Without this, domain/RAG selection
+    can leave only write tools (send/reply/delete) and the agent cannot browse
+    or search mail.
+    """
+    if relevant_tools is None:
+        return None
+    from src.tool_security import (
+        BUILTIN_EMAIL_TOOLS,
+        LOCAL_EMAIL_TOOLS,
+        is_email_local_only,
+    )
+
+    if not is_email_local_only(owner):
+        return relevant_tools
+    email_in_play = email_domain or bool(
+        relevant_tools & (BUILTIN_EMAIL_TOOLS | LOCAL_EMAIL_TOOLS | {"resolve_contact", "manage_contact"})
+    )
+    if not email_in_play:
+        return relevant_tools
+    updated = set(relevant_tools)
+    updated.update(LOCAL_EMAIL_TOOLS)
+    return updated
 
 def _domain_rules_for_tools(tool_names: set) -> list[str]:
     names = set(tool_names or set())
@@ -3019,6 +3060,15 @@ async def stream_agent_loop(
                 "[agent-intent] active document turn removed file tools=%s",
                 _removed_doc_file_tools,
             )
+
+    # Local only mode disables live IMAP reads. If email tools are in play,
+    # force-include the local mirror tools so the agent is not left write-only.
+    if not guide_only and _relevant_tools is not None:
+        _relevant_tools = ensure_local_email_tools_for_local_only(
+            _relevant_tools,
+            owner=owner,
+            email_domain="email" in (_intent.get("domains") or set()),
+        )
 
     if _relevant_tools is not None:
         logger.info("[agent-intent] selected_tools=%s", sorted(_relevant_tools)[:50])

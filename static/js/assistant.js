@@ -120,7 +120,7 @@ function _esc(s) {
 
 // Tool groups for the tool selector UI
 const TOOL_GROUPS = {
-  'Email': ['list_emails', 'read_email', 'send_email', 'reply_to_email', 'archive_email', 'delete_email', 'mark_email_read'],
+  'Email': ['list_emails', 'read_email', 'read_local_emails', 'sync_local_emails', 'send_email', 'reply_to_email', 'archive_email', 'delete_email', 'mark_email_read'],
   'Calendar & Notes': ['manage_calendar', 'manage_notes', 'manage_tasks'],
   'Knowledge': ['web_search', 'read_file', 'manage_memory', 'manage_rag', 'search_chats'],
   'Code': ['bash', 'python', 'write_file'],

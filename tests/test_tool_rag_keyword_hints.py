@@ -53,7 +53,7 @@ def test_genuine_email_query_still_gets_email_tools():
     keywords still force-include the toolset."""
     ti = _index_without_embeddings()
     tools = ti.get_tools_for_query("reply to the unread email in my inbox")
-    assert {"reply_to_email", "send_email", "read_email"} <= tools
+    assert {"reply_to_email", "send_email", "read_email", "read_local_emails", "sync_local_emails"} <= tools
 
 
 def test_plain_tell_request_stays_minimal():
