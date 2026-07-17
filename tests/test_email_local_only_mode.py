@@ -133,3 +133,43 @@ def test_agent_loop_merges_live_read_disabled_tools(monkeypatch):
     assert "list_emails" in disabled
     assert "read_local_emails" not in disabled
     assert "sync_local_emails" not in disabled
+
+
+def test_email_domain_map_includes_local_mirror_tools():
+    """Local-only mode disables live list/read; domain selection must still
+    surface the local mirror tools or the agent is left write-only."""
+    from src.agent_loop import _DOMAIN_TOOL_MAP
+    from src.tool_security import LOCAL_EMAIL_TOOLS
+
+    email_tools = _DOMAIN_TOOL_MAP["email"]
+    assert LOCAL_EMAIL_TOOLS <= email_tools
+
+
+def test_local_only_effective_email_tools_keep_local_reads(monkeypatch):
+    """Simulate the turn composition that left the resume-review chat write-only:
+    email domain tools + local-only disabling live IMAP reads. Local mirror
+    tools must remain after disabled filtering."""
+    from src.agent_loop import _DOMAIN_TOOL_MAP
+    from src.tool_security import (
+        LOCAL_EMAIL_TOOLS,
+        live_imap_read_disabled_tools,
+    )
+
+    monkeypatch.setattr(
+        "src.tool_security.is_email_local_only",
+        lambda owner: True,
+    )
+    selected = set(_DOMAIN_TOOL_MAP["email"])
+    # Mirror stream_agent_loop: when local-only is on and email is in play,
+    # force-include the local mirror tools before schema filtering.
+    from src.agent_loop import ensure_local_email_tools_for_local_only
+
+    selected = ensure_local_email_tools_for_local_only(
+        selected, owner="alice", email_domain=True
+    )
+    disabled = live_imap_read_disabled_tools("alice")
+    effective = selected - disabled
+    assert LOCAL_EMAIL_TOOLS <= effective
+    assert "list_emails" not in effective
+    assert "read_email" not in effective
+    assert "list_email_accounts" in effective
