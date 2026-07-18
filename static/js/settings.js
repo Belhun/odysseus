@@ -3771,16 +3771,10 @@ async function initPluginIntegrations() {
               : 'Reload this page to use the new feature.';
             const already = body.already_installed ? ' (already installed)' : '';
             uiModule.showToast(`Installed v${body.version || ''}${already} — ${restartMsg}`, 10000);
-            if (!body.reload_required && body.plugin_id === 'finance') {
+            if (!body.reload_required && window.syncPluginNavVisibility) {
               try {
                 const fr = await fetch('/api/auth/features', { credentials: 'same-origin' });
-                if (fr.ok) {
-                  const features = await fr.json();
-                  ['tool-finance-btn', 'rail-finance'].forEach((id) => {
-                    const node = el(id);
-                    if (node) node.style.display = features.finance === false ? 'none' : '';
-                  });
-                }
+                if (fr.ok) window.syncPluginNavVisibility(await fr.json());
               } catch (_) {}
             }
             await renderPlugins();
@@ -3806,9 +3800,38 @@ async function initPluginIntegrations() {
             uiModule.showToast(body.detail || 'Uninstall failed', 5000);
             return;
           }
+          // Hide plugin nav immediately — do not wait for a full page reload.
+          if (window.syncPluginNavVisibility) {
+            try {
+              const fr = await fetch('/api/auth/features', { credentials: 'same-origin' });
+              const features = fr.ok ? await fr.json() : {};
+              const cfg = window.PLUGIN_NAV?.[pluginId];
+              if (cfg) features[cfg.feature] = false;
+              window.syncPluginNavVisibility(features);
+            } catch (_) {
+              const cfg = window.PLUGIN_NAV?.[pluginId];
+              if (cfg) {
+                (cfg.ids || []).forEach((id) => {
+                  const node = el(id);
+                  if (node) node.style.display = 'none';
+                });
+                window._pluginFeaturesOff?.add(pluginId);
+              }
+            }
+          }
+          // Close open plugin modals so uninstall doesn't leave a dangling panel.
+          try {
+            if (pluginId === 'finance') {
+              const mod = await import('/static/plugins/finance/js/index.js');
+              (mod.closeFinance || mod.default?.closeFinance)?.();
+            } else if (pluginId === 'sysforge') {
+              const mod = await import('/static/plugins/sysforge/js/index.js');
+              (mod.closeSysforge || mod.default?.closeSysforge)?.();
+            }
+          } catch (_) {}
           uiModule.showToast(body.reload_required
             ? 'Uninstalled — restart the Odysseus server, then reload this page.'
-            : 'Uninstalled — reload this page.', 8000);
+            : 'Uninstalled — plugin removed from navigation.', 8000);
           await renderPlugins();
         });
       });

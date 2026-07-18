@@ -119,6 +119,7 @@ def test_plugin_catalog_lists_finance(monkeypatch):
         assert res.status_code == 200
         ids = [p["id"] for p in res.json().get("plugins", [])]
         assert "finance" in ids
+        assert "sysforge" in ids
 
 
 @pytest.mark.area_routes

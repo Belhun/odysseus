@@ -1,0 +1,8 @@
+{
+  "id": "sysforge",
+  "name": "Business Management",
+  "description": "Clients, invoices, parts, and projects for repair shops. Optional SysForge systems — install only when you need them.",
+  "version": "0.1.0",
+  "min_odysseus_version": "1.0.0",
+  "feature_flag": "sysforge"
+}
