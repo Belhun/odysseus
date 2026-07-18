@@ -493,6 +493,16 @@ class _RevalidatingStatic(StaticFiles):
         return resp
 
 
+_sysforge_static_dir = abs_join(BASE_DIR, "integrations/sysforge/static")
+if os.path.isdir(_sysforge_static_dir):
+    # Mount before /static — Starlette matches mounts in order; the broad
+    # /static handler would otherwise swallow /static/plugins/sysforge/*.
+    app.mount(
+        "/static/plugins/sysforge",
+        _RevalidatingStatic(directory=_sysforge_static_dir),
+        name="sysforge_plugin_static",
+    )
+
 app.mount("/static", _RevalidatingStatic(directory=STATIC_DIR), name="static")
 
 # ========= GENERATED IMAGES =========
@@ -859,6 +869,12 @@ app.include_router(setup_vault_routes())
 from routes.contacts.contacts_routes import setup_contacts_routes
 app.include_router(setup_contacts_routes())
 
+from routes.plugin_routes import setup_plugin_routes
+app.include_router(setup_plugin_routes())
+
+from integrations.sysforge.routes import setup_sysforge_routes
+app.include_router(setup_sysforge_routes())
+
 from companion import setup_companion_routes
 app.include_router(setup_companion_routes())
 
@@ -902,6 +918,10 @@ async def serve_memory(request: Request):
 
 @app.get("/gallery")
 async def serve_gallery(request: Request):
+    return await serve_index(request)
+
+@app.get("/business")
+async def serve_business(request: Request):
     return await serve_index(request)
 
 @app.get("/tasks")
