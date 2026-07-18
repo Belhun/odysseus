@@ -2063,6 +2063,23 @@ async def llm_call_async(
                     continue
                 raise HTTPException(r.status_code, friendly)
             logger.info(f"LLM async call to {target_url} succeeded in {duration:.2f}s (attempt {attempt})")
+            try:
+                from core.perf_emit import emit
+                from core.gpu_sampler import sample_ollama_on_llm
+                emit(
+                    "llm.inference",
+                    provider=provider,
+                    endpoint_host=target_url,
+                    model_requested=model,
+                    stream=False,
+                    latency_ms={"total": round(duration * 1000, 2)},
+                    status="ok",
+                    session_id=session_id,
+                )
+                if provider == "ollama":
+                    await sample_ollama_on_llm()
+            except Exception:
+                pass
             _clear_host_dead(target_url)
             data = r.json()
             try:

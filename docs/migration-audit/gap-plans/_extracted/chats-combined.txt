@@ -1,0 +1,181 @@
+==================== 21972123-780e-4496-99cd-5be905556a3b.md ====================
+# Chat review: 21972123-780e-4496-99cd-5be905556a3b
+
+Source: SysForge agent transcript (+ 4 subagents). Branch work: `Invoice-system` → commit `66985d4` (`fix(invoices): edit client combo; last edited column`).
+
+## Title/topic
+
+Client dashboard invoice UX polish: stop auto-open client picker on edit; add **Last edited** (date+time); post–**Save as new** navigate to read-only viewer with back → client dashboard.
+
+## Features
+
+- **Client picker stays closed on edit load** (`InvoiceCalculatorViewModel.UpdateClientSearchResults`): if `SelectedClient` is set and trimmed `ClientSearchQuery` equals `SelectedClient.DisplayName` (ordinal ignore-case), skip search and keep `ShowClientDropdown = false`. Covers `LoadWithInvoice` / `LoadWithClient` and post-pick fill.
+- **Last edited column** on Client Dashboard invoice DataGrid (`ClientDashboardView.axaml`): binds `LastEditedDisplay`.
+- **Schema / model**: migration `0015_invoices_last_edited.sql` adds `Invoices.LastEditedAt` (TEXT, UTC), backfill from `DateCreated`, trigger `trg_Invoices_LastEditedAt` (bumps on UPDATE when `LastEditedAt` unchanged), index `ix_Invoices_LastEditedAt`.
+- **`Invoice` model**: `LastEditedAt`; `LastEditedDisplay` via `DateTimeHelpers.FormatDateTime` (local, `MM/dd/yyyy h:mm tt`), falls back to `DateCreated`.
+- **`InvoiceService.SaveInvoice`**: sets `LastEditedAt` on insert (`= DateCreated`) and update (`UtcNow`); INSERT/UPDATE include column.
+- **Save as new → viewer → back to dashboard**:
+  - `NavigationHistory.RemoveCurrentEntry()`
+  - `NavigationService.NavigateToInvoiceViewerAfterSaveAsNewAsync(invoiceId, clientId)`: drop current history entry, `ClientDashboardViewModel.LoadClient(clientId)`, load `InvoiceViewerViewModel`, navigate
+  - Wired in `InvoiceCalculatorViewModel` (clear calculator / `_editingInvoice` then navigate) and `InvoiceEditViewModel` (fallback `LoadInvoice(newId)` if no client id / nav failure)
+- **Also in commit `66985d4` (broader invoice branch surface)**: edits to `ClientDashboardViewModel`, `InvoiceViewerViewModel`, `InvoiceCalculatorView`/`InvoiceEditView` axaml(+cs), `NavigationService`, `PlaceholderWorkflowTests`, removal of `DebugLog` / diagnostics instrumentation (`DiagnosticsViewModel`, `DiagnosticsView`).
+
+## Issues/bugs
+
+- **Client dropdown auto-opens on edit from dashboard**: `ClientDashboardViewModel.EditInvoice` → `NavigateToInvoiceCalculatorEditAsync` → `LoadWithInvoice` sets `ClientSearchQuery` to display name; `UpdateClientSearchResults` always appended “Add New” and set `ShowClientDropdown = true`. Fixed as above. Note: dashboard “edit” uses **Invoice Calculator**, not `InvoiceEditView` (no client combo there).
+- **Commit gap**: after push of `66985d4`, unstaged leftovers reported for `SchemaSyncTests.cs`, `InvoiceService.cs`, `ClientDashboardView.axaml` (last-edited UI / schema-test exclusion may not all be in that commit). Port from working tree / later commits, not only `66985d4`.
+- Solution build can fail while `SysForge.exe` locks DLLs; temp-output build used for verify.
+
+## UX
+
+- Editing an invoice with client already filled: client search shows name; **dropdown/overlay must not pop open**.
+- Typing so query no longer matches selected `DisplayName` should reopen search results.
+- Client dashboard invoice grid: column header **Last edited**; show **date and time** (not date-only).
+- After **Save as new Invoice** (calculator or edit): land on **read-only** viewer for the **new** invoice id; top-left **back** returns to **Client Dashboard** with that client still selected (and list refreshed, including new invoice)—not the calculator/edit screen.
+
+## Plans/deferred
+
+- No product roadmap deferred in-chat; remaining work called out by commit agent: follow-up commit for unstaged `SchemaSyncTests` / `InvoiceService` / `ClientDashboardView.axaml` if still dirty.
+- Optional verify path: **Save as new** from `InvoiceEditView` when client id available (same nav as calculator).
+
+## Odyssey checklist
+
+- [ ] Port or reimplement client-search overlay guard: do not open results when query == selected client display name (`ShowClientDropdown` / equivalent in `invoice-calculator` JS).
+- [ ] Confirm dashboard “edit invoice” route targets calculator (`#sysforge/invoice-calculator` / edit-with-id), not only `invoice-edit/:id`.
+- [ ] Schema: `LastEditedAt` on invoices (+ backfill, update-on-touch behavior comparable to trigger, or explicit set on every save/status change).
+- [ ] API/list payload includes last-edited; client dashboard table column **Last edited** with date+time formatting (align with existing datetime helpers).
+- [ ] `Save as new` success → navigate to `invoice-view/:id` (new id).
+- [ ] Viewer back stack / return context: after that path, back goes to **client dashboard** for the saved client (`InvoiceNavigationReturnContext` / history replace), not calculator/edit.
+- [ ] Calculator clears edit state before leaving on save-as-new (avoid stale editing session on return).
+- [ ] Sync tests / draft parity: exclude `LastEditedAt` from draft field sync if Odyssey has `SchemaSync`-style checks (`LastModifiedAt` on drafts vs DB column).
+- [ ] Do not assume commit `66985d4` alone; verify `ClientDashboardView` column + `SchemaSyncTests` exclusion landed in SysForge before porting.
+
+## Confidence
+
+**High** for the three user-facing behaviors and concrete SysForge symbols (subagents completed with named files and verification steps). **Medium** on exact Odyssey file mapping (research docs name routes/modules; product code under `odysseus-sysforge` has no `LastEditedAt` / save-as-new viewer nav yet). **Medium-low** that every file from `66985d4` is the final SysForge source of truth for last-edited UI given post-push unstaged leftovers.
+
+==================== 67a4ed8b-7a7b-4bd0-8933-3d4e33a185f6.md ====================
+# Chat review: 67a4ed8b-7a7b-4bd0-8933-3d4e33a185f6
+
+Source: `C:\Users\User\.cursor\projects\f-Codeing-Project-SysForge\agent-transcripts\67a4ed8b-7a7b-4bd0-8933-3d4e33a185f6\67a4ed8b-7a7b-4bd0-8933-3d4e33a185f6.jsonl`  
+Sibling subagent transcripts: none  
+Project: SysForge  
+Commit claimed: `707a673` on branch `cursor/projects-plan-7229`  
+Message: `fix(invoice): return to origin screen after save and add viewer edit button`
+
+## Title/topic
+
+Read-only invoice viewer gets a top **Edit** button; post-save navigation returns to the screen that opened the invoice flow (project view vs client dashboard) instead of always landing on the client dashboard.
+
+## Features
+
+- **Viewer Edit control:** `InvoiceViewerView.axaml` header (`Grid` `*,Auto`) — title + "Read-only view" left; **Edit** button right bound to `EditInvoiceCommand`. Footer "This view is read-only." removed; row defs become `Auto,Auto,*`.
+- **`InvoiceViewerViewModel.EditInvoiceCommand`:** `[RelayCommand(CanExecute = CanEditInvoice)]` → `NavigationService.NavigateToInvoiceCalculatorEditAsync(Invoice.Id)`; disabled until `Invoice` is loaded (`NotifyCanExecuteChanged` on invoice set). Same edit path as client dashboard edit.
+- **Return-context model:** new `SysForge/Models/InvoiceNavigationReturnContext.cs` with `ViewModelType`, optional `ClientId` / `ProjectId` / `WorkOrderId`.
+- **Capture on invoice-flow entry** (`NavigationService.CaptureInvoiceReturnContextIfStartingFlow`): called from `NavigateToInvoiceViewerAsync`, `NavigateToInvoiceCalculatorEditAsync`, `NavigateToInvoiceEditAsync`, `NavigateToInvoiceCalculatorWithClientAsync`. Opening Edit from the viewer does not overwrite an existing context.
+- **Post-save return:** `InvoiceCalculatorViewModel` save success calls `NavigateAfterInvoiceSaveAsync(savedClientId)` instead of `NavigateToClientDashboardAsync`. Service trims invoice screens from history (`TrimInvoiceFlowFromHistory`) then restores the recorded screen.
+- **Origins supported (as stated in chat):** `ProjectDetailFourColumnViewModel` (new layout), `ProjectDetailViewModel`, client dashboard variants (`ClientDashboardViewModel`, `ClientDashboardWireframeClassicViewModel`, `ClientDashboardWireframeViewModel`), `WorkOrderDetailViewModel`, projects hub; fallback to client dashboard when no context (e.g. sidebar).
+- **Project restore:** `ProjectDetailFourColumnViewModel.PrepareForReturnNavigation(int projectId)` restores picker/`SetProjectId`/selection flags when returning from invoice viewer or calculator.
+- **Save-as-new path:** `NavigateToInvoiceViewerAfterSaveAsNewAsync` uses `TrimInvoiceFlowFromHistory` and no longer forces dashboard load before the viewer (back uses the same return history).
+- **Scoped commit files:** `InvoiceNavigationReturnContext.cs`, `NavigationService.cs`, `InvoiceCalculatorViewModel.cs`, `InvoiceViewerViewModel.cs`, `InvoiceViewerView.axaml`, `ProjectDetailFourColumnViewModel.cs`. Unrelated tree work (screw maps, plans) left uncommitted.
+
+## Issues/bugs
+
+- **Bug fixed:** Project view (new layout) → related invoice → Edit → save always navigated to **client dashboard** instead of the project the user was on. Root cause: hard-coded post-save `NavigateToClientDashboardAsync`.
+- **Desired rule:** remember origin; client-dashboard edit returns to client dashboard; project-view edit returns to that same project view.
+- **Commit hygiene:** `CurrentProjectId` / `CurrentWorkOrderId` helpers on `ProjectDetailViewModel` / `WorkOrderDetailViewModel` were added then reverted so those dirty files were not staged; capture uses `Project?.Id` / `WorkOrder?.Id` instead.
+- No automated test coverage for return context claimed in this chat (build-only verification).
+
+## UX
+
+- Read-only viewer: primary action is top-right **Edit** (mirrors client-details header pattern on the dashboard).
+- Subtitle still says "Read-only view"; bottom read-only footer text removed.
+- After save, user should land on the originating surface (project four-column with same project selected, or client dashboard for that client), not an unexpected hub switch.
+- Save-as-new still opens the read-only viewer; Back should honor the same origin history.
+
+## Plans/deferred
+
+- No further return-context origins or web porting planned in this chat.
+- Screw-map / other uncommitted SysForge work explicitly deferred from this commit.
+- Chat does not specify Odyssey route shapes, hash history, or how web session storage would mirror `_invoiceReturnContext`.
+
+## Odyssey checklist
+
+Checks against `F:\Codeing Project\odysseus-sysforge` (research + gap matrix + runtime search):
+
+- [ ] **Invoice viewer UI** — SysForge `InvoiceViewerView` / `InvoiceViewerViewModel` is **Done** in desktop; Odyssey gap matrix marks Invoice viewer **Missing**. No `invoice-view` / `InvoiceViewer` runtime in `static/` or `integrations/sysforge/` (plugin stub only). Research: `Sysforge research/features/invoice-viewer.md`, route `invoice-view/:id` in `06-frontend-routing.md`.
+- [ ] **Viewer Edit button** — Port header **Edit** → calculator edit with invoice id (`EditInvoiceCommand` → `NavigateToInvoiceCalculatorEditAsync` / `#sysforge/invoice-calculator` edit-with-id equivalent). Button disabled until invoice loaded.
+- [ ] **Return context after save** — Port `InvoiceNavigationReturnContext` + `CaptureInvoiceReturnContextIfStartingFlow` + `NavigateAfterInvoiceSaveAsync` + `TrimInvoiceFlowFromHistory`. Do not hard-code post-save → client dashboard.
+- [ ] **Origin matrix** — After save, restore:
+  - Project detail (production four-column / web project page) with same `ProjectId` (`PrepareForReturnNavigation`)
+  - Client dashboard with same client
+  - Work order detail when that was the opener
+  - Projects hub when that was the opener
+  - Fallback: client dashboard only when no context
+- [ ] **Viewer → Edit must not reset origin** — Entering calculator from the viewer keeps the first non-invoice screen as return target.
+- [ ] **Save-as-new** — Align with `NavigateToInvoiceViewerAfterSaveAsNewAsync` + history trim so Back returns to origin (related: chat `21972123-780e-4496-99cd-5be905556a3b`).
+- [ ] Cross-check SysForge sources: `NavigationService.cs`, `InvoiceNavigationReturnContext.cs`, `InvoiceViewerView.axaml`, `InvoiceViewerViewModel.cs`, `InvoiceCalculatorViewModel.cs`, `ProjectDetailFourColumnViewModel.PrepareForReturnNavigation`.
+
+## Confidence
+
+**High** for SysForge behavior and file set (focused chat, concrete types/methods, build claimed, commit `707a673` listed with file table).  
+**High** that Odyssey lacks the runtime port today (no invoice-viewer JS/routes in product code; research + gap matrix already flag the gap).  
+**Medium** for exact web history mechanics (session/hash stack vs Avalonia `_invoiceReturnContext`); port must preserve origin semantics even if storage differs.
+
+==================== 21e672a5-191b-42d1-a2ae-4a5527cb8784.md ====================
+# Chat review: 21e672a5-191b-42d1-a2ae-4a5527cb8784
+
+Source: SysForge agent transcript (35 lines, no sibling subagent `.jsonl`).
+
+## Title/topic
+
+Invoice edit save broken (FK / placeholder orphan race) + keep same invoice name on edit + **Save as new Invoice** button.
+
+## Features
+
+- **`InvoiceService.SaveInvoice` (update path):** move `PartService.DeleteOrphanedPlaceholders` to **after** re-inserting `InvoiceItems` (was between DELETE items and INSERT).
+- **`InvoiceCalculatorViewModel`:**
+  - `IsEditingExistingInvoice` (`_editingInvoice != null`) + `NotifyEditingStateChanged`.
+  - **Save Invoice** while editing: no `PromptForInvoiceNameAsync`; keep stored `Name` (fallback `GenerateDefaultInvoiceName()` if blank); update same row via `_editingInvoice`.
+  - On edit save: do **not** reset `Status` / `IsFinalized` / `SentAt` (only new invoices set `Estimate`, `IsFinalized=false`, `SentAt=null`).
+  - **`SaveAsNewInvoice`:** name dialog → new `Invoice` row → `LoadWithInvoice(newId)`.
+  - `ClearCalculator` clears `_editingInvoice` and notifies editing state.
+- **`InvoiceEditViewModel`:** same **`SaveAsNewInvoice`** (clone lines via `CloneItemForNewInvoice`, suggested name `SuggestedNameForNewCopy` → `"<name> (copy)"` or `Client - MM/dd/yyyy`), `PromptForInvoiceNameAsync` + `InvoiceNameDialog`.
+- **UI:** `InvoiceCalculatorView.axaml` — **Save as new Invoice** right of Save, `IsVisible={Binding IsEditingExistingInvoice}`; `InvoiceEditView.axaml` — always show button next to Save.
+- **Toasts:** SQLite extended **787** (FK) → specific “re-pick part / fix supplier” message (not generic UNIQUE “already exists”) in calculator + edit VMs.
+- **Test:** `PlaceholderWorkflowTests.SaveInvoice_OnUpdate_DoesNotDeletePlaceholdersBeforeReinsertingItems`.
+
+## Issues/bugs
+
+- **Root cause:** update flow deleted line items → `DeleteOrphanedPlaceholders` removed placeholder `Parts` still referenced in memory → INSERT `InvoiceItems` with stale `PartId` → FK failure (constraint 19 / extended 787). New-invoice create worked.
+- Misleading toast mapped all error **19** to “already exists.”
+- Edit save always prompted for a new date-based name instead of updating the same invoice.
+- Edit save forced `Status=Estimate`, `IsFinalized=false` (would wipe finalized/sent state).
+
+## UX
+
+- Edit from dashboard → **Save Invoice** = silent update, same name/row.
+- **Save as new Invoice** only when editing in calculator; always available on dedicated edit screen.
+- Save-as-new: name dialog; calculator default `Client - today`; edit screen prefers `"<current> (copy)"`.
+- After save-as-new: stay on the **new** invoice (`LoadWithInvoice` / `LoadInvoice`).
+- Clear form exits edit mode.
+
+## Plans/deferred
+
+- None explicit in this chat. Build + regression test run; no further backlog items called out.
+
+## Odyssey checklist
+
+- [ ] Port orphan-cleanup order in invoice update: delete items → create placeholders → insert items → **then** `DeleteOrphanedPlaceholders` (or equivalent). Do not orphan mid-transaction.
+- [ ] Regression: update invoice whose lines use placeholder `PartId`s; placeholders must survive; lines must save.
+- [ ] Edit save updates **same** invoice id/name; no forced rename dialog on update.
+- [ ] Edit save preserves `status` / finalized / `sent_at` (only create path defaults to estimate).
+- [ ] **Save as new Invoice** next to Save: duplicates lines into a new estimate; name prompt; load new id after save.
+- [ ] Calculator: show Save-as-new only when editing an existing invoice; clear-form exits edit mode.
+- [ ] Map FK failures to a clear user message (not UNIQUE/duplicate).
+- [ ] Cross-check against SysForge: `InvoiceService.cs`, `InvoiceCalculatorViewModel.cs`, `InvoiceEditViewModel.cs`, `InvoiceCalculatorView.axaml`, `InvoiceEditView.axaml`, `PlaceholderWorkflowTests.cs`.
+- [ ] Note: odysseus-sysforge has no `SaveAsNew` / `DeleteOrphanedPlaceholders` / `IsEditingExistingInvoice` matches yet; treat as required when porting calculator + edit + `InvoiceService`/`PartService` placeholder flow (`Sysforge research/features/invoice-edit.md`, overview invoice rewrite).
+
+## Confidence
+
+**High** — single focused chat; root cause, code paths, UX rules, and test name are explicit. No subagent transcripts. Odyssey port status inferred from repo grep (feature absent), not from a live Odyssey invoice implementation review.

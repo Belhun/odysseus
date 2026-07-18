@@ -807,10 +807,15 @@ async def do_ui_control(content: str, session_id: Optional[str] = None, owner: O
             "llm": "cookbook",
             "serve": "cookbook",
             "serving": "cookbook",
+            "finance": "finance",
+            "banking": "finance",
+            "budget": "finance",
+            "budgets": "finance",
+            "money": "finance",
         }
         target = _panel_aliases.get(panel)
         if not target:
-            return {"error": f"Unknown panel '{panel}'. Valid: documents, gallery, email, sessions, notes, memories, skills, settings, cookbook."}
+            return {"error": f"Unknown panel '{panel}'. Valid: documents, gallery, email, sessions, notes, memories, skills, settings, cookbook, finance."}
         return {
             "ui_event": "open_panel",
             "panel": target,
