@@ -3740,14 +3740,19 @@ async function initPluginIntegrations() {
         listEl.innerHTML = '';
         return;
       }
+      const pluginIcons = {
+        finance: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
+        sysforge: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-6h6v6"/></svg>',
+      };
       listEl.innerHTML = `
         <div style="font-size:11px;font-weight:600;opacity:0.55;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.4px;">Optional plugins</div>
         ${plugins.map((p) => {
           const installed = !!p.installed;
           const btnLabel = installed ? 'Installed' : 'Install';
           const btnDisabled = installed ? 'disabled' : '';
+          const icon = pluginIcons[p.id] || pluginIcons.sysforge;
           return `<div class="intg-card plugin-card" data-plugin-id="${p.id}" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb, var(--fg) 3%, transparent);margin-bottom:8px;">
-            <span style="color:var(--accent, var(--red));flex-shrink:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
+            <span style="color:var(--accent, var(--red));flex-shrink:0">${icon}</span>
             <div style="flex:1;min-width:0">
               <div style="font-size:12px;font-weight:600">${p.name || p.id}</div>
               <div style="font-size:11px;opacity:0.55;line-height:1.35">${p.description || ''}</div>
@@ -3771,16 +3776,10 @@ async function initPluginIntegrations() {
               : 'Reload this page to use the new feature.';
             const already = body.already_installed ? ' (already installed)' : '';
             uiModule.showToast(`Installed v${body.version || ''}${already} — ${restartMsg}`, 10000);
-            if (!body.reload_required && body.plugin_id === 'finance') {
+            if (!body.reload_required && window.syncPluginNavVisibility) {
               try {
                 const fr = await fetch('/api/auth/features', { credentials: 'same-origin' });
-                if (fr.ok) {
-                  const features = await fr.json();
-                  ['tool-finance-btn', 'rail-finance'].forEach((id) => {
-                    const node = el(id);
-                    if (node) node.style.display = features.finance === false ? 'none' : '';
-                  });
-                }
+                if (fr.ok) window.syncPluginNavVisibility(await fr.json());
               } catch (_) {}
             }
             await renderPlugins();
@@ -3806,9 +3805,38 @@ async function initPluginIntegrations() {
             uiModule.showToast(body.detail || 'Uninstall failed', 5000);
             return;
           }
+          // Hide plugin nav immediately — do not wait for a full page reload.
+          if (window.syncPluginNavVisibility) {
+            try {
+              const fr = await fetch('/api/auth/features', { credentials: 'same-origin' });
+              const features = fr.ok ? await fr.json() : {};
+              const cfg = window.PLUGIN_NAV?.[pluginId];
+              if (cfg) features[cfg.feature] = false;
+              window.syncPluginNavVisibility(features);
+            } catch (_) {
+              const cfg = window.PLUGIN_NAV?.[pluginId];
+              if (cfg) {
+                (cfg.ids || []).forEach((id) => {
+                  const node = el(id);
+                  if (node) node.style.display = 'none';
+                });
+                window._pluginFeaturesOff?.add(pluginId);
+              }
+            }
+          }
+          // Close open plugin modals so uninstall doesn't leave a dangling panel.
+          try {
+            if (pluginId === 'finance') {
+              const mod = await import('/static/plugins/finance/js/index.js');
+              (mod.closeFinance || mod.default?.closeFinance)?.();
+            } else if (pluginId === 'sysforge') {
+              const mod = await import('/static/plugins/sysforge/js/index.js');
+              (mod.closeSysforge || mod.default?.closeSysforge)?.();
+            }
+          } catch (_) {}
           uiModule.showToast(body.reload_required
             ? 'Uninstalled — restart the Odysseus server, then reload this page.'
-            : 'Uninstalled — reload this page.', 8000);
+            : 'Uninstalled — plugin removed from navigation.', 8000);
           await renderPlugins();
         });
       });

@@ -220,7 +220,8 @@ DEFAULT_FEATURES = {
     "rag": True,
     "sensitive_filter": True,
     "gallery": True,
-    "finance": False,
+    "finance": False,   # optional plugin — enabled on Integrations install
+    "sysforge": False,  # optional Business Management plugin — Integrations install
 }
 
 
