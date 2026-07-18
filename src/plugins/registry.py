@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 INTEGRATIONS_ROOT = Path(get_app_root()) / "integrations"
 PLUGINS_DATA_ROOT = Path(DATA_DIR) / "plugins"
 
-KNOWN_PLUGINS = ("sysforge", "finance")
+KNOWN_PLUGINS = ("finance", "sysforge")
 
 
 def bundled_plugin_dir(plugin_id: str) -> Path:

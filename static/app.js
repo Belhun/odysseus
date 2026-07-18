@@ -27,16 +27,23 @@ import calendarModule from './js/calendar.js';
 import notesModule from './js/notes.js';
 import adminModule from './js/admin.js';
 
+let financeModule = null;
 let sysforgeModule = null;
 
 /** Optional plugins: install flag wins over Appearance UI-vis prefs. */
 window.PLUGIN_NAV = {
+  finance: {
+    feature: 'finance',
+    ids: ['tool-finance-btn', 'rail-finance'],
+    uiKey: 'tool-finance',
+  },
   sysforge: {
     feature: 'sysforge',
     ids: ['tool-sysforge-btn', 'rail-sysforge'],
     uiKey: 'tool-sysforge',
   },
 };
+// Assume off until /api/auth/features resolves (buttons start display:none in HTML).
 window._pluginFeaturesOff = new Set(Object.keys(window.PLUGIN_NAV));
 
 window.syncPluginNavVisibility = function syncPluginNavVisibility(features) {
@@ -56,6 +63,17 @@ window.syncPluginNavVisibility = function syncPluginNavVisibility(features) {
   });
 };
 
+async function _loadFinanceModule() {
+  if (financeModule) return financeModule;
+  try {
+    const mod = await import('/static/plugins/finance/js/index.js');
+    financeModule = mod.default || mod;
+    return financeModule;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function _loadSysforgeModule() {
   if (sysforgeModule) return sysforgeModule;
   try {
@@ -66,7 +84,6 @@ async function _loadSysforgeModule() {
     return null;
   }
 }
-
 import settingsModule from './js/settings.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
 import './js/modalManager.js';
@@ -1082,6 +1099,21 @@ function initializeEventListeners() {
     });
   }
 
+  // Finance tool button
+  const toolFinanceBtn = el('tool-finance-btn');
+  if (toolFinanceBtn) {
+    toolFinanceBtn.addEventListener('click', async () => {
+      if (window._pluginFeaturesOff?.has('finance')) return;
+      const mod = await _loadFinanceModule();
+      if (!mod) return;
+      const Modals = await import('./js/modalManager.js');
+      if (!Modals.toggle('finance-modal')) {
+        if (mod.isFinanceOpen()) mod.closeFinance();
+        else mod.openFinance();
+      }
+    });
+  }
+
   // Business Management (SysForge) tool button
   const toolSysforgeBtn = el('tool-sysforge-btn');
   if (toolSysforgeBtn) {
@@ -1277,10 +1309,8 @@ function initializeEventListeners() {
     },
     '/memory':   () => document.getElementById('tool-memory-btn')?.click(),
     '/gallery':  () => document.getElementById('tool-gallery-btn')?.click(),
-    '/business': () => {
-      const b = document.getElementById('tool-sysforge-btn');
-      if (b && !window._pluginFeaturesOff?.has('sysforge')) b.click();
-    },
+    '/finance':  async () => { const b = el('tool-finance-btn'); if (b && !window._pluginFeaturesOff?.has('finance')) b.click(); },
+    '/business': async () => { const b = el('tool-sysforge-btn'); if (b && !window._pluginFeaturesOff?.has('sysforge')) b.click(); },
     '/tasks':    () => document.getElementById('tool-tasks-btn')?.click(),
     '/library':  () => sessionModule && sessionModule.openLibrary && sessionModule.openLibrary(),
   };
@@ -1565,9 +1595,12 @@ function initializeEventListeners() {
       Object.entries(map).forEach(([key, ids]) => {
         if (features[key] === false) {
           ids.forEach(id => { const e = el(id); if (e) e.style.display = 'none'; });
+        } else if (features[key] === true) {
+          ids.forEach(id => { const e = el(id); if (e) e.style.display = ''; });
         }
       });
-      // Optional plugins: install flag is absolute (Appearance prefs cannot resurrect nav).
+      // Optional plugins (Finance, Business Management): install flag is absolute.
+      // Do not let Appearance UI-vis prefs resurrect nav after uninstall.
       if (window.syncPluginNavVisibility) window.syncPluginNavVisibility(features);
       // Re-apply the user's Appearance UI-vis preferences after the
       // features fetch finishes hiding things — otherwise an admin-
@@ -2677,6 +2710,7 @@ function initializeEventListeners() {
     'tool-compare':        '#tool-compare-btn',
     'tool-cookbook':       '#tool-cookbook-btn',
     'tool-research':       '#tool-research-btn',
+    'tool-finance':        '#tool-finance-btn',
     'tool-sysforge':       '#tool-sysforge-btn',
     'tool-gallery':        '#tool-gallery-btn',
     'tool-library':        '#tool-library-btn',
@@ -2719,7 +2753,8 @@ function initializeEventListeners() {
     Object.entries(UI_VIS_MAP).forEach(([key, selector]) => {
       // section-drag-reorder uses a body class instead of inline styles
       if (key === 'section-drag-reorder') return;
-      // Optional plugins: install/feature state beats Appearance prefs.
+      // Optional plugins: install/feature state beats Appearance prefs so
+      // uninstall fully removes Finance / Business nav (and stays gone after reload).
       const pluginEntry = Object.entries(window.PLUGIN_NAV || {}).find(([, cfg]) => cfg.uiKey === key);
       if (pluginEntry && window._pluginFeaturesOff?.has(pluginEntry[0])) {
         document.querySelectorAll(selector).forEach(node => { node.style.display = 'none'; });
@@ -2730,6 +2765,7 @@ function initializeEventListeners() {
         el.style.display = visible ? '' : 'none';
       });
     });
+    // Rail buttons for plugins are not always in UI_VIS_MAP — force-hide when off.
     Object.entries(window.PLUGIN_NAV || {}).forEach(([pluginId, cfg]) => {
       if (!window._pluginFeaturesOff?.has(pluginId)) return;
       (cfg.ids || []).forEach((id) => {
@@ -3739,6 +3775,7 @@ function startOdysseusApp() {
     'rail-memory':    'tool-memory-btn',
     'rail-theme':     'tool-theme-btn',
     'rail-email':     'email-section-title',
+    'rail-finance':   'tool-finance-btn',
     'rail-sysforge':  'tool-sysforge-btn',
   };
   Object.entries(_railToolMap).forEach(([railId, toolId]) => {

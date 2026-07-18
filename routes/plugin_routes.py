@@ -14,9 +14,11 @@ from src.plugins import registry
 logger = logging.getLogger(__name__)
 
 _INSTALLERS = {
+    "finance": "integrations.finance.install.run_install",
     "sysforge": "integrations.sysforge.install.run_install",
 }
 _UNINSTALLERS = {
+    "finance": "integrations.finance.uninstall.run_uninstall",
     "sysforge": "integrations.sysforge.uninstall.run_uninstall",
 }
 

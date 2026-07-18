@@ -325,7 +325,7 @@ _DOMAIN_TOOL_MAP = {
     "documents": {"create_document", "edit_document", "update_document", "suggest_document", "manage_documents"},
     "email": {"list_email_accounts", "list_emails", "read_email", "send_email", "reply_to_email", "bulk_email", "archive_email", "delete_email", "mark_email_read", "resolve_contact", "manage_contact"},
     "cookbook": {"download_model", "serve_model", "serve_preset", "list_serve_presets", "list_served_models", "stop_served_model", "tail_serve_output", "list_downloads", "cancel_download", "search_hf_models", "list_cached_models", "list_cookbook_servers", "adopt_served_model"},
-    "notes_calendar_tasks": {"manage_notes", "manage_calendar", "manage_tasks"},
+    "notes_calendar_tasks": {"manage_notes", "manage_calendar", "manage_tasks", "manage_finance"},
     "ui": {"ui_control"},
     "sessions": {"create_session", "list_sessions", "manage_session", "send_to_session", "search_chats"},
     "files": {"bash", "python", "read_file", "write_file", "edit_file", "grep", "glob", "ls", "get_workspace", "manage_bg_jobs"},
@@ -340,7 +340,7 @@ def _domain_rules_for_tools(tool_names: set) -> list[str]:
     for domain, domain_tools in _DOMAIN_TOOL_MAP.items():
         if names & domain_tools:
             rules.append(_DOMAIN_RULES[domain])
-    if names & {"create_session", "list_sessions", "manage_session", "manage_documents", "manage_notes", "manage_calendar", "manage_tasks", "manage_skills", "manage_research"}:
+    if names & {"create_session", "list_sessions", "manage_session", "manage_documents", "manage_notes", "manage_calendar", "manage_tasks", "manage_finance", "manage_skills", "manage_research"}:
         rules.append(_LINK_RULES)
     return rules
 
@@ -530,12 +530,22 @@ If `dtend` omitted, defaults to dtstart+1h (or +1d when `all_day: true`). \
 For a RECURRING event pass `rrule` as an iCalendar RRULE string, e.g. `"FREQ=WEEKLY;BYDAY=MO"` (every Monday), `"FREQ=DAILY;COUNT=10"`, or `"FREQ=MONTHLY;BYMONTHDAY=1"` — create ONE event with the rrule, do not loop creating many events. Do not pass `rrule` for "next Wednesday only", "just this once", or any single occurrence. \
 If the user asks for a reminder/alarm before the event, pass `reminder_minutes` as an integer; do not write reminder text into the event description and do NOT also call `manage_notes` for the same reminder because calendar reminders are routed through Notes automatically. \
 `calendar` accepts a name ("Main") or short-id prefix.""",
+    "manage_finance": """\
+```manage_finance
+{"action": "spending_report", "month": "2026-06"}
+```
+Local finance plugin: accounts, spending by category, budgets, trends, transaction search. \
+Actions: `list_accounts`, `list_transactions`, `spending_report`, `budget_status`, `trends`, `list_categories`, `create_category`, `list_import_batches`, `categorize_transaction`, `set_budget`, `create_rule`. \
+For "how much did I spend on groceries" use `spending_report` (defaults to current month). \
+For specific payees use `list_transactions` with `search` (max 50 rows). \
+New categories: use ask_user with a `confirmation` block. For multiple categories, include an `items` array in `confirmation.payload` (each item: name, optional parent_id/color). After approval, either call `create_categories` once with the full `categories` array, or call `create_category` repeatedly with the same `confirmation_token` until every approved item is created. Use `parent_id` for subcategories (one level under a top-level category). \
+Bank CSV/OFX import has no tool path — `ui_control open_panel finance` opens the Import UI.""",
     "create_session": "- ```create_session``` — Create a new chat. Line 1 = chat name, line 2 = model name. Use for background/parallel work.",
     "list_sessions": "- ```list_sessions``` — List chats sorted MOST-RECENT FIRST (the UI calls them 'chats') with clickable chat-title links. Output includes a relative \"last active\" timestamp per row, so the first row is the user's most recent chat. Content = optional filter keyword (matches chat name). When answering, preserve the `[title](#session-id)` links exactly; do not convert them into plain text.",
     "send_to_session": "- ```send_to_session``` — Send a message to another session. Line 1 = session_id, rest = message. Use for orchestrating work across sessions.",
     "search_chats": "- ```search_chats``` — Search past session transcripts for direct conversation evidence. Use when user asks 'did we discuss X?', 'find the conversation about Y', or when prior chat context is more appropriate than persistent memory.",
     "pipeline": "- ```pipeline``` — Run a multi-step AI pipeline. Args (JSON) with ordered steps, each specifying a model and prompt. Use for complex workflows.",
-    "ui_control": "- ```ui_control``` — Control the UI: toggle tools on/off, OPEN PANELS, open email reply drafts, switch models, change themes. Commands: `toggle <name> on/off` (names: bash/shell, web/search, research, incognito, document_editor/documents), `open_panel <name>` (panels: documents, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook), `open_email_reply <uid> <folder> <reply|reply-all|ai-reply> <body text>` (opens an email compose document pre-filled with body, DOES NOT send; use this for normal “write/draft a reply saying X” requests), `set_mode agent/chat`, `switch_model <name>`, `set_theme <preset>`, `create_theme <name> <bg> <fg> <panel> <border> <accent>` (optional key=val for advanced colors AND background effects: bgPattern=<none|dots|synapse|rain|constellations|perlin-flow|petals|sparkles|embers>, bgEffectColor=#RRGGBB, bgEffectIntensity=<num>, bgEffectSize=<num>, frosted=true|false). \"open documents\" / \"open library\" / \"show gallery\" / \"open inbox\" / \"open notes\" / \"open cookbook\" all map to `open_panel <name>`. Built-in theme presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute. For any other vibe/name, use create_theme.",
+    "ui_control": "- ```ui_control``` — Control the UI: toggle tools on/off, OPEN PANELS, open email reply drafts, switch models, change themes. Commands: `toggle <name> on/off` (names: bash/shell, web/search, research, incognito, document_editor/documents), `open_panel <name>` (panels: documents, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook, finance/banking/budget), `open_email_reply <uid> <folder> <reply|reply-all|ai-reply> <body text>` (opens an email compose document pre-filled with body, DOES NOT send; use this for normal \"write/draft a reply saying X\" requests), `set_mode agent/chat`, `switch_model <name>`, `set_theme <preset>`, `create_theme <name> <bg> <fg> <panel> <border> <accent>` (optional key=val for advanced colors AND background effects: bgPattern=<none|dots|synapse|rain|constellations|perlin-flow|petals|sparkles|embers>, bgEffectColor=#RRGGBB, bgEffectIntensity=<num>, bgEffectSize=<num>, frosted=true|false). \"open documents\" / \"open library\" / \"show gallery\" / \"open inbox\" / \"open notes\" / \"open cookbook\" / \"open finance\" all map to `open_panel <name>`. Built-in theme presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute. For any other vibe/name, use create_theme.",
     "ask_user": "- ```ask_user``` — Ask the user a multiple-choice question when the task is genuinely ambiguous and the answer changes what you do next (pick an approach, confirm an assumption, choose a target). Args (JSON): {\"question\": \"...\", \"options\": [{\"label\": \"...\", \"description\": \"...\"?}, ...], \"multi\": false?}. 2-6 options. The user gets clickable buttons; calling this ENDS your turn and their choice comes back as your next message. Prefer sensible defaults — only ask when you truly can't proceed well without their input.",
     "update_plan": "- ```update_plan``` — While executing an approved plan, write the plan back: tick steps done or revise them. Args (JSON): {\"plan\": \"- [x] done step\\n- [ ] next step\"}. Always pass the COMPLETE checklist, not a diff. Call it after finishing each step (mark it `- [x]`) and whenever the user asks to change the plan. The user's docked plan window updates live. Does nothing if there's no active plan.",
     "list_served_models": "- ```list_served_models``` — Show what the Cookbook (LLM-serving subsystem) is currently running. NO args. Use this for ANY 'what's running' / 'what's serving' / 'show my cookbook' / 'is anything up' query. DO NOT shell out (`ps aux`, `docker ps`, etc.) — this tool is the source of truth. Failed serve tasks include recent logs plus diagnosis/retry suggestions; use those suggestions to call `serve_model` again with an adjusted command when appropriate.",
@@ -574,7 +584,7 @@ GENERIC LOOPBACK to allowed Odysseus internal endpoints. Use this whenever the u
 
 Body for POST/PUT/PATCH goes in `body` (object). Query params in `query` (object). Returns the parsed JSON of the response.
 
-**When to prefer named tools over app_api:** if a named wrapper exists (list_email_accounts, list_emails, read_email, manage_calendar, manage_notes, list_served_models, etc.) USE IT — it has nicer output formatting and clearer schema. Reach for `app_api` only when there's no wrapper for what you need.
+**When to prefer named tools over app_api:** if a named wrapper exists (list_email_accounts, list_emails, read_email, manage_calendar, manage_notes, manage_finance, list_served_models, etc.) USE IT — it has nicer output formatting and clearer schema. Reach for `app_api` only when there's no wrapper for what you need.
 
 Blocked paths/routes (refused for safety): /api/auth/, /api/users/, /api/tokens/, /api/admin/, /api/shell/, /api/backup/restore, /api/email/accounts, POST /api/cookbook/packages/install, POST /api/cookbook/rebuild-engine, POST /api/cookbook/kill-pid.""",
 }
@@ -903,6 +913,7 @@ _EXPLICIT_CONTINUATION_RE = re.compile(
     r"^\s*(?:"
     r"yes|y|yeah|yep|ok|okay|sure|do it|go ahead|continue|carry on|"
     r"run it|launch it|start it|use that|that one|same|the same|"
+    r"let'?s go|let'?s do it|"
     r"first|second|third|the first one|the second one|the third one|"
     r"[123]|[abc]"
     # `\s*[.!?]*\s*$` put two \s-matching quantifiers around `[.!?]*`, which
@@ -913,6 +924,17 @@ _EXPLICIT_CONTINUATION_RE = re.compile(
     r")\s*(?:[.!?]+\s*)?$",
     re.IGNORECASE,
 )
+_APPROVAL_CONTINUATION_RE = re.compile(
+    r"^\s*(?:yes|yeah|yep|ok|okay|sure|approve|approved|confirm|confirmed)\s*,\s*\S",
+    re.IGNORECASE,
+)
+_CONFIRMATION_HINT_RE = re.compile(
+    r"\[System: The user approved confirmation \S+ for (\w+)\.(\w+)\.(\w+)",
+    re.IGNORECASE,
+)
+_GATE_TOOL_PIN_MAP = {
+    ("finance", "manage_finance"): "manage_finance",
+}
 _RETRY_CONTINUATION_RE = re.compile(
     r"\b(?:try again|retry|again|rerun|re-run|run it again|launch it again|"
     r"start it again|failed|fails?|died|crashed|broke|insta|instantly)\b",
@@ -928,7 +950,24 @@ _COOKBOOK_CONTEXT_RE = re.compile(
 
 def _is_explicit_continuation(text: str) -> bool:
     """Only these terse replies may inherit older user turns for tool retrieval."""
-    return bool(_EXPLICIT_CONTINUATION_RE.match(str(text or "").strip()))
+    s = str(text or "").strip()
+    if not s:
+        return False
+    if _CONFIRMATION_HINT_RE.search(s):
+        return True
+    if _EXPLICIT_CONTINUATION_RE.match(s):
+        return True
+    if _APPROVAL_CONTINUATION_RE.match(s):
+        return True
+    return bool(re.match(r"^\s*let'?s\s+(?:go|do it)\s*(?:[.!?]+\s*)?$", s, re.IGNORECASE))
+
+
+def _confirmation_pinned_tools(text: str) -> Set[str]:
+    """Pin gated tools when the user just approved a confirmation token."""
+    pinned: Set[str] = set()
+    for domain, tool_name, _action in _CONFIRMATION_HINT_RE.findall(str(text or "")):
+        pinned.add(_GATE_TOOL_PIN_MAP.get((domain.lower(), tool_name), tool_name))
+    return pinned
 
 
 def _is_casual_low_signal(text: str) -> bool:
@@ -2882,6 +2921,26 @@ async def stream_agent_loop(
                 )
         if "ui" in (_intent.get("domains") or set()):
             _relevant_tools.add("ui_control")
+
+    if not guide_only:
+        _confirmed_tools = _confirmation_pinned_tools(_last_user)
+        if _confirmed_tools:
+            if _relevant_tools is None:
+                from src.tool_index import ALWAYS_AVAILABLE
+                _relevant_tools = set(ALWAYS_AVAILABLE)
+            _relevant_tools.update(_confirmed_tools)
+            logger.info(
+                "[agent-intent] pinned tools from approved confirmation: %s",
+                sorted(_confirmed_tools),
+            )
+        elif bool(_intent.get("continuation")) and _relevant_tools is not None:
+            ql = str(_intent.get("retrieval_query") or "").lower()
+            if any(kw in ql for kw in (
+                "finance", "category", "categories", "transaction",
+                "wells fargo", "manage_finance", "categorize",
+            )):
+                _relevant_tools.update(_DOMAIN_TOOL_MAP.get("notes_calendar_tasks", set()))
+                logger.info("[agent-intent] continuation pinned finance tools from recent context")
 
     # If this turn targets the open document, keep editing tools available
     # regardless of which selection path (RAG, keyword, caller-provided) ran.
