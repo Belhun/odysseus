@@ -445,15 +445,15 @@ Larger if project/WO origin restore and "apply catalog price" mutations are requ
 
 ## Implementation checklist
 
-- [ ] Route `invoice-view/:id` + viewer panel (read-only header + lines)
-- [ ] Viewer **Edit** → calculator `invoiceId` (disabled until loaded)
-- [ ] `invoice-return-context` capture / consume / clear with invoice-flow gate
-- [ ] `trimInvoiceFlowFromHistory` helper
-- [ ] Save-as-new → trim → viewer (clear calculator edit state first)
-- [ ] Edit save → trim → restore origin (Classic+client refresh; fallback `savedClientId`)
-- [ ] Classic activate refreshes invoice rail for selected client
-- [ ] Finalized price-compare flags on viewer
-- [ ] Tests: capture gate, trim, save-as-new stack, after-save return
+- [x] Route `invoice-view/:id` + viewer panel (read-only header + lines)
+- [x] Viewer **Edit** → calculator `invoiceId` (disabled until loaded)
+- [x] `invoice-return-context` capture / consume / clear with invoice-flow gate
+- [x] `trimInvoiceFlowFromHistory` helper
+- [x] Save-as-new → trim → viewer (clear calculator edit state first)
+- [x] Edit save → trim → restore origin (Classic+client refresh; fallback `savedClientId`)
+- [x] Classic activate refreshes invoice rail for selected client
+- [x] Finalized price-compare flags on viewer
+- [x] Tests: capture gate, trim, save-as-new stack, after-save return
 - [ ] Manual QA: MASTER §8.4 save-as-new → viewer → Back
 
 ---

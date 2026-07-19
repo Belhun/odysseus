@@ -12,7 +12,15 @@ Post-MVP UX: user favorites, keyboard shortcuts, themes, profiles, breadcrumbs, 
 
 ## Status
 
-**Planned** — Phase 1 shell features done; Phase 2–3 not started.
+**Partial (odysseus-sysforge 2026-07-17)** — shipped M slice of `future-ui-mru-shell-polish`:
+
+- Persistent client MRU (`LastInteractedAt`, recent-6, Classic empty-search + autoselect)
+- Host `open_sysforge` shortcut (Settings → Shortcuts; no plugin-local keybinds)
+- Dashboard card favorites (`dashboard_favorites` in plugin config)
+- Light chrome breadcrumb (`Business › …`); themes stay Odysseus global
+- Nav history across restart: **deferred** (VI2 = no)
+
+Still out: Avalonia plugin marketplace, user profiles, custom theme editor, dual shortcut systems.
 
 ## Dependencies
 
@@ -21,11 +29,11 @@ Post-MVP UX: user favorites, keyboard shortcuts, themes, profiles, breadcrumbs, 
 
 ## Port approach
 
-MVP uses Odysseus global theming (`--section-accent`). Defer favorites/shortcuts until core Business flows ship. Document as add-on v1.1+.
+MVP uses Odysseus global theming (`--section-accent`). Host shortcuts registry only; no Business Settings → Shortcuts clone.
 
 ## Effort
 
-**M** per feature area
+**M** for the shipped MRU + open_sysforge + favorites/breadcrumb slice; remaining Future UI Phase 3 items stay deferred.
 
 ## Risks / open questions
 
