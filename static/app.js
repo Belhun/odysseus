@@ -25,6 +25,7 @@ import galleryModule from './js/gallery.js';
 import tasksModule from './js/tasks.js?v=20260630tasksactivity';
 import calendarModule from './js/calendar.js';
 import notesModule from './js/notes.js';
+import dossierModule from './js/dossier.js';
 import adminModule from './js/admin.js';
 
 let financeModule = null;
@@ -228,6 +229,7 @@ function initRailHoverLabels() {
     'rail-archive': 'Library',
     'rail-memory': 'Brain',
     'rail-notes': 'Notes',
+    'rail-dossier': 'Dossier',
     'rail-tasks': 'Tasks',
     'rail-theme': 'Theme',
     'rail-settings': 'Settings',
@@ -1180,6 +1182,18 @@ function initializeEventListeners() {
       if (notesModule) {
         notesModule.togglePanel();
       }
+    });
+  }
+  const railDossier = el('rail-dossier');
+  if (railDossier) {
+    railDossier.addEventListener('click', () => {
+      if (dossierModule) dossierModule.togglePanel();
+    });
+  }
+  const toolDossierBtn = el('tool-dossier-btn');
+  if (toolDossierBtn) {
+    toolDossierBtn.addEventListener('click', () => {
+      if (dossierModule) dossierModule.togglePanel();
     });
   }
   // Refresh notes due-reminder badge on load and every 5 minutes
