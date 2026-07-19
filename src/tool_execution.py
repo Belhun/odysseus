@@ -614,6 +614,7 @@ async def _execute_tool_block_impl(
     from src.tool_implementations import (
         do_search_chats, do_manage_tasks,
         do_manage_skills, do_api_call, do_manage_notes,
+        do_manage_archive, do_manage_dossier, do_search_dossier,
         do_manage_calendar, do_manage_finance,
         do_download_model, do_serve_model, do_list_served_models, do_stop_served_model,
         do_tail_serve_output,
@@ -821,6 +822,15 @@ async def _execute_tool_block_impl(
     elif tool == "manage_notes":
         desc = "manage_notes"
         result = await do_manage_notes(content, owner=owner)
+    elif tool == "manage_archive":
+        desc = "manage_archive"
+        result = await do_manage_archive(content, owner=owner)
+    elif tool == "manage_dossier":
+        desc = "manage_dossier"
+        result = await do_manage_dossier(content, owner=owner)
+    elif tool == "search_dossier":
+        desc = "search_dossier"
+        result = await do_search_dossier(content, owner=owner)
     elif tool == "manage_calendar":
         desc = "manage_calendar"
         result = await do_manage_calendar(content, owner=owner)

@@ -860,6 +860,8 @@ logger.info("Webhook & API token routes initialized")
 # Notes (Google Keep-style notes/todos)
 from routes.note_routes import setup_note_routes
 app.include_router(setup_note_routes(task_scheduler, upload_handler=upload_handler))
+from routes.dossier_routes import setup_dossier_routes
+app.include_router(setup_dossier_routes())
 
 # Email
 from routes.email_routes import setup_email_routes
