@@ -1,3 +1,12 @@
+## Decisions (locked 2026-07-17)
+
+| ID | Decision |
+|----|----------|
+| **VI1** | Storage = `Clients.LastInteractedAt` column (migration `0026`); autoselect last-used on Classic open = **yes** (`client_mru_autoselect` default true) |
+| **VI2** | Persist Business nav history across restart = **no** (in-session only) |
+
+---
+
 # future-ui-mru-shell-polish — Client MRU, shortcuts, Future UI shell polish
 
 | Field | Value |
