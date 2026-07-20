@@ -259,6 +259,60 @@ def test_history_back_no_extra_push_on_reapply():
     assert data["lenAfterReapply"] == 2
 
 
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_lru_cache_does_not_evict_fresh_panel_before_touch():
+    """Regression: new panels used lastUsed=0 so _evictIfNeeded dropped them immediately."""
+    js = f"""
+    import * as router from '{_file_url(_JS / "router.js")}';
+
+    router._resetForTests();
+    const host = {{ children: [], appendChild(el) {{ this.children.push(el); return el; }} }};
+    router.mount(host, {{ syncHash: false }});
+
+    const ids = [
+      'dashboard',
+      'settings',
+      'diagnostics',
+      'clients',
+      'client-dashboard',
+      'client-merge',
+      'invoices-outstanding',
+    ];
+    for (const id of ids) {{
+      router.register(id, {{
+        title: id,
+        mount: (el) => {{ el.textContent = id; }},
+        activate: () => {{}},
+      }});
+    }}
+
+    for (const id of ids) {{
+      router.navigate(id);
+    }}
+
+    const current = router.getCurrent();
+    const visible = host.children.filter((el) => !el.hidden);
+  const mergeEl = host.children.find((el) => el.dataset.route === 'client-merge');
+
+    console.log(JSON.stringify({{
+      currentRoute: current?.routeKey,
+      visibleCount: visible.length,
+      visibleRoute: visible[0]?.dataset?.route || null,
+      mergeInDom: Boolean(mergeEl),
+      mergeHidden: mergeEl?.hidden ?? null,
+      hostChildCount: host.children.length,
+      cacheSize: router.getState().cacheSize,
+    }}));
+    """
+    data = _run_node(js)
+    assert data["currentRoute"] == "invoices-outstanding"
+    assert data["visibleCount"] == 1
+    assert data["visibleRoute"] == "invoices-outstanding"
+    assert data["mergeInDom"] is True
+    assert data["mergeHidden"] is True
+    assert data["cacheSize"] == 5
+
+
 def test_shell_source_wires_view_edit_contracts():
     index = (_JS / "index.js").read_text(encoding="utf-8")
     viewer = (_JS / "views" / "invoice-viewer.js").read_text(encoding="utf-8")

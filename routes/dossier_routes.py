@@ -32,6 +32,43 @@ class PersonCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class PersonUpdate(BaseModel):
+    display_name: Optional[str] = None
+    labels: Optional[List[str]] = None
+    notes: Optional[str] = None
+
+
+class SituationCreate(BaseModel):
+    title: str = ""
+    status: str = "active"
+    summary: Optional[str] = None
+
+
+class PlanCreate(BaseModel):
+    title: str = "Plan"
+    summary: str = ""
+    how_we_got_here: Optional[str] = None
+    situation_id: Optional[str] = None
+
+
+class FactCreate(BaseModel):
+    label: str = ""
+    value: str = ""
+    situation_id: Optional[str] = None
+
+
+class TimelineCreate(BaseModel):
+    summary: str = ""
+    situation_id: Optional[str] = None
+
+
+class ArchivePaste(BaseModel):
+    body: str = ""
+    source_tool: str = "paste"
+    locator: Optional[str] = None
+    situation_id: Optional[str] = None
+
+
 class LinkUpdate(BaseModel):
     person_id: Optional[str] = None
     situation_id: Optional[str] = None
@@ -75,6 +112,25 @@ def setup_dossier_routes() -> APIRouter:
                 sysforge_client_id=body.sysforge_client_id,
                 notes=body.notes,
             )
+            db.commit()
+            return {"person": access.person_to_dict(person)}
+        finally:
+            db.close()
+
+    @router.patch("/people/{person_id}")
+    def update_person(person_id: str, body: PersonUpdate, request: Request):
+        owner = _owner(request)
+        db = SessionLocal()
+        try:
+            person = access.get_person(db, person_id, owner)
+            if not person:
+                raise HTTPException(status_code=404, detail="person not found")
+            if body.display_name is not None:
+                person.display_name = body.display_name.strip() or person.display_name
+            if body.labels is not None:
+                person.labels = access.dumps_labels(body.labels)
+            if body.notes is not None:
+                person.notes = body.notes
             db.commit()
             return {"person": access.person_to_dict(person)}
         finally:
@@ -132,6 +188,162 @@ def setup_dossier_routes() -> APIRouter:
                     .all()
                 ],
             }
+        finally:
+            db.close()
+
+    @router.post("/people/{person_id}/situations")
+    def create_situation(person_id: str, body: SituationCreate, request: Request):
+        owner = _owner(request)
+        db = SessionLocal()
+        try:
+            try:
+                situation = access.create_situation(
+                    db,
+                    owner=owner,
+                    person_id=person_id,
+                    title=body.title,
+                    status=body.status,
+                    summary=body.summary,
+                )
+                access.add_timeline_event(
+                    db,
+                    owner=owner,
+                    person_id=person_id,
+                    situation_id=situation.id,
+                    event_type="situation_created",
+                    summary=f"Situation: {situation.title}",
+                    ref_kind="situation",
+                    ref_id=situation.id,
+                )
+                db.commit()
+                return {"situation": _situation_dict(situation)}
+            except LookupError:
+                db.rollback()
+                raise HTTPException(status_code=404, detail="person not found")
+        finally:
+            db.close()
+
+    @router.post("/people/{person_id}/plans")
+    def create_plan(person_id: str, body: PlanCreate, request: Request):
+        owner = _owner(request)
+        db = SessionLocal()
+        try:
+            try:
+                plan = access.create_plan(
+                    db,
+                    owner=owner,
+                    person_id=person_id,
+                    situation_id=body.situation_id,
+                    title=body.title,
+                    summary=body.summary,
+                    how_we_got_here=body.how_we_got_here,
+                    origin="manual",
+                )
+                access.add_timeline_event(
+                    db,
+                    owner=owner,
+                    person_id=person_id,
+                    situation_id=plan.situation_id,
+                    event_type="plan_saved",
+                    summary=f"Plan saved: {plan.title}",
+                    ref_kind="plan",
+                    ref_id=plan.id,
+                )
+                db.commit()
+                return {"plan": _plan_dict(plan)}
+            except LookupError as e:
+                db.rollback()
+                raise HTTPException(status_code=404, detail=str(e))
+        finally:
+            db.close()
+
+    @router.post("/people/{person_id}/facts")
+    def create_fact(person_id: str, body: FactCreate, request: Request):
+        owner = _owner(request)
+        db = SessionLocal()
+        try:
+            try:
+                fact = access.create_fact(
+                    db,
+                    owner=owner,
+                    person_id=person_id,
+                    situation_id=body.situation_id,
+                    label=body.label,
+                    value=body.value,
+                )
+                access.add_timeline_event(
+                    db,
+                    owner=owner,
+                    person_id=person_id,
+                    situation_id=fact.situation_id,
+                    event_type="fact_saved",
+                    summary=f"Fact: {fact.label}",
+                    ref_kind="fact",
+                    ref_id=fact.id,
+                )
+                db.commit()
+                return {"fact": _fact_dict(fact)}
+            except LookupError as e:
+                db.rollback()
+                raise HTTPException(status_code=404, detail=str(e))
+        finally:
+            db.close()
+
+    @router.post("/people/{person_id}/timeline")
+    def create_timeline_note(person_id: str, body: TimelineCreate, request: Request):
+        owner = _owner(request)
+        db = SessionLocal()
+        try:
+            try:
+                event = access.add_timeline_event(
+                    db,
+                    owner=owner,
+                    person_id=person_id,
+                    situation_id=body.situation_id,
+                    summary=body.summary,
+                    event_type="note",
+                )
+                db.commit()
+                return {"event": _timeline_dict(event)}
+            except LookupError:
+                db.rollback()
+                raise HTTPException(status_code=404, detail="person not found")
+        finally:
+            db.close()
+
+    @router.post("/people/{person_id}/archive")
+    def paste_archive(person_id: str, body: ArchivePaste, request: Request):
+        owner = _owner(request)
+        db = SessionLocal()
+        try:
+            try:
+                item = access.create_archive_item(
+                    db,
+                    owner=owner,
+                    source_tool=body.source_tool,
+                    body=body.body,
+                    person_id=person_id,
+                    situation_id=body.situation_id,
+                    locator=body.locator,
+                )
+                access.add_timeline_event(
+                    db,
+                    owner=owner,
+                    person_id=person_id,
+                    situation_id=body.situation_id,
+                    event_type="archive_ingested",
+                    summary="Archive item pasted",
+                    ref_kind="archive",
+                    ref_id=item.id,
+                )
+                db.commit()
+                return {"item": access.archive_to_dict(item)}
+            except LookupError as e:
+                db.rollback()
+                raise HTTPException(status_code=404, detail=str(e))
+            except ValueError as e:
+                db.rollback()
+                raise HTTPException(status_code=400, detail=str(e))
         finally:
             db.close()
 

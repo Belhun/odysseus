@@ -368,6 +368,54 @@ def list_backups() -> list[BackupInfo]:
     return items
 
 
+def read_backup_manifest(backup_id: str) -> dict[str, Any]:
+    """Read manifest.json from a stored backup without restoring."""
+    path = find_backup_file(backup_id)
+    if path is None:
+        raise LookupError("Backup not found")
+    suffix = path.suffix.lower()
+    if suffix == ".zip":
+        try:
+            with zipfile.ZipFile(path, "r") as zf:
+                names = {n.replace("\\", "/") for n in zf.namelist()}
+                if "manifest.json" in names:
+                    raw = zf.read("manifest.json")
+                    manifest = json.loads(raw.decode("utf-8"))
+                else:
+                    manifest = {}
+                has_config, has_drafts = _zip_contents_flags(path)
+        except zipfile.BadZipFile as exc:
+            raise BackupError("Invalid backup ZIP") from exc
+        return {
+            "backup_id": backup_id,
+            "filename": path.name,
+            "size_bytes": path.stat().st_size,
+            "kind": "zip",
+            "has_config": has_config,
+            "has_drafts": has_drafts,
+            "manifest": manifest,
+        }
+    if suffix == ".db":
+        has_config = (path.with_name(path.stem + "-config.json")).is_file()
+        has_drafts = (path.with_name(path.stem + "-drafts")).is_dir()
+        schema_version = _latest_schema_version(path) if path.is_file() else None
+        return {
+            "backup_id": backup_id,
+            "filename": path.name,
+            "size_bytes": path.stat().st_size,
+            "kind": "db",
+            "has_config": has_config,
+            "has_drafts": has_drafts,
+            "manifest": {
+                "schema_version": schema_version,
+                "contents": ["sysforge.db"]
+                + (["config.json"] if has_config else [])
+                + (["drafts/"] if has_drafts else []),
+            },
+        }
+    raise BackupError("Unsupported backup type")
+
+
 def find_backup_file(backup_id: str) -> Path | None:
     """Resolve backup_id to a file under backups/ (prefer .zip)."""
     safe = Path(backup_id).name
