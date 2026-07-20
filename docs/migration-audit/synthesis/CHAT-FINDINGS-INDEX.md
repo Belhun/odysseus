@@ -51,7 +51,7 @@ Full review bodies: `docs/migration-audit/chat-reviews/<uuid>.md`
 | `784da76d-e4c8-44bb-9eca-59d99e1b0980` | Post-impl Path B status / archive | High | Async from start; port DB-12 detect; keep merge deferred; backup + reindex class |
 | `7a8c3399-37a3-4131-bb78-559b1f68b6a5` | Empty / aborted transcript | None | No content |
 | `7e801bff-623b-4f73-bfff-a1f32179aec6` | ScrewMapView + autosave/undo | High | Port `0019`–`0021` + service; ScrewMapView UX (single-click, numbers, autosave); HTML canvas rewrite |
-| `887181f4-b0d5-4e5f-b89e-9f1dbcfb36a7` | odysseus-sysforge directory tree dump | Low | Confirm `Sysforge research/` still current; cross-check feature cards vs runtime |
+| `887181f4-b0d5-4e5f-b89e-9f1dbcfb36a7` | odysseus-sysforge directory tree dump | Low | Confirm `docs/research/sysforge/` still current; cross-check feature cards vs runtime |
 | `8eceb374-24a7-4fc9-88c2-0b796a7b4528` | SysForge.Tests expansion (solid tests) | High | Port MoneyHelpers + invoice validation negatives; update same invoice id / replace lines tests |
 | `920df407-41fd-4f6d-a38d-dc5c4065a110` | Client search auto-opens on invoice edit | High | Guard overlay on edit load (pairs with `21972123`); don’t steal focus into picker |
 | `97aa3734-3500-4340-8c0a-2c82555c2b0c` | Plans inventory + open bugs verification | High | Use Plans README as desktop truth; save-as-new/viewer back-stack; DRAFT-08 decision; nav lifecycle |

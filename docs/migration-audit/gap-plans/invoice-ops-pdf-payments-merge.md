@@ -441,6 +441,6 @@ Copy into implementation tickets. Fail QA if broken.
 - `SysForge/Plans/Product-Vision/Invoice-Roadmap.md` v2 merge column + v3+ documents/payments
 - `SysForge/Plans/Archive/Post-Implementation-Improvements.md` Improvement 4 / Future merge tool
 - `SysForge/Plans/Feature-Plans/Product-Decisions-Questionnaire.md` III8, V1
-- `odysseus-sysforge/Sysforge research/features/invoice-viewer.md`
-- `odysseus-sysforge/Sysforge research/05-backend-services.md` (email via host)
+- `odysseus-sysforge/docs/research/sysforge/features/invoice-viewer.md`
+- `odysseus-sysforge/docs/research/sysforge/05-backend-services.md` (email via host)
 - `odysseus-sysforge/docs/email-outlook.md`

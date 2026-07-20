@@ -7,7 +7,7 @@
 | **Phase** | P3 |
 | **Priority** | low (manifest); high ease-of-use once P1 parts MVP ships |
 | **Effort** | **L** |
-| **Primary sources** | `Plans/Product-Vision/Invoice-Roadmap.md` v2; `Plans/README.md` (Lucene parts Not started); `Sysforge research/features/parts-catalog.md`, `suppliers.md`, `placeholder-parts-merge.md`, `client-search-lucene.md`; desktop `PartService.SearchPartsAsync` / merge |
+| **Primary sources** | `Plans/Product-Vision/Invoice-Roadmap.md` v2; `Plans/README.md` (Lucene parts Not started); `docs/research/sysforge/features/parts-catalog.md`, `suppliers.md`, `placeholder-parts-merge.md`, `client-search-lucene.md`; desktop `PartService.SearchPartsAsync` / merge |
 | **Manifest** | `gap-plans/gap-manifest.json` → `parts-search-suppliers-depth` |
 | **Master plan** | `synthesis/MASTER-MIGRATION-PLAN.md` → Phase 6+ Depth (P3) |
 | **Roadmap** | `synthesis/future-plans-roadmap.md` → §3 Phase 6, §4.1 Lucene parts / triage / price history / supplier UX |
@@ -295,8 +295,8 @@ After implementation (or as tickets land):
 | `tests/test_sysforge_price_history.py` | **Create** |
 | `tests/test_sysforge_parts_triage.py` | **Create** |
 | Backup/restore module | **Update** — call parts FTS rebuild |
-| `Sysforge research/features/parts-catalog.md` | Optional post-ship note: FTS5 done on web |
-| `Sysforge research/features/suppliers.md` | Optional post-ship note: v2 UX |
+| `docs/research/sysforge/features/parts-catalog.md` | Optional post-ship note: FTS5 done on web |
+| `docs/research/sysforge/features/suppliers.md` | Optional post-ship note: v2 UX |
 
 **Desktop references (read-only):**
 
@@ -306,7 +306,7 @@ After implementation (or as tickets land):
 - `SysForge/ViewModels/PlaceholderMergeViewModel.cs`
 - `SysForge/Plans/Product-Vision/Invoice-Roadmap.md` §v2
 - `SysForge/Plans/README.md` — Lucene parts Not started
-- `Sysforge research/features/client-search-lucene.md` — FTS5 recommendation
+- `docs/research/sysforge/features/client-search-lucene.md` — FTS5 recommendation
 
 ---
 

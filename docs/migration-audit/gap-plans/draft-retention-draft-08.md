@@ -270,7 +270,7 @@ Forbidden: `install.py`, plugin load side effects, FastAPI `on_event("startup")`
 
 When shipping:
 
-- Update `Sysforge research/features/draft-management.md` status from “wire optional cleanup job” to “optional; default off; settings + notice + pin.”
+- Update `docs/research/sysforge/features/draft-management.md` status from “wire optional cleanup job” to “optional; default off; settings + notice + pin.”
 - Point BUG-017 / Partial rows at this issue id so future audits do not “fix” silent startup wiring.
 
 ---

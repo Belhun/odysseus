@@ -8,7 +8,7 @@
 | **Effort** | **L** |
 | **Priority** | high |
 | **Domain** | clients |
-| **Primary sources** | Chat [e24feae4](../chat-reviews/e24feae4-31c7-4770-a8cd-3180e82f0415.md) (Classic wins); [6bba6919](../chat-reviews/6bba6919-90f5-4c2c-959c-b6fb279f5abd.md) (SearchListSelection / invoice rail); [920df407](../chat-reviews/920df407-41fd-4f6d-a38d-dc5c4065a110.md) (query == DisplayName → no auto-open); SysForge Classic AXAML/VM; research `Sysforge research/features/client-dashboard.md`; `Plans/UI-Plans/Client-Dashboard-Prototypes.md` |
+| **Primary sources** | Chat [e24feae4](../chat-reviews/e24feae4-31c7-4770-a8cd-3180e82f0415.md) (Classic wins); [6bba6919](../chat-reviews/6bba6919-90f5-4c2c-959c-b6fb279f5abd.md) (SearchListSelection / invoice rail); [920df407](../chat-reviews/920df407-41fd-4f6d-a38d-dc5c4065a110.md) (query == DisplayName → no auto-open); SysForge Classic AXAML/VM; research `docs/research/sysforge/features/client-dashboard.md`; `Plans/UI-Plans/Client-Dashboard-Prototypes.md` |
 | **Manifest** | `gap-plans/gap-manifest.json` → `classic-client-dashboard` |
 | **Master plan** | `synthesis/MASTER-MIGRATION-PLAN.md` → Phase 2 *Classic dashboard daily loop* |
 | **Depends on** | `clients-crud-fts-duplicates`, `invoice-calculator-save-contracts`, `nav-lifecycle-view-edit-routes` |

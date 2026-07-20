@@ -41,7 +41,7 @@ Happy path already met desktop parity. Important + Minor items below were verifi
 2. **UNIQUE `SourceScrewMapId`** — migration `0031_screw_map_sets_source_unique.sql`; `IntegrityError` → `PUBLISH_EXISTS_ERROR`
 3. **Prefer project `DeviceModel` on publish**; sync `ScrewMaps.DeviceModel`/`DeviceSerial` on project device PATCH
 4. **Clamp `max_results` to 3** (route + service)
-5. **Updated** `Sysforge research/features/screw-maps.md` — S3/library shipped; zoom/pan, note UI, S5 still deferred
+5. **Updated** `docs/research/sysforge/features/screw-maps.md` — S3/library shipped; zoom/pan, note UI, S5 still deferred
 6. **Trim whitespace notes** to `null` (service + `project-detail.js`)
 7. **Tests added** — empty/whitespace title, zero-photo publish, project model prefer/sync, notes trim, clone into empty map, SW clone reject, missing source file rollback, NoteMarkers copy, `max_results` over-cap
 

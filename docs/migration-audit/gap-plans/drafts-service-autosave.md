@@ -8,7 +8,7 @@
 | **Priority** | high |
 | **Domain** | drafts |
 | **Effort** | **M** |
-| **Primary sources** | SysForge `DraftService.cs`, `DraftData.cs`, `DraftsViewModel.cs`, `DraftNameDialog.axaml`, calculator autosave in `InvoiceCalculatorViewModel.cs`; DRAFT-08 / DRAFT-07 critiques; MASTER §2.4 / §4 / Phase 1; feature-gap-matrix §4; research `Sysforge research/features/draft-management.md`; chats `bfe03bf6`, `693ac8c9`, `a162de19` |
+| **Primary sources** | SysForge `DraftService.cs`, `DraftData.cs`, `DraftsViewModel.cs`, `DraftNameDialog.axaml`, calculator autosave in `InvoiceCalculatorViewModel.cs`; DRAFT-08 / DRAFT-07 critiques; MASTER §2.4 / §4 / Phase 1; feature-gap-matrix §4; research `docs/research/sysforge/features/draft-management.md`; chats `bfe03bf6`, `693ac8c9`, `a162de19` |
 | **Manifest** | `gap-plans/gap-manifest.json` → this workstream |
 | **Master plan** | `synthesis/MASTER-MIGRATION-PLAN.md` → Phase 1 Invoice MVP (drafts row) |
 | **Follow-on** | `draft-retention-draft-08` (P2) — opt-in retention; **not** this issue |

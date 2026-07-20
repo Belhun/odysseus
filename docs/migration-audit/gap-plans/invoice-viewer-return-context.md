@@ -8,7 +8,7 @@
 | **Priority** | high |
 | **Domain** | invoices |
 | **Effort** | **M** |
-| **Primary sources** | Chat [21972123](../chat-reviews/21972123-780e-4496-99cd-5be905556a3b.md) (save-as-new → viewer → Back); chat [67a4ed8b](../chat-reviews/67a4ed8b-7a7b-4bd0-8933-3d4e33a185f6.md) (return context + viewer Edit); chat [21e672a5](../chat-reviews/21e672a5-191b-42d1-a2ae-4a5527cb8784.md) (save-as-new clone contracts); research `Sysforge research/features/invoice-viewer.md` |
+| **Primary sources** | Chat [21972123](../chat-reviews/21972123-780e-4496-99cd-5be905556a3b.md) (save-as-new → viewer → Back); chat [67a4ed8b](../chat-reviews/67a4ed8b-7a7b-4bd0-8933-3d4e33a185f6.md) (return context + viewer Edit); chat [21e672a5](../chat-reviews/21e672a5-191b-42d1-a2ae-4a5527cb8784.md) (save-as-new clone contracts); research `docs/research/sysforge/features/invoice-viewer.md` |
 | **Manifest** | `gap-plans/gap-manifest.json` → `invoice-viewer-return-context` |
 | **Master plan** | `synthesis/MASTER-MIGRATION-PLAN.md` → Phase 2 exit: *Save-as-new → viewer → back to client*; §4 / §6 return-context + save-as-new UX contracts |
 | **Depends on** | `classic-client-dashboard`, `invoice-calculator-save-contracts` (also assumes `nav-lifecycle-view-edit-routes`) |
@@ -282,7 +282,7 @@ Do **not** call capture when Viewer Edit → calculator.
 | `integrations/sysforge/static/js/views/render-invoice-readonly.js` | **Create** (optional) - shared header/lines markup |
 | `integrations/sysforge/routes.py` (or invoice routes) | Ensure `GET /invoices/{id}` returns items + finalized + money fields; optional `GET /invoices/{id}/price-compare` |
 | `tests/test_sysforge_invoice_viewer_nav.py` (and/or JS unit tests) | **Create** - see Tests |
-| `Sysforge research/features/invoice-viewer.md` | Optional post-ship note: return-context + save-as-new stack |
+| `docs/research/sysforge/features/invoice-viewer.md` | Optional post-ship note: return-context + save-as-new stack |
 
 **Desktop references (read-only):**
 

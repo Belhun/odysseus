@@ -35,8 +35,8 @@ integrations/finance/
 
 ## API
 
-Mounted only after install + server reload: `/api/finance/*`
+Routes are always registered; requests return 404 until the plugin is installed and the `finance` feature flag is on: `/api/finance/*`
 
 Plugin lifecycle: `/api/plugins/finance/install|uninstall|status`
 
-See `Banking Research/` for feature plans and `docs/plans/sysforge/` for the shared plugin architecture spec.
+See [`docs/features/finance.md`](../../docs/features/finance.md) for the feature guide, [`docs/research/finance/`](../../docs/research/finance/) for research, and [`docs/plans/finance/`](../../docs/plans/finance/) for implementation plans.

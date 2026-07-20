@@ -70,7 +70,7 @@ Also: `InvoiceViewerViewModel.EditInvoice` → `NavigateToInvoiceCalculatorEditA
 ### Odysseus web (target today)
 
 - Plugin shell stub: `integrations/sysforge/static/js/index.js` — modal + status only; **no router, no View/Edit, no panel cache**.
-- Research already maps destinations in `Sysforge research/06-frontend-routing.md` (`invoice-view/:id`, calculator, client-dashboard, history stack, ViewCache LRU).
+- Research already maps destinations in `docs/research/sysforge/06-frontend-routing.md` (`invoice-view/:id`, calculator, client-dashboard, history stack, ViewCache LRU).
 - Hash deep-link pattern proposed: `#sysforge/invoice-view/123`.
 - No web equivalent yet of `ViewChanged` + same-instance re-apply safety.
 
@@ -238,7 +238,7 @@ Add a 5–10 line comment at `applyNavigation` (and optionally a one-pager under
 | `integrations/sysforge/static/js/views/invoice-calculator.js` | **Update** — honor `invoiceId` / `clientId` on activate |
 | `integrations/sysforge/manifest.json` | Ensure static assets listed if the plugin copies files on install |
 | `tests/test_sysforge_router.js` or `tests/test_sysforge_nav_lifecycle.py` | **Create** — see Tests |
-| `Sysforge research/06-frontend-routing.md` | Optional: add “same-panel re-apply” subsection after implementation |
+| `docs/research/sysforge/06-frontend-routing.md` | Optional: add “same-panel re-apply” subsection after implementation |
 
 **Desktop references (read-only):**
 

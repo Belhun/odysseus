@@ -1,7 +1,7 @@
 # SysForge → odysseus-sysforge feature gap matrix
 
 **Audit date:** 2026-07-17  
-**Sources:** SysForge desktop (`F:\Codeing Project\SysForge`), odysseus-sysforge (`F:\Codeing Project\odysseus-sysforge`), research under `Sysforge research/`, product plans under `SysForge/Plans/`.  
+**Sources:** SysForge desktop (`F:\Codeing Project\SysForge`), odysseus-sysforge (`F:\Codeing Project\odysseus-sysforge`), research under `docs/research/sysforge/`, product plans under `SysForge/Plans/`.  
 **Scope:** Feature transfer parity only. No product code changed for this audit.
 
 ## How to read this matrix
@@ -25,12 +25,12 @@
 | Optional install / feature gate | N/A (always-on desktop app) | **Done** — `src/plugins/registry.py`, `routes/plugin_routes.py`, `features.sysforge` default `false` (`src/settings.py`), Integrations Install UI | Install UX is clear and matches research Phase A. Stronger than SysForge for “lean by default.” | — (done) |
 | Main window + sidebar nav | **Done** — `MainWindowViewModel.cs`, `MainWindow.axaml`, `NavigationService.cs` | **Stub** — hidden `tool-sysforge-btn` / `rail-sysforge` (`static/index.html`); opens modal only (`integrations/sysforge/static/js/index.js`) | No inner Business sidebar, no card dashboard, no back stack. Deep link `/business` only clicks the stub button (`static/app.js`). | **P0** |
 | Dashboard cards | **Done** — `DashboardViewModel.cs`, `DashboardView.axaml` | **Missing** | No entry surface for calculator / clients / drafts / parts after install. | **P0** |
-| Navigation history + view cache | **Done** — `NavigationHistory.cs`, `ViewCache.cs` (persist across restarts deferred in Plans) | **Missing** | Modal has no multi-view router. Research target: `static/js/sysforge/router.js` (`Sysforge research/00-overview.md`). | **P1** |
-| Toast notifications | **Done** — `ToastService.cs` | **Partial reuse** — Odysseus `uiModule.showToast` used for install/uninstall; no Business-scoped toasts | Install feedback works. Domain actions have nothing to toast yet. Prefer scoped panel toasts when modules land (`Sysforge research/features/toast-notifications.md`). | **P2** |
+| Navigation history + view cache | **Done** — `NavigationHistory.cs`, `ViewCache.cs` (persist across restarts deferred in Plans) | **Missing** | Modal has no multi-view router. Research target: `static/js/sysforge/router.js` (`docs/research/sysforge/00-overview.md`). | **P1** |
+| Toast notifications | **Done** — `ToastService.cs` | **Partial reuse** — Odysseus `uiModule.showToast` used for install/uninstall; no Business-scoped toasts | Install feedback works. Domain actions have nothing to toast yet. Prefer scoped panel toasts when modules land (`docs/research/sysforge/features/toast-notifications.md`). | **P2** |
 | Settings window (Business) | **Done** — `SettingsViewModel.cs`, `SettingsWindow.axaml`, `ConfigService.cs` | **Stub config only** — `write_default_config()` writes `tax_rate_bps` / currency / autosave (`install.py`); no settings UI | Users cannot change tax/shipping/draft retention without editing JSON on disk. | **P1** |
 | Diagnostics | **Done** — `DiagnosticsViewModel.cs`, `DatabaseDiagnostics.cs` | **Missing** | No migration version / DB health for the plugin DB. Needed once migrations exist (multi-user path must not leak secrets). | **P2** |
 
-Evidence: `Sysforge research/01-feature-inventory.md`, `features/shell-navigation-dashboard.md`, `integrations/sysforge/*`, `tests/test_sysforge_plugin.py`.
+Evidence: `docs/research/sysforge/01-feature-inventory.md`, `features/shell-navigation-dashboard.md`, `integrations/sysforge/*`, `tests/test_sysforge_plugin.py`.
 
 ---
 
@@ -46,7 +46,7 @@ Evidence: `Sysforge research/01-feature-inventory.md`, `features/shell-navigatio
 | Client acceptance dialog | **Done** — `ClientAcceptanceDialog.axaml` | **Missing** | | **P2** |
 | MRU / recent 6 clients | **Planned** — `Plans/UI-Plans/Future-UI-Features.md` (deferred) | **Missing** (also deferred on desktop) | Do not block MVP; optional UX upgrade on both sides. | **P3** |
 
-Evidence: `Sysforge research/features/clients-management.md`, `client-dashboard.md`, `client-search-lucene.md`; SysForge `Plans/README.md` status table.
+Evidence: `docs/research/sysforge/features/clients-management.md`, `client-dashboard.md`, `client-search-lucene.md`; SysForge `Plans/README.md` status table.
 
 ---
 
@@ -65,7 +65,7 @@ Evidence: `Sysforge research/features/clients-management.md`, `client-dashboard.
 | Per-invoice JSON backup | **Partial** — `BackupExistingInvoice` / `LoadBackup`; no restore UI | **Missing** | Match desktop: backup on update first; restore UI later. | **P3** |
 | Invoice v2/v3 (PDF, payments) | **Planned** — `Plans/Product-Vision/Invoice-Roadmap.md` | **Missing** | Out of scope for parity MVP. | **P3** |
 
-Evidence: `Sysforge research/features/invoice-*.md`; SysForge Views/ViewModels listed above.
+Evidence: `docs/research/sysforge/features/invoice-*.md`; SysForge Views/ViewModels listed above.
 
 ---
 
@@ -78,7 +78,7 @@ Evidence: `Sysforge research/features/invoice-*.md`; SysForge Views/ViewModels l
 | Draft name dialog | **Done** — `DraftNameDialog.axaml` | **Missing** | | **P1** |
 | Draft retention / auto-delete on startup | **Partial** — `DeleteOldDrafts` exists; not called from `Program.cs` / `App` | **Missing** | Same gap as desktop; decide whether web should call retention on plugin load. | **P2** |
 
-Evidence: `Sysforge research/features/draft-management.md`; `Plans/Feature-Plans/Draft-Management-System-Plan.md`.
+Evidence: `docs/research/sysforge/features/draft-management.md`; `Plans/Feature-Plans/Draft-Management-System-Plan.md`.
 
 ---
 
@@ -160,7 +160,7 @@ Evidence: `features/product-vision-integrations.md`; `Plans/Product-Vision/Featu
 | User favorites, themes, shortcuts, breadcrumbs | **Planned / Partial** — `Plans/UI-Plans/Future-UI-Features.md`; Phase 1 shell done, Phase 2–3 not started | **Missing** | Skip until core flows exist. Odysseus themes/rail already provide some chrome. | **P3** |
 | Sidebar ↔ dashboard sync | **Not started** | **Missing** | | **P3** |
 
-Evidence: `Sysforge research/features/future-ui-backlog.md`; `SysForge/Future-UI-Features.md` redirect → `Plans/UI-Plans/Future-UI-Features.md`.
+Evidence: `docs/research/sysforge/features/future-ui-backlog.md`; `SysForge/Future-UI-Features.md` redirect → `Plans/UI-Plans/Future-UI-Features.md`.
 
 ---
 
@@ -195,8 +195,8 @@ These are places where **something** exists on both sides, or where desktop poli
 
 | Doc | Quality | Gap |
 |-----|---------|-----|
-| `Sysforge research/00-overview.md` … `07-*.md` | **Strong** — dated 2026-06-27, clear Phase A–D strategy | Paths reference `E:\odysseus` and `addons/sysforge/`; runtime landed under `integrations/sysforge/`. Refresh path names. |
-| `Sysforge research/features/*.md` (20 files) | **Strong** — per-feature status, paths, effort, risks | Not linked from main `docs/index.html` / `ROADMAP.md`. Easy to miss. |
+| `docs/research/sysforge/00-overview.md` … `07-*.md` | **Strong** — dated 2026-06-27, clear Phase A–D strategy | Paths reference `E:\odysseus` and `addons/sysforge/`; runtime landed under `integrations/sysforge/`. Refresh path names. |
+| `docs/research/sysforge/features/*.md` (20 files) | **Strong** — per-feature status, paths, effort, risks | Not linked from main `docs/index.html` / `ROADMAP.md`. Easy to miss. |
 | `integrations/sysforge/README.md` | **Minimal** — install/uninstall only | No module status, no schema note, no “what works today” vs research. |
 | `ROADMAP.md` | Host Odysseus roadmap | Mentions “Integration audit” generally; **no SysForge/Business port milestones**. |
 | `docs/migration-audit/` | Emerging (this synthesis) | Need living link from research overview → audit → ROADMAP. |
@@ -225,7 +225,7 @@ These are places where **something** exists on both sides, or where desktop poli
 
 ## File index (evidence anchors)
 
-**Research:** `Sysforge research/00-overview.md`, `01-feature-inventory.md`, `features/*.md`  
+**Research:** `docs/research/sysforge/00-overview.md`, `01-feature-inventory.md`, `features/*.md`  
 **Odysseus plugin:** `integrations/sysforge/{install,uninstall,routes,__init__,manifest,README,static/js/index}.py|js|md|json`, `src/plugins/registry.py`, `routes/plugin_routes.py`, `src/settings.py`, `app.py`, `static/{app.js,index.html,js/settings.js}`, `tests/test_sysforge_plugin.py`  
 **SysForge runtime:** `SysForge/{Database,Services,ViewModels,Views,Search,Helpers}/**`, migrations `0002`–`0021`  
 **SysForge plans:** `Plans/README.md`, `Plans/TODO.md`, `Plans/UI-Plans/Future-UI-Features.md`, `Plans/Product-Vision/*`, `AI_LEARNINGS.md`, `README.md`

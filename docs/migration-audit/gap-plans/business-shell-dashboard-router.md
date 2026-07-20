@@ -63,8 +63,8 @@ Desktop sidebar also lists Invoice Calculator, Placeholder Merge, Diagnostics. W
 
 ### Research targets (paths may drift)
 
-- `Sysforge research/features/shell-navigation-dashboard.md`
-- `Sysforge research/06-frontend-routing.md`
+- `docs/research/sysforge/features/shell-navigation-dashboard.md`
+- `docs/research/sysforge/06-frontend-routing.md`
 - Target module path in research: `static/js/sysforge/router.js` — **prefer** plugin-scoped path under `integrations/sysforge/static/js/` served as `/static/plugins/sysforge/js/` so uninstall does not leave host orphans.
 
 ---

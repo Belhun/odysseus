@@ -9,7 +9,7 @@
 | **Domain** | other (data infrastructure) |
 | **depends_on** | _(none — this is the foundation)_ |
 | **Blocks** | `business-shell-dashboard-router`, `clients-crud-fts-duplicates`, `parts-placeholders-merge`, `drafts-service-autosave`, `diagnostics-readonly-panel`, and every later domain API |
-| **Sources** | MASTER §5 Phase 0; feature-gap-matrix §8; chats `693ac8c9`, `0aea6b1e`; `Sysforge research/04-data-model-migration.md`; `Sysforge research/features/database-infrastructure.md` |
+| **Sources** | MASTER §5 Phase 0; feature-gap-matrix §8; chats `693ac8c9`, `0aea6b1e`; `docs/research/sysforge/04-data-model-migration.md`; `docs/research/sysforge/features/database-infrastructure.md` |
 
 ---
 
@@ -60,7 +60,7 @@ Give the Business Management plugin a real, checksummed SQLite schema and the sa
 | UI | `integrations/sysforge/static/js/index.js` | Stub modal + status text |
 | Host time | `src/user_time.py` | Browser/user-local for chat prompts — **not** Business DB storage helpers |
 | Host SQLite | scattered `sqlite3` in core | No plugin `SchemaVersion` / MigrationRunner |
-| Research | `Sysforge research/04-data-model-migration.md` | Spec already says: isolated DB, checksum runner, cents, UTC, no desktop import |
+| Research | `docs/research/sysforge/04-data-model-migration.md` | Spec already says: isolated DB, checksum runner, cents, UTC, no desktop import |
 
 **Gap in one line:** install succeeds; the database has no schema, no money/UTC helpers, and no migration immutability policy.
 
