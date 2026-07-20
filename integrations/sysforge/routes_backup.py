@@ -62,6 +62,15 @@ def register_backup_routes(router: APIRouter) -> None:
             "message": result.message,
         }
 
+    @router.get("/backup/{backup_id}/manifest")
+    def backup_manifest(backup_id: str):
+        try:
+            return {"ok": True, **backup_service.read_backup_manifest(backup_id)}
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except BackupError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @router.get("/backup/download/{backup_id}")
     def backup_download(backup_id: str):
         path = backup_service.find_backup_file(backup_id)

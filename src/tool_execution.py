@@ -837,6 +837,14 @@ async def _execute_tool_block_impl(
     elif tool == "manage_finance":
         desc = "manage_finance"
         result = await do_manage_finance(content, owner=owner, session_id=session_id)
+    elif tool == "manage_sysforge":
+        from src.tools.sysforge import do_manage_sysforge
+        desc = "manage_sysforge"
+        result = await do_manage_sysforge(content, owner=owner, session_id=session_id)
+    elif tool == "stage_upload":
+        from src.tools.stage_upload import do_stage_upload
+        desc = "stage_upload"
+        result = await do_stage_upload(content, owner=owner, session_id=session_id)
     elif tool == "download_model":
         desc = "download_model"
         result = await do_download_model(content, owner=owner)

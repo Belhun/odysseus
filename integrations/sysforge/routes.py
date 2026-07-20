@@ -132,6 +132,34 @@ class MergeBody(BaseModel):
     source_part_ids: list[int] = Field(default_factory=list)
 
 
+class PartsImportBody(BaseModel):
+    dry_run: bool = True
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PartsEnrichBody(BaseModel):
+    dry_run: bool = True
+    part_ids: list[int] = Field(default_factory=list)
+    fields: dict[str, Any] = Field(default_factory=dict)
+    overwrite: bool = False
+
+
+class SuppliersBulkBody(BaseModel):
+    dry_run: bool = True
+    suppliers: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PlaceholderBulkBody(BaseModel):
+    dry_run: bool = True
+    skip_conflicts: bool = False
+    mappings: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class InvoiceBatchBody(BaseModel):
+    dry_run: bool = True
+    invoices: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class PriceHistoryBody(BaseModel):
     price_cents: int
     source: str = "manual"
@@ -939,6 +967,37 @@ def setup_sysforge_routes() -> APIRouter:
             raise HTTPException(400, str(exc)) from exc
         return Response(status_code=204)
 
+    @router.post("/parts/import")
+    def parts_import(body: PartsImportBody):
+        from integrations.sysforge.services import parts_import as bulk
+
+        try:
+            return bulk.import_parts(rows=body.rows, dry_run=body.dry_run)
+        except PartValidationError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/parts/import/{batch_id}/commit")
+    def parts_import_commit(batch_id: str):
+        from integrations.sysforge.services import parts_import as bulk
+
+        try:
+            return bulk.commit_import_batch(batch_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @router.post("/parts/enrich")
+    def parts_enrich(body: PartsEnrichBody):
+        from integrations.sysforge.services import parts_import as bulk
+
+        return bulk.enrich_parts(
+            part_ids=body.part_ids,
+            fields=body.fields,
+            dry_run=body.dry_run,
+            overwrite=body.overwrite,
+        )
+
     # --- Suppliers ---
 
     @router.get("/suppliers")
@@ -996,6 +1055,29 @@ def setup_sysforge_routes() -> APIRouter:
             raise HTTPException(404, "Supplier not found")
         return Response(status_code=204)
 
+    @router.post("/suppliers/bulk")
+    def suppliers_bulk(body: SuppliersBulkBody):
+        from integrations.sysforge.services import suppliers_bulk as bulk
+
+        try:
+            return bulk.bulk_upsert_suppliers(
+                suppliers=body.suppliers,
+                dry_run=body.dry_run,
+            )
+        except SupplierValidationError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/suppliers/bulk/{batch_id}/commit")
+    def suppliers_bulk_commit(batch_id: str):
+        from integrations.sysforge.services import suppliers_bulk as bulk
+
+        try:
+            return bulk.commit_supplier_batch(batch_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
     # --- Placeholders ---
 
     @router.get("/placeholders")
@@ -1020,6 +1102,30 @@ def setup_sysforge_routes() -> APIRouter:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return {"merged": merged}
+
+    @router.post("/placeholders/bulk-convert")
+    def placeholders_bulk_convert(body: PlaceholderBulkBody):
+        from integrations.sysforge.services import placeholder_bulk as bulk
+
+        try:
+            return bulk.bulk_convert_placeholders(
+                mappings=body.mappings,
+                dry_run=body.dry_run,
+                skip_conflicts=body.skip_conflicts,
+            )
+        except PartValidationError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/placeholders/bulk-convert/{batch_id}/commit")
+    def placeholders_bulk_commit(batch_id: str):
+        from integrations.sysforge.services import placeholder_bulk as bulk
+
+        try:
+            return bulk.commit_placeholder_batch(batch_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     # --- Invoices (create / same-id edit / save-as-new; orphan cleanup after re-insert) ---
 
@@ -1068,6 +1174,11 @@ def setup_sysforge_routes() -> APIRouter:
         """Invoices with balance > 0 after non-voided payments."""
         _ensure_invoice_schema()
         return {"invoices": payments_service.list_outstanding()}
+
+    @router.get("/reports/aging")
+    def reports_aging():
+        _ensure_invoice_schema()
+        return reports_service.aging_report()
 
     @router.get("/reports/sales")
     def reports_sales(
@@ -1275,6 +1386,31 @@ def setup_sysforge_routes() -> APIRouter:
         except Exception as exc:
             _invoice_exc(exc)
             raise
+
+    @router.post("/invoices/batch")
+    def create_invoices_batch(body: InvoiceBatchBody):
+        _ensure_invoice_schema()
+        from integrations.sysforge.services import invoice_batch as batch
+
+        try:
+            return batch.batch_create_invoices(
+                entries=body.invoices,
+                dry_run=body.dry_run,
+            )
+        except InvoiceValidationError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/invoices/batch/{batch_id}/commit")
+    def commit_invoices_batch(batch_id: str):
+        _ensure_invoice_schema()
+        from integrations.sysforge.services import invoice_batch as batch
+
+        try:
+            return batch.commit_invoice_batch(batch_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @router.put("/invoices/{invoice_id}")
     def put_invoice(invoice_id: int, body: InvoiceBody):
@@ -1561,6 +1697,19 @@ def setup_sysforge_routes() -> APIRouter:
         except ProjectError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @router.get("/projects/{project_id}/photos/{photo_id}/file")
+    def get_project_photo_file(project_id: int, photo_id: int):
+        if project_id < 1 or photo_id < 1:
+            raise HTTPException(400, "Invalid project or photo id")
+        _ensure_projects_schema()
+        try:
+            path, mime = project_service.read_photo_file(project_id, photo_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ProjectError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return FileResponse(path, media_type=mime or "application/octet-stream")
+
     # --- Screw maps (S0–S2 + lock) ---
 
     def _screw_map_http_error(exc: Exception) -> HTTPException:
@@ -1818,5 +1967,9 @@ def setup_sysforge_routes() -> APIRouter:
     from integrations.sysforge.routes_companion import register_companion_routes
 
     register_companion_routes(router)
+
+    from integrations.sysforge.confirmation_gate import register_sysforge_confirmation_gate
+
+    register_sysforge_confirmation_gate()
 
     return router

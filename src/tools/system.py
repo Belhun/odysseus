@@ -656,6 +656,23 @@ async def do_app_api(content: str, owner: Optional[str] = None) -> Dict:
             ),
             "exit_code": 1,
         }
+    if "/api/sysforge" in path:
+        if method in ("POST", "PUT", "PATCH", "DELETE"):
+            return {
+                "error": (
+                    "Don't write to /api/sysforge via app_api — use `manage_sysforge` "
+                    "with the matching action. Gated actions need confirmation_token from ask_user."
+                ),
+                "exit_code": 1,
+            }
+        return {
+            "error": (
+                "Don't use app_api for SysForge Business — use `manage_sysforge` "
+                "(e.g. action client_search, outstanding_list, status). "
+                "For the Business UI: ui_control open_panel business."
+            ),
+            "exit_code": 1,
+        }
     if any(method == m and path.startswith(p) for m, p in _APP_API_BLOCKLIST_METHOD_PATH):
         if "/api/email/accounts" in path:
             return {"error": "Don't use /api/email/accounts via app_api — it is owner-filtered in tool context and may return empty. Use the `list_email_accounts` email tool, then pass `account` to list_emails/read_email.", "exit_code": 1}
