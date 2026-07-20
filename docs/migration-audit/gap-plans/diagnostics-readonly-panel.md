@@ -8,7 +8,7 @@
 | **Effort** | **S** (health + schema snapshot); **M** if raw client/invoice grids ship in the same PR |
 | **Priority** | medium (`gap-manifest.json`) |
 | **Domain** | settings |
-| **Primary sources** | SysForge `DiagnosticsViewModel` / `DiagnosticsView.axaml` / `DatabaseDiagnostics.cs`; research `Sysforge research/features/diagnostics.md`; MASTER §5 Phase 2; feature-gap-matrix §1 Diagnostics; chat [b89af01b](../chat-reviews/b89af01b-df9a-4314-9192-0f96200cf8e3.md) (keep **Diagnostics** product UI; do **not** port `DebugLog`) |
+| **Primary sources** | SysForge `DiagnosticsViewModel` / `DiagnosticsView.axaml` / `DatabaseDiagnostics.cs`; research `docs/research/sysforge/features/diagnostics.md`; MASTER §5 Phase 2; feature-gap-matrix §1 Diagnostics; chat [b89af01b](../chat-reviews/b89af01b-df9a-4314-9192-0f96200cf8e3.md) (keep **Diagnostics** product UI; do **not** port `DebugLog`) |
 | **Manifest** | `gap-plans/gap-manifest.json` → `diagnostics-readonly-panel` |
 | **Master plan** | `synthesis/MASTER-MIGRATION-PLAN.md` → Phase 2 exit: “Diagnostics read-only \| Migration version / DB health (no secrets)” |
 
@@ -241,7 +241,7 @@ Do not add a “Rebuild search” button here unless backup/reindex workstream o
 | `integrations/sysforge/static/js/index.js` / shell router | Register route + nav entry |
 | `integrations/sysforge/README.md` | Document endpoint + redaction policy |
 | `tests/test_sysforge_plugin.py` or `tests/test_sysforge_diagnostics.py` (new) | API + gate + redaction tests |
-| `Sysforge research/features/diagnostics.md` | Optional: mark port notes / path `integrations/` (docs hygiene) |
+| `docs/research/sysforge/features/diagnostics.md` | Optional: mark port notes / path `integrations/` (docs hygiene) |
 
 **Do not touch:** host `routes/diagnostics_routes.py` for Business data; do not add `DebugLog`-style writers under plugin static or Python.
 

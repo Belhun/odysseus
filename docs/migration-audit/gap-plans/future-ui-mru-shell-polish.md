@@ -18,7 +18,7 @@
 | **Domain** | ux |
 | **Depends on** | `classic-client-dashboard`, `business-shell-dashboard-router` |
 | **Unlocks** | Faster daily client loop; host-aligned Business shortcuts; optional card favorites / chrome polish |
-| **Sources** | gap-manifest entry; MASTER §2.2 / §2.6 / §5 Phase 2 optional MRU / §6 Phase 7 / §7 Deferred; future-plans-roadmap §1.5 / §3 Phase 7 / §4.1; feature-gap-matrix §2 / §10; chat [a162de19](a162de19-d9e4-4026-9c02-09d8fdad5c5b) (MRU audit); chat e24feae4 (session MRU shipped, persist deferred); SysForge `Plans/UI-Plans/Future-UI-Features.md`; `Sysforge research/features/future-ui-backlog.md` |
+| **Sources** | gap-manifest entry; MASTER §2.2 / §2.6 / §5 Phase 2 optional MRU / §6 Phase 7 / §7 Deferred; future-plans-roadmap §1.5 / §3 Phase 7 / §4.1; feature-gap-matrix §2 / §10; chat [a162de19](a162de19-d9e4-4026-9c02-09d8fdad5c5b) (MRU audit); chat e24feae4 (session MRU shipped, persist deferred); SysForge `Plans/UI-Plans/Future-UI-Features.md`; `docs/research/sysforge/features/future-ui-backlog.md` |
 
 ---
 
@@ -62,7 +62,7 @@
 | Themes | Host theme modal + CSS vars | Reuse for Business chrome (`future-ui-backlog.md`). |
 | Business plugin | `integrations/sysforge/*` | Install gate + stub UI today; shell/router and Classic dashboard are **upstream workstreams** (see Depends on). |
 | Client MRU API/UI | — | **Missing** (also deferred on desktop for persist). |
-| Research | `Sysforge research/features/future-ui-backlog.md` | Port approach: defer until core flows; avoid duplicate shortcuts; Effort **M** per feature area. |
+| Research | `docs/research/sysforge/features/future-ui-backlog.md` | Port approach: defer until core flows; avoid duplicate shortcuts; Effort **M** per feature area. |
 
 ### Gap (what this workstream fills)
 
@@ -226,7 +226,7 @@ Only if VI2 = yes:
 | `static/js/keyboard-shortcuts.js` | `open_sysforge` |
 | `static/js/settings.js` | Shortcut catalog entry; hide if inactive |
 | `integrations/sysforge/README.md` | MRU + shortcuts notes |
-| `Sysforge research/features/future-ui-backlog.md` | Status → Partial/Done for shipped slice |
+| `docs/research/sysforge/features/future-ui-backlog.md` | Status → Partial/Done for shipped slice |
 
 ### Read-only references
 
@@ -235,7 +235,7 @@ Only if VI2 = yes:
 | `SysForge/Plans/UI-Plans/Future-UI-Features.md` | Canonical MRU + Phase 2–3 spec |
 | `SysForge/ViewModels/Sandbox/ClientDashboardWireframeViewModel.cs` | Session MRU UX to upgrade |
 | `SysForge/ViewModels/DashboardViewModel.cs` | Hardcoded `IsFavorite` metaphor |
-| `Sysforge research/features/future-ui-backlog.md` | Port constraints |
+| `docs/research/sysforge/features/future-ui-backlog.md` | Port constraints |
 | `static/js/keyboard-shortcuts.js` | Open-tool pattern to copy |
 
 ### Avoid

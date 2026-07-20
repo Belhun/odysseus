@@ -34,4 +34,4 @@ odysseus-sysforge has a working **optional Business Management plugin shell** (i
 
 ## Documentation note
 
-SysForge `Plans/README.md` remains the best desktop status source. Odysseus research under `Sysforge research/` remains the best port plan. This audit bridges them to current runtime evidence.
+SysForge `Plans/README.md` remains the best desktop status source. Odysseus research under `docs/research/sysforge/` remains the best port plan. This audit bridges them to current runtime evidence.

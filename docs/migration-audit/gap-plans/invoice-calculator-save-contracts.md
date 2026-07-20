@@ -8,7 +8,7 @@
 | **Effort** | **L** |
 | **Priority** | critical |
 | **Domain** | invoices |
-| **Primary sources** | SysForge `InvoiceCalculatorViewModel.cs`, `InvoiceCalculatorView.axaml`(+`.cs`), `InvoiceService.cs`, `PartService.CreatePlaceholderPartsFromItemsAsync` / `DeleteOrphanedPlaceholdersAsync`, `InvoiceValidationHelpers.cs`, `InvoiceEditViewModel.cs` (empty-item + Save as new parity); chats [21e672a5](../chat-reviews/21e672a5-191b-42d1-a2ae-4a5527cb8784.md), [920df407](../chat-reviews/920df407-41fd-4f6d-a38d-dc5c4065a110.md), [21972123](../chat-reviews/21972123-780e-4496-99cd-5be905556a3b.md), [f4de4b62](../chat-reviews/f4de4b62-87a3-4f5f-b09f-09cc62baa5c8.md), [8eceb374](../chat-reviews/8eceb374-24a7-4fc9-88c2-0b796a7b4528.md); research `Sysforge research/features/invoice-calculator.md`, `invoice-edit.md` |
+| **Primary sources** | SysForge `InvoiceCalculatorViewModel.cs`, `InvoiceCalculatorView.axaml`(+`.cs`), `InvoiceService.cs`, `PartService.CreatePlaceholderPartsFromItemsAsync` / `DeleteOrphanedPlaceholdersAsync`, `InvoiceValidationHelpers.cs`, `InvoiceEditViewModel.cs` (empty-item + Save as new parity); chats [21e672a5](../chat-reviews/21e672a5-191b-42d1-a2ae-4a5527cb8784.md), [920df407](../chat-reviews/920df407-41fd-4f6d-a38d-dc5c4065a110.md), [21972123](../chat-reviews/21972123-780e-4496-99cd-5be905556a3b.md), [f4de4b62](../chat-reviews/f4de4b62-87a3-4f5f-b09f-09cc62baa5c8.md), [8eceb374](../chat-reviews/8eceb374-24a7-4fc9-88c2-0b796a7b4528.md); research `docs/research/sysforge/features/invoice-calculator.md`, `invoice-edit.md` |
 | **Manifest** | `gap-plans/gap-manifest.json` → `invoice-calculator-save-contracts` |
 | **Master plan** | `synthesis/MASTER-MIGRATION-PLAN.md` → Phase 1 (Invoice MVP) + §6 UX contracts |
 

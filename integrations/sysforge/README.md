@@ -2,6 +2,8 @@
 
 Optional Odysseus plugin for repair-shop systems (clients, invoices, parts, projects).
 
+**Docs:** [`docs/features/sysforge.md`](../../docs/features/sysforge.md) · [`docs/research/sysforge/`](../../docs/research/sysforge/) · [`docs/plans/sysforge/`](../../docs/plans/sysforge/) · [`docs/migration-audit/`](../../docs/migration-audit/)
+
 ## Install / uninstall
 
 Settings → Integrations → **Business Management** → Install / Uninstall.

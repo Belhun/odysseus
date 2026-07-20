@@ -1,6 +1,10 @@
-# Migration audit — SysForge → odysseus-sysforge
+# Migration audit — SysForge → Odysseus plugin
 
 Audit artifacts for porting SysForge desktop Business features into the Odysseus `sysforge` plugin.
+
+**Feature guide:** [`docs/features/sysforge.md`](../features/sysforge.md)  
+**Research pack:** [`docs/research/sysforge/`](../research/sysforge/)  
+**Phase / AI plans:** [`docs/plans/sysforge/`](../plans/sysforge/)
 
 | Folder / file | Role |
 |---------------|------|

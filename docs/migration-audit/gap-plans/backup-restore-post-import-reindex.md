@@ -9,7 +9,7 @@
 | **Domain** | backup |
 | **Effort** | **M** |
 | **Depends on** | `business-settings-mvp`, `clients-crud-fts-duplicates` |
-| **Sources** | gap-manifest · MASTER §4 / §5 Phase 5 / §8.6 · chats [c2396042](../chat-reviews/c2396042-bc18-4c3a-a32f-d6b6def918df.md), [55127af8](../chat-reviews/55127af8-5c1c-45ed-8f64-b1558712f3cf.md), [784da76d](../chat-reviews/784da76d-e4c8-44bb-9eca-59d99e1b0980.md) · SysForge `BackupService` / `BackupModels` / `ScheduledBackupService` · `Sysforge research/features/settings-backup.md` · feature-gap-matrix §8 |
+| **Sources** | gap-manifest · MASTER §4 / §5 Phase 5 / §8.6 · chats [c2396042](../chat-reviews/c2396042-bc18-4c3a-a32f-d6b6def918df.md), [55127af8](../chat-reviews/55127af8-5c1c-45ed-8f64-b1558712f3cf.md), [784da76d](../chat-reviews/784da76d-e4c8-44bb-9eca-59d99e1b0980.md) · SysForge `BackupService` / `BackupModels` / `ScheduledBackupService` · `docs/research/sysforge/features/settings-backup.md` · feature-gap-matrix §8 |
 
 **Constraint for this doc:** planning only. No product code changes in this workstream write-up.
 

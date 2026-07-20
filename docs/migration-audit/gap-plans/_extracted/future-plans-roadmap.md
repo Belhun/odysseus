@@ -14,7 +14,7 @@
 | `F:\Codeing Project\SysForge\Critiques\` | Tracker (empty open list) + Solved-Critiques deferred/accepted archives |
 | `F:\Codeing Project\SysForge\commands for future.md` | Ops note only (`rm` local `sysforge.db`); not a feature backlog |
 | `F:\Codeing Project\odysseus-sysforge\ROADMAP.md` | Host-app (Odysseus) help-wanted; **not** SysForge-specific |
-| `F:\Codeing Project\odysseus-sysforge\Sysforge research\` | Port research (feature cards, inventory, phases A–D) |
+| `F:\Codeing Project\odysseus-sysforge\docs/research/sysforge\` | Port research (feature cards, inventory, phases A–D) |
 | `F:\Codeing Project\odysseus-sysforge\docs\plans\` | Email local-sync plans (host app; not SysForge domain) |
 
 ### Ease-of-use goals (carry into Odysseus)
@@ -25,7 +25,7 @@ Preserve these SysForge product goals when sequencing ports:
 2. **One place per device** — project workspace holds intake, plan, parts, photos, screw map.
 3. **Clear shop flow** — estimate → client accepts → work order → project(s) → finish/pickup/payment.
 4. **Opt-in complexity** — advanced UI (favorites, plugins, themes) after core bench flows work.
-5. **Fresh start** — plugin DB is empty on install; no desktop SysForge import in MVP (`Sysforge research/00-overview.md`, `04-data-model-migration.md`).
+5. **Fresh start** — plugin DB is empty on install; no desktop SysForge import in MVP (`docs/research/sysforge/00-overview.md`, `04-data-model-migration.md`).
 
 ---
 
@@ -157,13 +157,13 @@ Approximate unique themes from the catalog above (excluding superseded Cursor in
 
 ## 2. What already appears in odysseus-sysforge docs
 
-### 2.1 Covered in `Sysforge research/` (port planning)
+### 2.1 Covered in `docs/research/sysforge/` (port planning)
 
 These SysForge futures are **already named** in Odysseus research (status + port approach), even if not coded yet:
 
 | Theme | Odysseus research path | Alignment with SysForge |
 |-------|------------------------|-------------------------|
-| Feature inventory + status | `Sysforge research/01-feature-inventory.md` | Mirrors `Plans/README.md` Done/Partial/Planned |
+| Feature inventory + status | `docs/research/sysforge/01-feature-inventory.md` | Mirrors `Plans/README.md` Done/Partial/Planned |
 | Port phases A–D (plugin skeleton → backend → frontend → fresh DB) | `00-overview.md` | Host migration strategy |
 | Future UI Phase 2–3 | `features/future-ui-backlog.md` | Explicit: defer until Business flows ship |
 | Projects / work orders | `features/projects-work-orders.md` | Schema first, UI after invoice MVP |
@@ -189,7 +189,7 @@ These SysForge futures are **already named** in Odysseus research (status + port
 
 ### 2.3 `docs/plans/` (email local sync)
 
-All files under `docs/plans/email-local-sync-*` and follow-ups are **Odysseus mail**, not SysForge invoicing. Do not treat as SysForge migration scope.  
+All files under `docs/plans/email/email-local-sync-*` and follow-ups are **Odysseus mail**, not SysForge invoicing. Do not treat as SysForge migration scope.  
 SysForge Cursor plan `.cursor/plans/email-68ea9ae6.plan.md` is **Lucene client `email:` query**, unrelated to Odysseus IMAP sync.
 
 ### 2.4 Gap: no dedicated SysForge future-roadmap file (until this doc)
@@ -208,7 +208,7 @@ Order follows ease-of-use: ship the bench path first, then repair documentation 
 
 | Work | Sources | Ease-of-use note |
 |------|---------|------------------|
-| Feature flag + one-click install/uninstall | `Sysforge research/00-overview.md`, `02-addon-architecture.md` | Zero terminal / zip steps |
+| Feature flag + one-click install/uninstall | `docs/research/sysforge/00-overview.md`, `02-addon-architecture.md` | Zero terminal / zip steps |
 | Fresh `sysforge.db` + migration runner | `04-data-model-migration.md` | No desktop import |
 | Stub nav entry gated on install | `06-frontend-routing.md` | |
 
@@ -358,7 +358,7 @@ Order follows ease-of-use: ship the bench path first, then repair documentation 
 
 ## 4. Explicit “not yet planned in odysseus” list
 
-Items that appear in SysForge plans but are **missing or only vaguely implied** in Odysseus `Sysforge research/` / `ROADMAP.md` / `docs/plans/` (no dedicated port card, phase, or acceptance criteria).
+Items that appear in SysForge plans but are **missing or only vaguely implied** in Odysseus `docs/research/sysforge/` / `ROADMAP.md` / `docs/plans/` (no dedicated port card, phase, or acceptance criteria).
 
 ### 4.1 High value for ease-of-use (should add to Odysseus planning)
 
@@ -426,7 +426,7 @@ These are **intentionally not** MVP; keep them on the “not planned for MVP” 
 |------|----------|
 | Cookbook / SGLang / Deep Research | `ROADMAP.md` |
 | Agent prompt bloat / skill injection | `ROADMAP.md` |
-| Email IMAP local sync phases | `docs/plans/email-local-sync-*` |
+| Email IMAP local sync phases | `docs/plans/email/email-local-sync-*` |
 | Wipe local Avalonia DB command | `SysForge/commands for future.md` |
 
 ---
@@ -483,9 +483,9 @@ These are **intentionally not** MVP; keep them on the “not planned for MVP” 
 ### odysseus-sysforge
 
 - `ROADMAP.md`  
-- `Sysforge research/00-overview.md` … `07-deployment-packaging.md`  
-- `Sysforge research/01-feature-inventory.md`  
-- `Sysforge research/features/*.md` (including `future-ui-backlog.md`, `projects-work-orders.md`, `screw-maps.md`, `product-vision-integrations.md`)  
+- `docs/research/sysforge/00-overview.md` … `07-deployment-packaging.md`  
+- `docs/research/sysforge/01-feature-inventory.md`  
+- `docs/research/sysforge/features/*.md` (including `future-ui-backlog.md`, `projects-work-orders.md`, `screw-maps.md`, `product-vision-integrations.md`)  
 - `docs/plans/*` (email host plans; non-SysForge)  
 
 ---

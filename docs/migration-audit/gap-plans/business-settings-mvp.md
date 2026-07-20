@@ -9,7 +9,7 @@
 | **Domain** | settings |
 | **Effort** | **S** |
 | **Depends on** | `business-shell-dashboard-router` |
-| **Sources** | gap-manifest · MASTER §5 Phase 1 / §2.9 · feature-gap-matrix §1 Settings window + §8 Config.json · future-plans-roadmap §3 Phase 1 · `Sysforge research/features/settings-backup.md` · SysForge `ConfigService` / `SettingsViewModel` / `SettingsWindow` · `integrations/sysforge/install.py` |
+| **Sources** | gap-manifest · MASTER §5 Phase 1 / §2.9 · feature-gap-matrix §1 Settings window + §8 Config.json · future-plans-roadmap §3 Phase 1 · `docs/research/sysforge/features/settings-backup.md` · SysForge `ConfigService` / `SettingsViewModel` / `SettingsWindow` · `integrations/sysforge/install.py` |
 
 **Constraint for this doc:** planning only. No product code changes in this workstream write-up.
 
@@ -214,7 +214,7 @@ Reference only (do not port wholesale):
 - `SysForge/Views/SettingsWindow.axaml`
 - `SysForge/Helpers/MoneyHelpers.cs` (bps convert)
 - `static/js/settings.js` (fetch/toast patterns; Integrations install stays separate)
-- `Sysforge research/features/settings-backup.md`
+- `docs/research/sysforge/features/settings-backup.md`
 
 ---
 

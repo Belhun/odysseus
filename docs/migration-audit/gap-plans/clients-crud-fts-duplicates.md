@@ -8,7 +8,7 @@
 | **Effort** | **M** |
 | **Priority** | critical |
 | **Domain** | clients |
-| **Primary sources** | SysForge `ClientService.cs`, `ClientValidationHelpers.cs`, `ClientQueryParser.cs`, `ClientDocumentMapper.NormalizePhone`, migration `0005_clients.sql`, DB-12 chats [55127af8](../chat-reviews/55127af8-5c1c-45ed-8f64-b1558712f3cf.md) / [784da76d](../chat-reviews/784da76d-e4c8-44bb-9eca-59d99e1b0980.md); research `Sysforge research/features/clients-management.md`, `client-search-lucene.md` |
+| **Primary sources** | SysForge `ClientService.cs`, `ClientValidationHelpers.cs`, `ClientQueryParser.cs`, `ClientDocumentMapper.NormalizePhone`, migration `0005_clients.sql`, DB-12 chats [55127af8](../chat-reviews/55127af8-5c1c-45ed-8f64-b1558712f3cf.md) / [784da76d](../chat-reviews/784da76d-e4c8-44bb-9eca-59d99e1b0980.md); research `docs/research/sysforge/features/clients-management.md`, `client-search-lucene.md` |
 | **Manifest** | `gap-plans/gap-manifest.json` -> `clients-crud-fts-duplicates` |
 | **Master plan** | `synthesis/MASTER-MIGRATION-PLAN.md` -> Phase 1 (Invoice MVP) |
 

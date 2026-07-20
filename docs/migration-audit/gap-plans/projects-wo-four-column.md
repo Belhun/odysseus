@@ -9,7 +9,7 @@
 | **Domain** | projects |
 | **Effort** | **L** |
 | **Depends on** | `classic-client-dashboard`, `invoice-viewer-return-context` |
-| **Sources** | gap-manifest · MASTER §2.7 / §4 / §5 Phase 3 / §6 · feature-gap-matrix §6 · chats [c6ee4808](../chat-reviews/c6ee4808-8cee-4854-b85a-331c23103080.md), [5d77cdc9](../chat-reviews/5d77cdc9-c5c6-49db-9f2f-43237c790412.md), [38ff5cc4](../chat-reviews/38ff5cc4-5730-47a3-a7c1-53249e7d409c.md), [039b6dc2](../chat-reviews/039b6dc2-f107-4ce1-8bf2-a2c39b335f83.md) · `Sysforge research/features/projects-work-orders.md`, `invoice-devices.md` · SysForge plan `Plans/Feature-Plans/Projects-and-Work-Orders-Plan.md` |
+| **Sources** | gap-manifest · MASTER §2.7 / §4 / §5 Phase 3 / §6 · feature-gap-matrix §6 · chats [c6ee4808](../chat-reviews/c6ee4808-8cee-4854-b85a-331c23103080.md), [5d77cdc9](../chat-reviews/5d77cdc9-c5c6-49db-9f2f-43237c790412.md), [38ff5cc4](../chat-reviews/38ff5cc4-5730-47a3-a7c1-53249e7d409c.md), [039b6dc2](../chat-reviews/039b6dc2-f107-4ce1-8bf2-a2c39b335f83.md) · `docs/research/sysforge/features/projects-work-orders.md`, `invoice-devices.md` · SysForge plan `Plans/Feature-Plans/Projects-and-Work-Orders-Plan.md` |
 
 **Constraint for this doc:** planning only. No product code changes in this workstream write-up.
 
@@ -294,7 +294,7 @@ Run automated suite + manual shop loop (see Tests). Fix gaps before marking the 
 | Shell wiring | Dashboard card + router entries in plugin `static/js/`; Classic column in client-dashboard module |
 | Settings | Extend plugin settings UI from `business-settings-mvp` |
 | Tests | `tests/test_sysforge_work_orders.py`, `tests/test_sysforge_projects.py`, `tests/test_sysforge_create_from_invoice.py` |
-| Research fix (optional doc-only) | Update `Sysforge research/features/projects-work-orders.md` risk line when port starts |
+| Research fix (optional doc-only) | Update `docs/research/sysforge/features/projects-work-orders.md` risk line when port starts |
 
 ---
 

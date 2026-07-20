@@ -7,7 +7,7 @@
 | **Phase** | P1 |
 | **Priority** | high |
 | **Effort** | **M** |
-| **Primary sources** | `Sysforge research/features/parts-catalog.md`, `placeholder-parts-merge.md`; SysForge `PartService.cs`, `PlaceholderMergeViewModel.cs`, `PlaceholderWorkflowTests.cs`; chats `21e672a5`, `8eceb374` (orphan order / BUG-006) |
+| **Primary sources** | `docs/research/sysforge/features/parts-catalog.md`, `placeholder-parts-merge.md`; SysForge `PartService.cs`, `PlaceholderMergeViewModel.cs`, `PlaceholderWorkflowTests.cs`; chats `21e672a5`, `8eceb374` (orphan order / BUG-006) |
 | **Manifest** | `gap-plans/gap-manifest.json` → `parts-placeholders-merge` |
 | **Master plan** | `synthesis/MASTER-MIGRATION-PLAN.md` → Phase 1 (Invoice MVP); feature-gap-matrix §5 |
 
@@ -219,7 +219,7 @@ From catalog row or merge panel: edit fields → `POST /parts/{id}/convert` sets
 | `integrations/sysforge/manifest.json` | Ensure new static assets are packaged |
 | `tests/test_sysforge_parts.py` | **Create** — CRUD, search, SKU conflict |
 | `tests/test_sysforge_placeholders.py` | **Create** — create, orphan order, merge, usage delete |
-| `Sysforge research/features/parts-catalog.md` | Optional status note after ship (not required for close) |
+| `docs/research/sysforge/features/parts-catalog.md` | Optional status note after ship (not required for close) |
 
 **Desktop references (read-only):**
 

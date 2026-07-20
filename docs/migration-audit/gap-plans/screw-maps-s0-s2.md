@@ -9,7 +9,7 @@
 | **Domain** | screw-maps |
 | **Effort** | **L** |
 | **Depends on** | `projects-wo-four-column` |
-| **Sources** | gap-manifest · MASTER §2.8 / §4 ScrewMapView contract / §5 Phase 4 / §6 / §7 · feature-gap-matrix §7 · chats [7e801bff](../chat-reviews/7e801bff-623b-4f73-bfff-a1f32179aec6.md), [ca042680](../chat-reviews/ca042680-bd96-4b73-bc50-7507b58a78cc.md), [150e09d0](../chat-reviews/150e09d0-92d2-4694-9fbb-793064d37f6a.md), [f9ec8da7](../chat-reviews/f9ec8da7-17ec-4b9b-8b77-f3510dce6763.md) · `Sysforge research/features/screw-maps.md` · SysForge `ScrewMapService`, migrations `0019`–`0021`, `ScrewMapView*` |
+| **Sources** | gap-manifest · MASTER §2.8 / §4 ScrewMapView contract / §5 Phase 4 / §6 / §7 · feature-gap-matrix §7 · chats [7e801bff](../chat-reviews/7e801bff-623b-4f73-bfff-a1f32179aec6.md), [ca042680](../chat-reviews/ca042680-bd96-4b73-bc50-7507b58a78cc.md), [150e09d0](../chat-reviews/150e09d0-92d2-4694-9fbb-793064d37f6a.md), [f9ec8da7](../chat-reviews/f9ec8da7-17ec-4b9b-8b77-f3510dce6763.md) · `docs/research/sysforge/features/screw-maps.md` · SysForge `ScrewMapService`, migrations `0019`–`0021`, `ScrewMapView*` |
 
 **Constraint for this doc:** planning only. No product code changes in this workstream write-up.
 
@@ -234,7 +234,7 @@ In `ProjectService.update_status` (owned by projects stream): after successful s
 
 ### 9. Docs hygiene (with first coding PR)
 
-1. Update `Sysforge research/features/screw-maps.md` status: Odysseus target = ScrewMapView S0–S2 + lock; S5 deferred.
+1. Update `docs/research/sysforge/features/screw-maps.md` status: Odysseus target = ScrewMapView S0–S2 + lock; S5 deferred.
 2. Note path drift: runtime `integrations/sysforge/`, not `addons/sysforge/`.
 
 ---
@@ -263,7 +263,7 @@ In `ProjectService.update_status` (owned by projects stream): after successful s
 | `integrations/sysforge/services/project_service.py` | Auto-lock hook on status |
 | `integrations/sysforge/manifest.json` / install paths | Ensure image dir created |
 | `tests/test_sysforge_plugin.py` | Keep inactive→404; extend when maps gated |
-| `Sysforge research/features/screw-maps.md` | Status alignment |
+| `docs/research/sysforge/features/screw-maps.md` | Status alignment |
 
 ### Desktop references (read-only)
 

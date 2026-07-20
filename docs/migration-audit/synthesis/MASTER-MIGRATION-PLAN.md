@@ -14,7 +14,7 @@
 | **odysseus-sysforge plugin shell** | **Done** — optional install/uninstall, `features.sysforge` flag, nav/rail gate, stub modal, gated `/api/sysforge/status`, plugin tests |
 | **SysForge desktop product** | **Shipped** Phases 1–9 (clients, invoices/calculator, drafts, parts/placeholders, dashboard, settings/backup, diagnostics). Projects/WO + screw maps **in progress** |
 | **Domain parity on web** | **Near zero** — empty `sysforge.db` touch, empty `drafts/` / `backups/` dirs, stub panel. No migrations, no domain APIs, no Business UI |
-| **Research / planning** | **Strong** — `Sysforge research/` Phase A–D + feature cards; this audit bridges research to runtime |
+| **Research / planning** | **Strong** — `docs/research/sysforge/` Phase A–D + feature cards; this audit bridges research to runtime |
 
 **One-line verdict:** Install works; the shop product does not. Desktop ease-of-use lives entirely in Avalonia; the web plugin is a gated empty shell.
 
@@ -106,7 +106,7 @@
 
 ## 3. Transfer quality into odysseus-sysforge
 
-Legend: **Ported** = runtime · **Research-only** = documented in `Sysforge research/` · **Missing** = neither runtime nor enough port acceptance criteria
+Legend: **Ported** = runtime · **Research-only** = documented in `docs/research/sysforge/` · **Missing** = neither runtime nor enough port acceptance criteria
 
 | Domain | Ported | Research-only | Missing (runtime) |
 |--------|--------|---------------|-------------------|
@@ -379,6 +379,6 @@ Copy into implementation tickets. Fail CI / QA if broken.
 | Long future backlog | [future-plans-roadmap.md](future-plans-roadmap.md) |
 | Per-chat checklist | [CHAT-FINDINGS-INDEX.md](CHAT-FINDINGS-INDEX.md) → `../chat-reviews/<uuid>.md` |
 | Desktop status source of truth | SysForge `Plans/README.md` |
-| Port approach cards | `Sysforge research/00-overview.md` + `features/*.md` |
+| Port approach cards | `docs/research/sysforge/00-overview.md` + `features/*.md` |
 
 **Recommended first engineering epic:** Phase 0 (migrations + Business dashboard shell), then Phase 1 clients → drafts → parts → calculator as one shop loop.
