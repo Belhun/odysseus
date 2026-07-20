@@ -70,11 +70,14 @@ export function mountClientDashboard(container, deps) {
 
   container.innerHTML = `
     <div class="sysforge-classic" data-classic="1">
-      <div class="sysforge-classic-search-wrap">
-        <label class="visually-hidden" for="sysforge-classic-search">Search clients</label>
-        <input type="search" id="sysforge-classic-search" class="sysforge-classic-search"
-          placeholder="Search by name, phone, or email..." autocomplete="off" />
-        <ul id="sysforge-classic-overlay" class="sysforge-classic-overlay" hidden role="listbox"></ul>
+      <div class="sysforge-classic-toolbar">
+        <div class="sysforge-classic-search-wrap">
+          <label class="visually-hidden" for="sysforge-classic-search">Search clients</label>
+          <input type="search" id="sysforge-classic-search" class="sysforge-classic-search"
+            placeholder="Search by name, phone, or email..." autocomplete="off" />
+          <ul id="sysforge-classic-overlay" class="sysforge-classic-overlay" hidden role="listbox"></ul>
+        </div>
+        <button type="button" class="btn-secondary" id="sysforge-classic-all-clients">All clients</button>
       </div>
       <p class="sysforge-clients-error" id="sysforge-classic-error" hidden></p>
       <div class="sysforge-classic-grid">
@@ -89,10 +92,15 @@ export function mountClientDashboard(container, deps) {
           <div id="sysforge-classic-invoice-rail" class="sysforge-classic-invoice-rail"></div>
         </section>
         <section class="sysforge-classic-col sysforge-classic-preview" aria-label="Invoice preview">
+          <div class="sysforge-classic-col-head">
+            <h4>Invoice preview</h4>
+          </div>
           <div id="sysforge-classic-preview-body" class="sysforge-classic-preview-body"></div>
         </section>
         <section class="sysforge-classic-col sysforge-classic-projects" aria-label="Projects">
-          <h4>Projects</h4>
+          <div class="sysforge-classic-col-head">
+            <h4>Projects</h4>
+          </div>
           <div id="sysforge-classic-projects-body" class="sysforge-classic-projects-body"></div>
         </section>
         <section class="sysforge-classic-col sysforge-classic-client" aria-label="Client info">
@@ -103,9 +111,6 @@ export function mountClientDashboard(container, deps) {
           <div id="sysforge-classic-client-body" class="sysforge-classic-client-body"></div>
         </section>
       </div>
-      <p class="sysforge-classic-footer-link">
-        <button type="button" class="btn-secondary" id="sysforge-classic-all-clients">All clients</button>
-      </p>
     </div>`;
 
   const state = {
