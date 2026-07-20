@@ -1389,7 +1389,8 @@ function initializeEventListeners() {
   if (toggleSidebarOption) {
     toggleSidebarOption.addEventListener('click', () => {
       const sidebar = el('sidebar');
-      sidebar.classList.toggle('hidden');
+      if (sidebar) sidebar.classList.toggle('hidden');
+      syncRailSide();
     });
   }
 
@@ -1785,8 +1786,11 @@ function initializeEventListeners() {
   if (toolMemoryBtn && memoryModal) {
     toolMemoryBtn.addEventListener('click', () => {
       memoryModal.classList.remove('hidden');
-      if (memoryModule && memoryModule.renderMemoryList) memoryModule.renderMemoryList();
-      if (memoryModule && memoryModule.updateMemoryCount) memoryModule.updateMemoryCount();
+      if (memoryModule && memoryModule.loadMemories) memoryModule.loadMemories();
+      else {
+        if (memoryModule && memoryModule.renderMemoryList) memoryModule.renderMemoryList();
+        if (memoryModule && memoryModule.updateMemoryCount) memoryModule.updateMemoryCount();
+      }
     });
   }
 
@@ -3826,17 +3830,13 @@ function startOdysseusApp() {
     });
   }
 
-  // Rail: settings button
+  // Rail: settings button — open Settings directly (same as #user-bar-settings).
+  // Do not expand the sidebar and scroll .sidebar-inner: the user bar lives
+  // outside that scroller, so that path never revealed the gear and left
+  // rail-mode users (and /setup) without a working settings affordance.
   const _railSettings = el('rail-settings');
   if (_railSettings) {
-    _railSettings.addEventListener('click', () => {
-      const sidebar = document.getElementById('sidebar');
-      if (sidebar) sidebar.classList.remove('hidden');
-      syncRailSide();
-      // Scroll to bottom where settings typically are
-      const sidebarInner = document.querySelector('.sidebar-inner');
-      if (sidebarInner) sidebarInner.scrollTo({ top: sidebarInner.scrollHeight, behavior: 'smooth' });
-    });
+    _railSettings.addEventListener('click', () => settingsModule.open());
   }
 
   // Rail: admin button

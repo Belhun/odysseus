@@ -2,6 +2,7 @@
 // ES6 module — extracted from index.html inline scripts
 
 import Storage from './storage.js';
+import { syncRailSide } from './sidebar-layout.js';
 
 function clearFreshComposerRestore() {
   const msgInput = document.getElementById('message');
@@ -290,12 +291,13 @@ window.addEventListener('pageshow', clearFreshComposerRestore);
     if (collapsed) {
       sidebar.style.width = '';
       sidebar.classList.add('hidden');
-      if (typeof syncRailSide === 'function') syncRailSide();
+      syncRailSide();
     } else {
       const finalWidth = parseInt(sidebar.style.width, 10);
       if (finalWidth >= MIN_WIDTH) {
         Storage.set(STORAGE_KEY, String(finalWidth));
       }
+      syncRailSide();
     }
   }
 
@@ -326,14 +328,14 @@ window.addEventListener('pageshow', clearFreshComposerRestore);
       // Didn't drag far enough — snap back to icon rail
       sidebar.style.width = '';
       sidebar.classList.add('hidden');
-      if (typeof syncRailSide === 'function') syncRailSide();
+      syncRailSide();
     } else {
-      // Expanded — save width and sync
+      // Expanded — save width and sync (hides icon rail; mutually exclusive)
       const finalWidth = parseInt(sidebar.style.width, 10);
       if (finalWidth >= MIN_WIDTH) {
         Storage.set(STORAGE_KEY, String(finalWidth));
       }
-      if (typeof syncRailSide === 'function') syncRailSide();
+      syncRailSide();
     }
   }
 

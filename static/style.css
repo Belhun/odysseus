@@ -486,6 +486,12 @@ body.bg-pattern-sparkles {
       flex-shrink: 0;
       gap: 4px;
       min-height: 48px;
+      /* Stay pinned above scrolled .sidebar-inner content; solid bg so the
+         profile/settings row doesn't wash into the tools list. */
+      position: relative;
+      z-index: 2;
+      background: var(--sidebar-bg, var(--panel));
+      border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
     }
 
     .user-bar-left {
@@ -540,7 +546,7 @@ body.bg-pattern-sparkles {
       background: none;
       border: none;
       color: var(--fg);
-      opacity: 0.35;
+      opacity: 0.55;
       cursor: pointer;
       padding: 6px;
       border-radius: 6px;
@@ -693,6 +699,16 @@ body.bg-pattern-sparkles {
       /* Allow hover labels (e.g. the rail-new-chat "New" tooltip) to extend
          outside the 48px column. overflow:hidden was clipping them. */
       overflow: visible;
+    }
+    /* CSS belt-and-suspenders for rail/sidebar exclusivity. JS syncRailSide
+       sets inline display; this catches paths that flip .hidden without sync
+       (e.g. missed imports). Allow both during .resizing so the rail-edge
+       expand drag keeps its handle until mouseup. */
+    body:has(#sidebar:not(.hidden):not(.resizing)) #icon-rail:not(.mobile-mini) {
+      display: none !important;
+    }
+    #icon-rail.rail-hidden:not(.mobile-mini) {
+      display: none !important;
     }
     .rail-resize-handle {
       position: absolute;
@@ -10561,8 +10577,9 @@ details a:hover {
 .memory-modal-content {
   width: min(560px, 90vw);
   max-height: 78vh;
+  height: min(78vh, max-content); /* Definite cap so browse #memory-list can flex-scroll */
   font-size: 12px;
-  overflow: hidden;   /* clip both axes; the inner .memory-modal-body owns scrolling.
+  overflow: hidden;   /* clip both axes; tab panels / #memory-list own scrolling.
                          (overflow-x alone promotes overflow-y to `auto` → a stray vertical scrollbar) */
   /* Subtle synapse-pulse — a soft radial glow that breathes in/out.
      Layered over the existing modal bg so it shows through without
@@ -10586,7 +10603,7 @@ details a:hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow-y: auto;
+  overflow: hidden;          /* Tab panels / #memory-list own scrolling — not this wrapper */
   overflow-x: hidden;        /* Stop synapse-pulse pseudo-elements from triggering a sideways scrollbar */
   overscroll-behavior: contain;
   min-height: 0;
@@ -10687,6 +10704,10 @@ details a:hover {
 }
 #memory-modal .memory-tab-panel[data-memory-panel="browse"] > .admin-card > *:not(#memory-list):not(#memory-suggestions-body) {
   flex: 0 0 auto;
+}
+#memory-modal .memory-tab-panel[data-memory-panel="browse"] .memory-toolbar,
+#memory-modal .memory-tab-panel[data-memory-panel="browse"] #memory-bulk-bar {
+  flex-shrink: 0;
 }
 #memory-modal .memory-tab-panel[data-memory-panel="browse"] #memory-list:not(.hidden),
 #memory-modal .memory-tab-panel[data-memory-panel="browse"] #memory-suggestions-body:not(.hidden) {
@@ -11698,6 +11719,17 @@ textarea.memory-add-input {
   background: color-mix(in srgb, var(--red) 15%, transparent);
   border-color: color-mix(in srgb, var(--red) 40%, transparent);
   color: var(--red);
+}
+
+#memory-modal .memory-cat-chip {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#memory-modal .memory-category-filters {
+  flex-shrink: 0;
 }
 
 @media (max-width: 768px) {
