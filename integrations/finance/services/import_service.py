@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from integrations.finance.models import (
@@ -186,7 +187,14 @@ def commit_import_preview(
             bank_category=row.get("bank_category"),
             status="cleared",
         )
-        db.add(tx)
+        nested = db.begin_nested()
+        try:
+            db.add(tx)
+            db.flush()
+        except IntegrityError:
+            nested.rollback()
+            duplicate_count += 1
+            continue
         imported.append(tx)
         existing.add(dedup_hash)
         if fitid:

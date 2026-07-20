@@ -360,8 +360,9 @@ class ToolIndex:
             {"list_email_accounts", "list_emails", "read_local_emails", "sync_local_emails", "read_email", "send_email", "reply_to_email", "bulk_email", "delete_email", "archive_email", "mark_email_read", "resolve_contact", "ui_control"},
         frozenset({"calendar", "event", "meeting", "schedule", "appointment"}):
             {"manage_calendar"},
-        frozenset({"finance", "budget", "budgets", "spending", "transaction", "transactions",
-                   "bank", "banking", "expense", "expenses", "overspend", "checking", "savings"}):
+        frozenset({"finance", "financial", "financ", "transaction", "transactions",
+                   "budget", "budgets", "spending", "bank", "banking", "expense",
+                   "expenses", "wells fargo", "categor", "catagor", "recategor"}):
             {"manage_finance", "ui_control"},
         # Business Management (SysForge plugin)
         frozenset({"sysforge", "business", "shop", "business management", "invoice", "invoices",

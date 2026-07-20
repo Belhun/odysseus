@@ -2,35 +2,46 @@
 
 from __future__ import annotations
 
-import logging
-import uuid
-from datetime import date, datetime
+import asyncio
+import csv
+import io
+from datetime import date
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from integrations.finance.database import get_session_factory
 from integrations.finance.models import (
-    FinanceAccount,
     FinanceCategory,
-    FinanceCategoryBudget,
-    FinanceCategorizationRule,
     FinanceImportBatch,
     FinanceTransaction,
 )
+from integrations.finance.services.accounts import (
+    account_dict,
+    create_account_for_owner,
+    delete_account_for_owner,
+    list_accounts_for_owner,
+    patch_account_for_owner,
+)
+from integrations.finance.services.budgets import upsert_budget_for_owner
 from integrations.finance.services.categories import (
     create_category_for_owner,
+    create_rule_for_owner,
+    delete_rule_for_owner,
     ensure_default_categories,
     format_category_path,
+    list_rules_for_owner,
     ordered_category_list,
 )
 from integrations.finance.services.import_service import (
-    account_balance_cents,
     build_import_preview,
     commit_import_preview,
 )
-from integrations.finance.services.reports import month_key, monthly_trends, spending_by_category
+from integrations.finance.services.recurring import list_recurring_series, patch_recurring_series
+from integrations.finance.services.reports import month_key, monthly_trends, net_worth, spending_by_category
+from integrations.finance.services.transactions import apply_transaction_filters, set_transaction_splits
 from src.auth_helpers import require_user
 from src.plugins.registry import is_plugin_active
 from src.upload_limits import FINANCE_IMPORT_MAX_BYTES, read_upload_limited
@@ -39,8 +50,6 @@ from src.upload_limits import FINANCE_IMPORT_MAX_BYTES, read_upload_limited
 def _require_finance_plugin(_request: Request) -> None:
     if not is_plugin_active("finance"):
         raise HTTPException(404, "Finance plugin is not installed")
-
-ACCOUNT_TYPES = ("checking", "savings", "credit_card", "loan", "cash", "other")
 
 
 class AccountCreate(BaseModel):
@@ -76,7 +85,7 @@ class CategoryCreate(BaseModel):
 class RuleCreate(BaseModel):
     pattern: str = Field(min_length=1, max_length=200)
     category_id: str
-    priority: int = 0
+    priority: int = 100
 
 
 class BudgetSet(BaseModel):
@@ -97,10 +106,18 @@ class ImportCommitBody(BaseModel):
     skip_duplicates: bool = True
 
 
-def _parse_optional_date(raw: Optional[str]) -> Optional[date]:
-    if not raw:
-        return None
-    return datetime.strptime(raw[:10], "%Y-%m-%d").date()
+class SplitEntry(BaseModel):
+    category_id: Optional[str] = None
+    amount_cents: int
+    memo: str = ""
+
+
+class SplitsBody(BaseModel):
+    splits: list[SplitEntry]
+
+
+class RecurringPatch(BaseModel):
+    status: str
 
 
 def _require_owned_category(db, user: str, category_id: str | None) -> None:
@@ -112,25 +129,6 @@ def _require_owned_category(db, user: str, category_id: str | None) -> None:
     ).first()
     if not cat:
         raise HTTPException(404, "Category not found")
-
-
-def _account_dict(db, account: FinanceAccount) -> dict[str, Any]:
-    balance = account_balance_cents(db, account)
-    return {
-        "id": account.id,
-        "name": account.name,
-        "institution": account.institution or "",
-        "account_type": account.account_type,
-        "currency": account.currency,
-        "mask_last4": account.mask_last4,
-        "opening_balance_cents": account.opening_balance_cents or 0,
-        "opening_balance_date": account.opening_balance_date.isoformat() if account.opening_balance_date else None,
-        "credit_limit_cents": account.credit_limit_cents,
-        "is_closed": bool(account.is_closed),
-        "display_order": account.display_order or 0,
-        "balance_cents": balance,
-        "created_at": account.created_at.isoformat() if account.created_at else None,
-    }
 
 
 def _transaction_dict(tx: FinanceTransaction, category_name: str | None = None) -> dict[str, Any]:
@@ -167,36 +165,32 @@ def setup_finance_routes() -> APIRouter:
         db = get_session_factory()()
         try:
             ensure_default_categories(db, user)
-            q = db.query(FinanceAccount).filter(FinanceAccount.owner == user)
-            if not include_closed:
-                q = q.filter(FinanceAccount.is_closed == False)  # noqa: E712
-            accounts = q.order_by(FinanceAccount.display_order, FinanceAccount.name).all()
-            return {"accounts": [_account_dict(db, a) for a in accounts]}
+            accounts = list_accounts_for_owner(db, user, include_closed=include_closed)
+            return {"accounts": [account_dict(db, a) for a in accounts]}
         finally:
             db.close()
 
     @router.post("/accounts")
     def create_account(request: Request, body: AccountCreate):
         user = require_user(request)
-        if body.account_type not in ACCOUNT_TYPES:
-            raise HTTPException(400, f"account_type must be one of: {', '.join(ACCOUNT_TYPES)}")
         db = get_session_factory()()
         try:
-            account = FinanceAccount(
-                id=str(uuid.uuid4()),
-                owner=user,
-                name=body.name.strip(),
-                institution=(body.institution or "").strip(),
-                account_type=body.account_type,
-                currency=body.currency or "USD",
-                mask_last4=body.mask_last4,
-                opening_balance_cents=body.opening_balance_cents,
-                opening_balance_date=_parse_optional_date(body.opening_balance_date),
-                credit_limit_cents=body.credit_limit_cents,
-            )
-            db.add(account)
-            db.commit()
-            return _account_dict(db, account)
+            try:
+                account = create_account_for_owner(
+                    db,
+                    user,
+                    name=body.name,
+                    institution=body.institution,
+                    account_type=body.account_type,
+                    currency=body.currency,
+                    mask_last4=body.mask_last4,
+                    opening_balance_cents=body.opening_balance_cents,
+                    opening_balance_date=body.opening_balance_date,
+                    credit_limit_cents=body.credit_limit_cents,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            return account_dict(db, account)
         finally:
             db.close()
 
@@ -205,23 +199,24 @@ def setup_finance_routes() -> APIRouter:
         user = require_user(request)
         db = get_session_factory()()
         try:
-            account = db.query(FinanceAccount).filter(
-                FinanceAccount.id == account_id, FinanceAccount.owner == user
-            ).first()
-            if not account:
-                raise HTTPException(404, "Account not found")
-            for field in ("name", "institution", "account_type", "mask_last4", "is_closed", "display_order"):
-                val = getattr(body, field)
-                if val is not None:
-                    setattr(account, field, val)
-            if body.opening_balance_cents is not None:
-                account.opening_balance_cents = body.opening_balance_cents
-            if body.opening_balance_date is not None:
-                account.opening_balance_date = _parse_optional_date(body.opening_balance_date)
-            if body.credit_limit_cents is not None:
-                account.credit_limit_cents = body.credit_limit_cents
-            db.commit()
-            return _account_dict(db, account)
+            try:
+                account = patch_account_for_owner(
+                    db,
+                    user,
+                    account_id,
+                    name=body.name,
+                    institution=body.institution,
+                    account_type=body.account_type,
+                    mask_last4=body.mask_last4,
+                    opening_balance_cents=body.opening_balance_cents,
+                    opening_balance_date=body.opening_balance_date,
+                    credit_limit_cents=body.credit_limit_cents,
+                    is_closed=body.is_closed,
+                    display_order=body.display_order,
+                )
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            return account_dict(db, account)
         finally:
             db.close()
 
@@ -230,18 +225,11 @@ def setup_finance_routes() -> APIRouter:
         user = require_user(request)
         db = get_session_factory()()
         try:
-            account = db.query(FinanceAccount).filter(
-                FinanceAccount.id == account_id, FinanceAccount.owner == user
-            ).first()
-            if not account:
-                raise HTTPException(404, "Account not found")
-            tx_count = db.query(FinanceTransaction).filter(
-                FinanceTransaction.account_id == account_id
-            ).count()
-            if tx_count:
-                raise HTTPException(400, f"Account has {tx_count} transactions; delete batches first or close account")
-            db.delete(account)
-            db.commit()
+            try:
+                delete_account_for_owner(db, user, account_id)
+            except ValueError as exc:
+                code = 400 if "transactions" in str(exc) else 404
+                raise HTTPException(code, str(exc)) from exc
             return {"ok": True}
         finally:
             db.close()
@@ -252,11 +240,7 @@ def setup_finance_routes() -> APIRouter:
         db = get_session_factory()()
         try:
             ensure_default_categories(db, user)
-            cats = (
-                db.query(FinanceCategory)
-                .filter(FinanceCategory.owner == user)
-                .all()
-            )
+            cats = db.query(FinanceCategory).filter(FinanceCategory.owner == user).all()
             cats_by_id = {c.id: c for c in cats}
             return {
                 "categories": [
@@ -300,12 +284,7 @@ def setup_finance_routes() -> APIRouter:
         user = require_user(request)
         db = get_session_factory()()
         try:
-            rules = (
-                db.query(FinanceCategorizationRule)
-                .filter(FinanceCategorizationRule.owner == user)
-                .order_by(FinanceCategorizationRule.priority.desc())
-                .all()
-            )
+            rules = list_rules_for_owner(db, user)
             return {
                 "rules": [
                     {
@@ -326,15 +305,16 @@ def setup_finance_routes() -> APIRouter:
         db = get_session_factory()()
         try:
             _require_owned_category(db, user, body.category_id)
-            rule = FinanceCategorizationRule(
-                id=str(uuid.uuid4()),
-                owner=user,
-                pattern=body.pattern.strip(),
-                category_id=body.category_id,
-                priority=body.priority,
-            )
-            db.add(rule)
-            db.commit()
+            try:
+                rule = create_rule_for_owner(
+                    db,
+                    user,
+                    pattern=body.pattern,
+                    category_id=body.category_id,
+                    priority=body.priority,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
             return {"id": rule.id}
         finally:
             db.close()
@@ -344,14 +324,10 @@ def setup_finance_routes() -> APIRouter:
         user = require_user(request)
         db = get_session_factory()()
         try:
-            rule = db.query(FinanceCategorizationRule).filter(
-                FinanceCategorizationRule.id == rule_id,
-                FinanceCategorizationRule.owner == user,
-            ).first()
-            if not rule:
-                raise HTTPException(404, "Rule not found")
-            db.delete(rule)
-            db.commit()
+            try:
+                delete_rule_for_owner(db, user, rule_id)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
             return {"ok": True}
         finally:
             db.close()
@@ -363,27 +339,37 @@ def setup_finance_routes() -> APIRouter:
         search: str = "",
         category_id: Optional[str] = None,
         month: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        min_amount_cents: Optional[int] = None,
+        max_amount_cents: Optional[int] = None,
+        uncategorized: bool = False,
         limit: int = Query(100, ge=1, le=500),
         offset: int = Query(0, ge=0),
     ):
         user = require_user(request)
         db = get_session_factory()()
         try:
-            q = db.query(FinanceTransaction).filter(FinanceTransaction.owner == user)
-            if account_id:
-                account_ref = str(account_id).strip()
-                q = q.filter(FinanceTransaction.account_id.startswith(account_ref))
-            if category_id:
-                q = q.filter(FinanceTransaction.category_id == category_id)
-            if month:
-                from integrations.finance.services.reports import month_bounds
-                start, end = month_bounds(month)
-                q = q.filter(FinanceTransaction.date >= start, FinanceTransaction.date <= end)
-            if search.strip():
-                like = f"%{search.strip()}%"
-                q = q.filter(FinanceTransaction.payee.ilike(like))
+            q = apply_transaction_filters(
+                db.query(FinanceTransaction),
+                owner=user,
+                account_id=account_id,
+                category_id=category_id,
+                month=month,
+                search=search,
+                start_date=start_date,
+                end_date=end_date,
+                min_amount_cents=min_amount_cents,
+                max_amount_cents=max_amount_cents,
+                uncategorized=uncategorized,
+            )
             total = q.count()
-            txs = q.order_by(FinanceTransaction.date.desc(), FinanceTransaction.created_at.desc()).offset(offset).limit(limit).all()
+            txs = (
+                q.order_by(FinanceTransaction.date.desc(), FinanceTransaction.created_at.desc())
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
             cats = db.query(FinanceCategory).filter(FinanceCategory.owner == user).all()
             cats_by_id = {c.id: c for c in cats}
             cat_map = {c.id: format_category_path(c, cats_by_id) for c in cats}
@@ -391,6 +377,74 @@ def setup_finance_routes() -> APIRouter:
                 "total": total,
                 "transactions": [_transaction_dict(tx, cat_map.get(tx.category_id)) for tx in txs],
             }
+        finally:
+            db.close()
+
+    @router.get("/transactions/export.csv")
+    def export_transactions_csv(
+        request: Request,
+        account_id: Optional[str] = None,
+        search: str = "",
+        category_id: Optional[str] = None,
+        month: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        min_amount_cents: Optional[int] = None,
+        max_amount_cents: Optional[int] = None,
+        uncategorized: bool = False,
+    ):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            q = apply_transaction_filters(
+                db.query(FinanceTransaction),
+                owner=user,
+                account_id=account_id,
+                category_id=category_id,
+                month=month,
+                search=search,
+                start_date=start_date,
+                end_date=end_date,
+                min_amount_cents=min_amount_cents,
+                max_amount_cents=max_amount_cents,
+                uncategorized=uncategorized,
+            )
+            txs = (
+                q.order_by(FinanceTransaction.date.desc(), FinanceTransaction.created_at.desc())
+                .limit(50_000)
+                .all()
+            )
+            cats = db.query(FinanceCategory).filter(FinanceCategory.owner == user).all()
+            cats_by_id = {c.id: c for c in cats}
+            cat_map = {c.id: format_category_path(c, cats_by_id) for c in cats}
+
+            def _generate():
+                buf = io.StringIO()
+                writer = csv.writer(buf)
+                writer.writerow(["date", "payee", "amount", "category", "memo", "account_id", "id"])
+                yield buf.getvalue()
+                buf.seek(0)
+                buf.truncate(0)
+                for tx in txs:
+                    dollars = f"{tx.amount_cents / 100:.2f}"
+                    writer.writerow([
+                        tx.date.isoformat() if tx.date else "",
+                        tx.payee or "",
+                        dollars,
+                        cat_map.get(tx.category_id) or "Uncategorized",
+                        tx.memo or "",
+                        tx.account_id,
+                        tx.id,
+                    ])
+                    yield buf.getvalue()
+                    buf.seek(0)
+                    buf.truncate(0)
+
+            return StreamingResponse(
+                _generate(),
+                media_type="text/csv",
+                headers={"Content-Disposition": "attachment; filename=transactions.csv"},
+            )
         finally:
             db.close()
 
@@ -419,6 +473,37 @@ def setup_finance_routes() -> APIRouter:
         finally:
             db.close()
 
+    @router.put("/transactions/{tx_id}/splits")
+    def put_transaction_splits(request: Request, tx_id: str, body: SplitsBody):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            for entry in body.splits:
+                if entry.category_id:
+                    _require_owned_category(db, user, entry.category_id)
+            try:
+                splits = set_transaction_splits(
+                    db,
+                    user,
+                    tx_id,
+                    [s.model_dump() for s in body.splits],
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            return {
+                "splits": [
+                    {
+                        "id": s.id,
+                        "category_id": s.category_id,
+                        "amount_cents": s.amount_cents,
+                        "memo": s.memo,
+                    }
+                    for s in splits
+                ]
+            }
+        finally:
+            db.close()
+
     @router.post("/import/preview")
     async def import_preview(
         request: Request,
@@ -428,21 +513,25 @@ def setup_finance_routes() -> APIRouter:
     ):
         user = require_user(request)
         content = await read_upload_limited(file, FINANCE_IMPORT_MAX_BYTES, "Finance import")
-        db = get_session_factory()()
+
+        def _run_preview():
+            db = get_session_factory()()
+            try:
+                return build_import_preview(
+                    db,
+                    user,
+                    account_id,
+                    file.filename or "import.csv",
+                    content,
+                    preset=preset or None,
+                )
+            finally:
+                db.close()
+
         try:
-            result = build_import_preview(
-                db,
-                user,
-                account_id,
-                file.filename or "import.csv",
-                content,
-                preset=preset or None,
-            )
-            return result
+            return await asyncio.to_thread(_run_preview)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        finally:
-            db.close()
 
     @router.post("/import/commit")
     def import_commit(request: Request, body: ImportCommitBody):
@@ -523,22 +612,13 @@ def setup_finance_routes() -> APIRouter:
         db = get_session_factory()()
         try:
             _require_owned_category(db, user, body.category_id)
-            existing = db.query(FinanceCategoryBudget).filter(
-                FinanceCategoryBudget.owner == user,
-                FinanceCategoryBudget.month == body.month,
-                FinanceCategoryBudget.category_id == body.category_id,
-            ).first()
-            if existing:
-                existing.limit_cents = body.limit_cents
-            else:
-                db.add(FinanceCategoryBudget(
-                    id=str(uuid.uuid4()),
-                    owner=user,
-                    category_id=body.category_id,
-                    month=body.month,
-                    limit_cents=body.limit_cents,
-                ))
-            db.commit()
+            upsert_budget_for_owner(
+                db,
+                user,
+                category_id=body.category_id,
+                month=body.month,
+                limit_cents=body.limit_cents,
+            )
             return {"ok": True}
         finally:
             db.close()
@@ -559,6 +639,37 @@ def setup_finance_routes() -> APIRouter:
         db = get_session_factory()()
         try:
             return {"trends": monthly_trends(db, user, months)}
+        finally:
+            db.close()
+
+    @router.get("/reports/net-worth")
+    def report_net_worth(request: Request):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            return net_worth(db, user)
+        finally:
+            db.close()
+
+    @router.get("/recurring")
+    def list_recurring(request: Request):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            return {"series": list_recurring_series(db, user)}
+        finally:
+            db.close()
+
+    @router.patch("/recurring/{series_id}")
+    def patch_recurring(request: Request, series_id: str, body: RecurringPatch):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                row = patch_recurring_series(db, user, series_id, status=body.status)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            return {"id": row.id, "status": row.status}
         finally:
             db.close()
 

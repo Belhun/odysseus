@@ -7,8 +7,9 @@ import pytest
 from integrations.finance.services.parsers import (
     detect_csv_format,
     parse_navy_federal_csv,
-    parse_wells_fargo_csv,
+    parse_ofx_qfx,
     parse_upload,
+    parse_wells_fargo_csv,
 )
 from tests.fixtures.finance.synthetic_samples import NAVY_FEDERAL_SAMPLE, WELLS_FARGO_SAMPLE
 
@@ -56,6 +57,17 @@ bad-date,10.00,BROKEN
     assert len(result.errors) == 1
     assert result.errors[0].row == 2
 
+
+@pytest.mark.area_routes
+def test_parse_upload_empty_file_raises():
+    with pytest.raises(ValueError, match="empty"):
+        parse_upload("data.csv", b"")
+
+
+@pytest.mark.area_routes
+def test_parse_ofx_garbage_raises_value_error():
+    with pytest.raises(ValueError, match="OFX"):
+        parse_ofx_qfx(b"<not>valid</not>")
 
 @pytest.mark.area_routes
 @pytest.mark.skipif(not (PRIVATE_DIR / "wells_fargo_Checking_e719.csv").exists(), reason="private fixture missing")

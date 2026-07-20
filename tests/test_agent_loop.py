@@ -74,6 +74,67 @@ def test_polish_internet_search_request_classifies_as_web():
     assert "web" in intent["domains"]
 
 
+def test_transaction_categorization_request_classifies_as_finance():
+    # Regression: this exact phrasing was classified low_signal with no
+    # domains, so manage_finance never reached the model and it claimed
+    # there was no banking integration.
+    intent = _classify_agent_request(
+        [],
+        "ok can you take my last 20 transaction under my wells fargo account "
+        "and propose catagorys for them",
+    )
+
+    assert intent["low_signal"] is False
+    assert "finance" in intent["domains"]
+
+
+def test_finance_domain_maps_to_manage_finance_tool():
+    from src.agent_loop import _DOMAIN_TOOL_MAP, _DOMAIN_RULES
+
+    assert "manage_finance" in _DOMAIN_TOOL_MAP["finance"]
+    assert "finance" in _DOMAIN_RULES
+
+
+def test_spending_question_classifies_as_finance():
+    intent = _classify_agent_request([], "how much did I spend on groceries last month")
+
+    assert intent["low_signal"] is False
+    assert "finance" in intent["domains"]
+
+
+def test_typo_finance_categorization_classifies_as_finance():
+    intent = _classify_agent_request(
+        [],
+        "can you catagrize my Finanace's  do the last 20",
+    )
+
+    assert intent["low_signal"] is False
+    assert "finance" in intent["domains"]
+
+
+def test_finance_categorize_followup_inherits_finance_tools():
+    messages = [
+        {"role": "user", "content": "categorize my wells fargo transactions"},
+        {"role": "assistant", "content": "I don't have manage_finance in this session."},
+        {"role": "user", "content": "can you now catrize things"},
+    ]
+    intent = _classify_agent_request(messages, "can you now catrize things")
+
+    assert intent["continuation"] is True
+    assert "finance" in intent["domains"]
+
+
+def test_finance_retry_after_fix_classifies_as_finance():
+    messages = [
+        {"role": "user", "content": "categorize my last 20 wells fargo transactions"},
+        {"role": "assistant", "content": "I don't have access to finance tools."},
+        {"role": "user", "content": "try again, i think i fixed the issue"},
+    ]
+    intent = _classify_agent_request(messages, "try again, i think i fixed the issue")
+
+    assert "finance" in intent["domains"]
+
+
 def test_insert_before_latest_user_places_context_before_last_user_turn():
     messages = [
         {"role": "user", "content": "first"},

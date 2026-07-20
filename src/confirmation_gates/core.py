@@ -245,6 +245,17 @@ def approve_pending_choice(
     )
 
 
+def auto_approve_finance_enabled(owner: Optional[str]) -> bool:
+    """True when the user opted out of per-action finance confirmation prompts."""
+    if not owner:
+        return False
+    try:
+        from routes.prefs_routes import _load_for_user as _load_prefs
+        return bool((_load_prefs(owner) or {}).get("auto_approve_finance", False))
+    except Exception:
+        return False
+
+
 def require_confirmed_action(
     *,
     session_id: Optional[str],
@@ -258,6 +269,9 @@ def require_confirmed_action(
     """Return an error string if the action is not confirmed; None if allowed."""
     gate = get_tool_gate(domain, tool_name)
     if not gate or action not in gate.actions:
+        return None
+
+    if domain.strip().lower() == "finance" and auto_approve_finance_enabled(owner):
         return None
 
     token = (confirmation_token or "").strip()

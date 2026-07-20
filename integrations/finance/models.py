@@ -80,7 +80,7 @@ class FinanceImportPreview(TimestampMixin, FinanceBase):
 class FinanceTransaction(TimestampMixin, FinanceBase):
     __tablename__ = "finance_transactions"
     __table_args__ = (
-        Index("ix_finance_tx_account_dedup", "account_id", "dedup_hash"),
+        Index("ix_finance_tx_account_dedup", "account_id", "dedup_hash", unique=True),
         Index("ix_finance_tx_owner_date", "owner", "date"),
     )
 
@@ -109,7 +109,7 @@ class FinanceCategorizationRule(TimestampMixin, FinanceBase):
     owner = Column(String, nullable=False, index=True)
     pattern = Column(String, nullable=False)
     category_id = Column(String, ForeignKey("finance_categories.id"), nullable=False)
-    priority = Column(Integer, default=0)
+    priority = Column(Integer, default=100)
 
 
 class FinanceCategoryBudget(TimestampMixin, FinanceBase):
@@ -123,3 +123,36 @@ class FinanceCategoryBudget(TimestampMixin, FinanceBase):
     category_id = Column(String, ForeignKey("finance_categories.id"), nullable=False)
     month = Column(String, nullable=False)
     limit_cents = Column(Integer, nullable=False, default=0)
+
+
+class FinanceRecurringSeries(TimestampMixin, FinanceBase):
+    __tablename__ = "finance_recurring_series"
+    __table_args__ = (
+        Index(
+            "ix_finance_recurring_owner_payee",
+            "owner",
+            "normalized_payee",
+            unique=True,
+        ),
+    )
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    normalized_payee = Column(String, nullable=False)
+    display_payee = Column(String, default="")
+    cadence = Column(String, nullable=False)
+    interval_days = Column(Integer, nullable=False)
+    median_amount_cents = Column(Integer, nullable=False)
+    next_due_date = Column(Date, nullable=True)
+    status = Column(String, default="active")
+
+
+class FinanceTransactionSplit(TimestampMixin, FinanceBase):
+    __tablename__ = "finance_transaction_splits"
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    transaction_id = Column(String, ForeignKey("finance_transactions.id"), nullable=False, index=True)
+    category_id = Column(String, ForeignKey("finance_categories.id"), nullable=True)
+    amount_cents = Column(Integer, nullable=False)
+    memo = Column(String, default="")
