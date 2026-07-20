@@ -4,7 +4,7 @@
 
 import { IS_MAC, isAltGrEvent } from './platform.js';
 
-const _defaultKeybinds = {
+export const _defaultKeybinds = {
   search: 'ctrl+k', toggle_sidebar: 'ctrl+alt+b', new_session: 'ctrl+alt+n',
   fav_session: 'ctrl+alt+f', delete_session: 'ctrl+alt+d',
   cancel: 'escape', tts: 'alt+shift+t',
@@ -12,7 +12,9 @@ const _defaultKeybinds = {
   // Open-tool shortcuts (Calendar bound by default; rest unbound).
   open_calendar: 'ctrl+alt+c', open_compare: '', open_cookbook: '',
   open_research: '', open_gallery: '', open_library: '', open_memory: '',
-  open_notes: '', open_tasks: '', open_theme: '',
+  open_notes: '', open_tasks: '', open_theme: '', open_sysforge: '',
+  // In-Business actions (host registry; unbound; no-op when plugin inactive).
+  sysforge_home: '', sysforge_clients: '', sysforge_calculator: '',
 };
 
 export function _matchesCombo(e, combo, isMac = IS_MAC) {
@@ -273,12 +275,29 @@ export function initKeyboardShortcuts(modules) {
       open_notes:    'tool-notes-btn',
       open_tasks:    'tool-tasks-btn',
       open_theme:    'tool-theme-btn',
+      open_sysforge: 'tool-sysforge-btn',
     };
     for (const action in _toolBtns) {
       if (_matchesCombo(e, kb[action])) {
         e.preventDefault();
         const b = el(_toolBtns[action]);
         if (b) b.click();
+        return;
+      }
+    }
+    // In-Business shortcuts — host keybinds only; plugin opens + navigates.
+    const _sysforgeActions = ['sysforge_home', 'sysforge_clients', 'sysforge_calculator'];
+    for (const action of _sysforgeActions) {
+      if (_matchesCombo(e, kb[action])) {
+        e.preventDefault();
+        if (window._pluginFeaturesOff?.has('sysforge')) return;
+        import('/static/plugins/sysforge/js/index.js')
+          .then((mod) => {
+            if (typeof mod.runSysforgeShortcut === 'function') {
+              return mod.runSysforgeShortcut(action);
+            }
+          })
+          .catch(() => {});
         return;
       }
     }

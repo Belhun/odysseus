@@ -1,0 +1,315 @@
+[
+  {
+    "id": "schema-money-utc-foundation",
+    "title": "Checksummed migrations + money/UTC helpers",
+    "phase": "P0",
+    "priority": "critical",
+    "domain": "other",
+    "summary": "Desktop boots with MigrationRunner and migrations 0002–0015 (core shop), integer cents, and UTC helpers. Odysseus install only touches an empty sysforge.db with no schema, no money helpers, and no checksum policy. Port append-only migrations, SchemaVersion, Money/UTC round-trip helpers, and async DB APIs from day one.",
+    "source_refs": [
+      "MASTER §5 Phase 0",
+      "feature-gap-matrix §8 Data infrastructure",
+      "chat 693ac8c9",
+      "chat 0aea6b1e",
+      "Sysforge research/04-data-model-migration.md"
+    ],
+    "depends_on": []
+  },
+  {
+    "id": "business-shell-dashboard-router",
+    "title": "Business dashboard shell + inner router",
+    "phase": "P0",
+    "priority": "critical",
+    "domain": "shell",
+    "summary": "Desktop opens a full sidebar, dashboard cards, view cache, and back stack. Odysseus opens a gated stub modal with status copy only. Replace the stub with a Business dashboard (Calculator / Clients / Drafts / Parts cards) and router.js multi-view navigation while keeping the feature-flag install gate.",
+    "source_refs": [
+      "MASTER §5 Phase 0",
+      "feature-gap-matrix §1 Plugin platform & shell",
+      "Sysforge research/features/shell-navigation-dashboard.md",
+      "Sysforge research/06-frontend-routing.md"
+    ],
+    "depends_on": ["schema-money-utc-foundation"]
+  },
+  {
+    "id": "clients-crud-fts-duplicates",
+    "title": "Clients CRUD, FTS5 search, duplicate warnings",
+    "phase": "P1",
+    "priority": "critical",
+    "domain": "clients",
+    "summary": "Desktop has full client CRUD, Lucene typeahead, and non-blocking DB-12 duplicate warnings (Use existing / Create anyway). Odysseus has no clients API or UI. Port CRUD + FTS5 typeahead (matches before Add New, debounce/abort) and soft duplicate warnings; defer merge tool.",
+    "source_refs": [
+      "MASTER §5 Phase 1",
+      "feature-gap-matrix §2 Clients",
+      "chat 55127af8",
+      "chat 61c9c30b",
+      "Sysforge research/features/clients-management.md",
+      "Sysforge research/features/client-search-lucene.md"
+    ],
+    "depends_on": ["schema-money-utc-foundation", "business-shell-dashboard-router"]
+  },
+  {
+    "id": "parts-placeholders-merge",
+    "title": "Parts catalog + placeholder create/merge",
+    "phase": "P1",
+    "priority": "high",
+    "domain": "parts",
+    "summary": "Desktop supports parts CRUD, SQL LIKE search, placeholder creation on save, and irreversible placeholder merge with confirm. Odysseus has none of this. Port parts API/UI, placeholder create on invoice save, and merge UI with confirm; keep Lucene parts and supplier detail UX for later.",
+    "source_refs": [
+      "MASTER §5 Phase 1",
+      "feature-gap-matrix §5 Parts, suppliers, placeholders",
+      "chat 21e672a5",
+      "chat 8eceb374",
+      "Sysforge research/features/parts-catalog.md",
+      "Sysforge research/features/placeholder-parts-merge.md"
+    ],
+    "depends_on": ["schema-money-utc-foundation", "business-shell-dashboard-router"]
+  },
+  {
+    "id": "drafts-service-autosave",
+    "title": "File drafts service, list UI, calculator autosave",
+    "phase": "P1",
+    "priority": "high",
+    "domain": "drafts",
+    "summary": "Desktop uses JSON file drafts with triple-buffer autosave, drafts list, and name dialog. Odysseus only mkdirs drafts/. Port file-based DraftService (debounce, concurrency lock, atomic write, leave-page flush), list + name UI, and calculator autosave integration. Keep DRAFT-08 retention default off and unwired until the safe-retention workstream.",
+    "source_refs": [
+      "MASTER §5 Phase 1",
+      "feature-gap-matrix §4 Drafts",
+      "chat 693ac8c9",
+      "chat bfe03bf6",
+      "Sysforge research/features/draft-management.md"
+    ],
+    "depends_on": ["schema-money-utc-foundation", "business-shell-dashboard-router"]
+  },
+  {
+    "id": "invoice-calculator-save-contracts",
+    "title": "Invoice calculator create/edit + save contracts",
+    "phase": "P1",
+    "priority": "critical",
+    "domain": "invoices",
+    "summary": "Desktop keyboard-first calculator supports create/edit, name prompt, same-id edit (preserve status/finalized/sent_at), save-as-new clone, placeholder orphan cleanup after re-insert, create ≥1 line / edit may be empty, busy flags, and enum/JSON money helpers. Odysseus has no calculator. Port the full MVP calculator loop with those contracts; viewer return nav is a follow-on.",
+    "source_refs": [
+      "MASTER §5 Phase 1",
+      "MASTER §6 UX contracts",
+      "feature-gap-matrix §3 Invoices",
+      "chat 21e672a5",
+      "chat 21972123",
+      "chat f4de4b62",
+      "chat 8eceb374",
+      "Sysforge research/features/invoice-calculator.md"
+    ],
+    "depends_on": [
+      "clients-crud-fts-duplicates",
+      "parts-placeholders-merge",
+      "drafts-service-autosave"
+    ]
+  },
+  {
+    "id": "business-settings-mvp",
+    "title": "Business settings UI (tax/currency/autosave)",
+    "phase": "P1",
+    "priority": "high",
+    "domain": "settings",
+    "summary": "Desktop has a Settings window for tax, shipping, drafts, and backup. Odysseus writes a minimal config.json on install with no UI. Add in-app Business settings for tax_rate_bps, currency, and autosave so daily use does not require editing JSON on disk.",
+    "source_refs": [
+      "MASTER §5 Phase 1",
+      "feature-gap-matrix §1 Settings window",
+      "future-plans-roadmap §3 Phase 1",
+      "Sysforge research/features/settings-backup.md"
+    ],
+    "depends_on": ["business-shell-dashboard-router"]
+  },
+  {
+    "id": "nav-lifecycle-view-edit-routes",
+    "title": "Nav lifecycle + View/Edit route contracts",
+    "phase": "P1",
+    "priority": "critical",
+    "domain": "ux",
+    "summary": "Desktop requires single-writer / detach-on-reference-change for active panel (duplicate CurrentView assign killed CardClicked), and View/Edit must navigate visibly (not only fill calculator state). Port these as shell router contracts: dashboard cards stay live after cache re-select; View opens read-only route; Edit loads and navigates to calculator.",
+    "source_refs": [
+      "MASTER §4 Must not lose",
+      "MASTER §6 UX contracts",
+      "chat 014ea2dd",
+      "chat 61c9c30b",
+      "chat 97aa3734",
+      "chat 21972123"
+    ],
+    "depends_on": ["business-shell-dashboard-router", "invoice-calculator-save-contracts"]
+  },
+  {
+    "id": "classic-client-dashboard",
+    "title": "Classic four-column Client Dashboard",
+    "phase": "P2",
+    "priority": "high",
+    "domain": "clients",
+    "summary": "Desktop production default is Classic four-column: invoice rail | preview | projects | client edit, with compact search overlay (empty → recent 6, clear ≠ deselect, no auto-open when query == selected name, keyboard nav), inline Address/Notes. Odysseus has no client workspace. Port Classic only (retire Onboard/Preview+/etc.); session recent-6 OK; persistent MRU optional later.",
+    "source_refs": [
+      "MASTER §5 Phase 2",
+      "feature-gap-matrix §2 Client dashboard",
+      "chat e24feae4",
+      "chat 6bba6919",
+      "chat 920df407",
+      "Sysforge research/features/client-dashboard.md"
+    ],
+    "depends_on": [
+      "clients-crud-fts-duplicates",
+      "invoice-calculator-save-contracts",
+      "nav-lifecycle-view-edit-routes"
+    ]
+  },
+  {
+    "id": "invoice-viewer-return-context",
+    "title": "Invoice viewer + save-as-new return context",
+    "phase": "P2",
+    "priority": "high",
+    "domain": "invoices",
+    "summary": "Desktop save-as-new goes name dialog → new id → viewer → Back to Client Dashboard with client selected and list refresh; viewer Edit returns to calculator with captured origin. Odysseus has no viewer or back-stack. Port read-only viewer, price-compare (desktop Done), and return-context / history trim so the post-save loop matches desktop.",
+    "source_refs": [
+      "MASTER §5 Phase 2",
+      "MASTER §6 UX contracts",
+      "feature-gap-matrix §3 Invoice viewer / price compare",
+      "chat 67a4ed8b",
+      "chat 21972123",
+      "chat f4de4b62"
+    ],
+    "depends_on": ["classic-client-dashboard", "invoice-calculator-save-contracts"]
+  },
+  {
+    "id": "projects-wo-four-column",
+    "title": "Projects, work orders, create-from-invoice",
+    "phase": "P2",
+    "priority": "high",
+    "domain": "projects",
+    "summary": "Desktop has schema 0016–0018, acceptance → WO, create-from-invoice (shared picker path, blank device ID refused), projects hub, and four-column project detail as the only detail route (scroll view retired). Odysseus has none. Port migrations + services + hub + four-column detail + Classic projects column; defer P4 rich notes / P6 inventory / DisplayCode.",
+    "source_refs": [
+      "MASTER §5 Phase 3",
+      "feature-gap-matrix §6 Projects & work orders",
+      "future-plans-roadmap §3 Phase 3",
+      "chat c6ee4808",
+      "chat 5d77cdc9",
+      "chat c7be02df",
+      "chat 38ff5cc4",
+      "chat 363ca32e",
+      "chat 003cf12a",
+      "Sysforge research/features/projects-work-orders.md"
+    ],
+    "depends_on": ["classic-client-dashboard", "invoice-viewer-return-context"]
+  },
+  {
+    "id": "backup-restore-post-import-reindex",
+    "title": "Plugin backup/restore + BUG-018 reindex",
+    "phase": "P2",
+    "priority": "high",
+    "domain": "backup",
+    "summary": "Desktop Settings backup/restore and scheduled backups are Done; BUG-018 requires client search rebuild after every bulk import path, including skip-all. Odysseus only mkdirs backups/ and has no plugin-scoped restore or reindex. Port plugin ZIP/JSON backup/restore, wire reindex on all import/restore paths, and treat Diagnostics list ≠ search proof. Per-invoice restore UI and Q-05 leftovers can ship in the same surface or as thin follow-ups.",
+    "source_refs": [
+      "MASTER §5 Phase 5",
+      "MASTER §4 Post-import reindex",
+      "feature-gap-matrix §8 User backup & restore",
+      "chat c2396042",
+      "chat 55127af8",
+      "Sysforge research/features/settings-backup.md"
+    ],
+    "depends_on": ["business-settings-mvp", "clients-crud-fts-duplicates"]
+  },
+  {
+    "id": "diagnostics-readonly-panel",
+    "title": "Read-only Business diagnostics panel",
+    "phase": "P2",
+    "priority": "medium",
+    "domain": "settings",
+    "summary": "Desktop Diagnostics shows migration version and DB health. Odysseus has no plugin diagnostics. Add a read-only panel (schema version, DB path/health) that never leaks secrets on multi-user paths; include archive-search / don't-ask-again only if projects settings land in the same pass.",
+    "source_refs": [
+      "MASTER §5 Phase 2",
+      "feature-gap-matrix §1 Diagnostics",
+      "future-plans-roadmap §3 Phase 2",
+      "chat 11201750"
+    ],
+    "depends_on": ["schema-money-utc-foundation", "business-shell-dashboard-router"]
+  },
+  {
+    "id": "draft-retention-draft-08",
+    "title": "Optional DRAFT-08 retention (safe defaults)",
+    "phase": "P2",
+    "priority": "medium",
+    "domain": "drafts",
+    "summary": "Desktop DeleteOldDrafts exists but is intentionally unwired (silent delete risk). Odysseus must not auto-purge on plugin load by default. Add opt-in retention (settings + warn/pin) via user action or scheduler; never silent startup delete.",
+    "source_refs": [
+      "MASTER §4 DRAFT-08",
+      "MASTER §7 Deferred",
+      "future-plans-roadmap §4.1 DRAFT-08",
+      "chat bfe03bf6",
+      "chat 97aa3734",
+      "chat a162de19"
+    ],
+    "depends_on": ["drafts-service-autosave", "business-settings-mvp"]
+  },
+  {
+    "id": "screw-maps-s0-s2",
+    "title": "Screw maps S0–S2 annotate workspace",
+    "phase": "P3",
+    "priority": "medium",
+    "domain": "screw-maps",
+    "summary": "Schema 0020–0022 + 0031 UNIQUE + ScrewMapView annotate/autosave/undo/lock shipped. Library publish/clone + S3 measurement lookup shipped in 0.16.0 (tighten 0.16.1). Zoom/pan + note markers shipped in 0.17.0. Still deferred: S5 mobile; image delete/reorder skipped (not on desktop).",
+    "source_refs": [
+      "MASTER §5 Phase 4",
+      "feature-gap-matrix §7 Screw maps",
+      "future-plans-roadmap §3 Phase 4",
+      "chat 7e801bff",
+      "chat ca042680",
+      "chat 150e09d0",
+      "chat f9ec8da7",
+      "Sysforge research/features/screw-maps.md"
+    ],
+    "depends_on": ["projects-wo-four-column"]
+  },
+  {
+    "id": "parts-search-suppliers-depth",
+    "title": "Parts FTS, suppliers UX, price history, triage",
+    "phase": "P3",
+    "priority": "low",
+    "domain": "parts",
+    "summary": "Desktop still uses SQL LIKE for parts; Lucene parts, supplier preferred UX, price history, and placeholder triage queue are Planned. After MVP parts+merge, deepen search (FTS5), supplier autocomplete/preferred, price history + update preview, and triage queue beyond merge.",
+    "source_refs": [
+      "MASTER §5 Phase 6+",
+      "future-plans-roadmap §3 Phase 6",
+      "future-plans-roadmap §4.1 Lucene parts / triage / price history",
+      "feature-gap-matrix §5 Lucene parts search"
+    ],
+    "depends_on": ["parts-placeholders-merge", "invoice-calculator-save-contracts"]
+  },
+  {
+    "id": "future-ui-mru-shell-polish",
+    "title": "Client MRU, shortcuts, Future UI shell polish",
+    "phase": "deferred",
+    "priority": "low",
+    "domain": "ux",
+    "summary": "Desktop defers persistent client MRU (LastInteractedAt / recent 6), nav history across restart, Future UI Phase 2–3 (shortcuts, favorites, themes, breadcrumbs). Odysseus should reuse host shortcuts/themes rather than dual systems. Plan as post-core polish once Classic and invoice loops work.",
+    "source_refs": [
+      "MASTER §7 Deferred",
+      "future-plans-roadmap §3 Phase 7",
+      "future-plans-roadmap §4.1 Client MRU",
+      "chat a162de19",
+      "chat e24feae4",
+      "Sysforge research/features/future-ui-backlog.md"
+    ],
+    "depends_on": ["classic-client-dashboard", "business-shell-dashboard-router"]
+  },
+  {
+    "id": "invoice-ops-pdf-payments-merge",
+    "title": "Invoice v3+ PDF/email/payments + client merge",
+    "phase": "deferred",
+    "priority": "low",
+    "domain": "invoices",
+    "summary": "Desktop Invoice-Roadmap v3+ covers PDF, email, payments, reporting, roles; DB-12 client merge remains Deferred after detect-only. Out of parity MVP. Track as a later ops/paperwork epic after shop flow and backup are solid.",
+    "source_refs": [
+      "MASTER §7 Later",
+      "future-plans-roadmap §3 Phase 9",
+      "feature-gap-matrix §3 Invoice v2/v3",
+      "Plans/Product-Vision/Invoice-Roadmap.md"
+    ],
+    "depends_on": [
+      "invoice-viewer-return-context",
+      "backup-restore-post-import-reindex"
+    ]
+  }
+]
