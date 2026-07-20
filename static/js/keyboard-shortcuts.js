@@ -3,6 +3,7 @@
 // ============================================
 
 import { IS_MAC, isAltGrEvent } from './platform.js';
+import { syncRailSide } from './sidebar-layout.js';
 
 export const _defaultKeybinds = {
   search: 'ctrl+k', toggle_sidebar: 'ctrl+alt+b', new_session: 'ctrl+alt+n',
@@ -163,7 +164,7 @@ export function initKeyboardShortcuts(modules) {
         if (ir) ir.classList.remove('rail-hidden');
         if (sb) sb.classList.remove('hidden');
       }
-      if (typeof syncRailSide === 'function') syncRailSide();
+      syncRailSide();
       return;
     }
     if (_matchesCombo(e, kb.tts)) {
