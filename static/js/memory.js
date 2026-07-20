@@ -19,6 +19,21 @@ let selectedIds = new Set();
 
 const MEMORY_CATEGORIES = ['fact', 'identity', 'preference', 'contact', 'project', 'goal', 'task'];
 
+function _normalizeCategory(cat) {
+  const value = String(cat || 'fact').trim().toLowerCase();
+  return MEMORY_CATEGORIES.includes(value) ? value : 'fact';
+}
+
+function _resetBrowsePanels() {
+  const body = document.getElementById('memory-suggestions-body');
+  const memList = document.getElementById('memory-list');
+  if (body) {
+    body.classList.add('hidden');
+    body.innerHTML = '';
+  }
+  if (memList) memList.classList.remove('hidden');
+}
+
 // Sort-option icons for the custom Memory sort picker (and Skills picker
 // once it reuses the same markup). Each value maps to a 13px Feather-style
 // SVG so the icon visually distinguishes Newest / Oldest / A-Z / Most used.
@@ -161,8 +176,9 @@ function buildCategoryChips() {
   // an "all" chip with nothing to filter.
   if (!memories.length) { container.innerHTML = ''; return; }
 
-  const cats = new Set(memories.map(m => m.category || 'fact'));
-  const sorted = ['all', ...Array.from(cats).sort()];
+  const cats = new Set(memories.map(m => _normalizeCategory(m.category)));
+  if (activeCategory !== 'all' && !cats.has(activeCategory)) activeCategory = 'all';
+  const sorted = ['all', ...MEMORY_CATEGORIES.filter(cat => cats.has(cat))];
 
   container.innerHTML = '';
   sorted.forEach(cat => {
@@ -170,6 +186,7 @@ function buildCategoryChips() {
     btn.className = 'memory-cat-chip' + (cat === activeCategory ? ' active' : '');
     btn.dataset.cat = cat;
     btn.textContent = cat;
+    btn.title = cat;
     btn.addEventListener('click', () => {
       activeCategory = cat;
       container.querySelectorAll('.memory-cat-chip').forEach(b => b.classList.remove('active'));
@@ -370,6 +387,7 @@ async function syncPrefToggle(elementId, prefKey, onMsg, offMsg, dimBelow = true
 
 export async function loadMemories() {
   _ensureNewMemoryCategorySelect();
+  _resetBrowsePanels();
   try {
     const response = await fetch(`${window.location.origin}/api/memory`);
 
@@ -652,7 +670,7 @@ function getFilteredMemories() {
     : [...memories];
 
   if (activeCategory !== 'all') {
-    filtered = filtered.filter(m => (m.category || 'fact') === activeCategory);
+    filtered = filtered.filter(m => _normalizeCategory(m.category) === activeCategory);
   }
 
   const sortSelect = document.getElementById('memory-sort');
@@ -755,7 +773,7 @@ export function renderMemoryList() {
     }
 
     const catBadge = document.createElement('span');
-    const cat = memory.category || 'fact';
+    const cat = _normalizeCategory(memory.category);
     catBadge.className = 'memory-cat-badge memory-cat-' + cat;
     catBadge.textContent = cat;
     meta.appendChild(catBadge);
@@ -1075,7 +1093,7 @@ export function updateMemoryCount() {
     visible = visible.filter(m => m.text && m.text.toLowerCase().includes(searchTerm));
   }
   if (activeCategory !== 'all') {
-    visible = visible.filter(m => (m.category || 'fact') === activeCategory);
+    visible = visible.filter(m => _normalizeCategory(m.category) === activeCategory);
   }
 
   const num = visible.length === scopeTotal ? `${scopeTotal}` : `${visible.length}/${scopeTotal}`;
@@ -1323,7 +1341,7 @@ async function handleImportFile(file) {
       const reviewItems = suggestions
         .map((s) => ({
           text: typeof s === 'string' ? s : s.text,
-          category: (typeof s === 'object' && s.category) || 'fact',
+          category: _normalizeCategory(typeof s === 'object' && s.category),
           active: true,
         }))
         .filter((s) => s.text);
@@ -1457,6 +1475,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.memory-tab-panel[data-memory-panel]').forEach(p => {
         p.classList.toggle('hidden', p.dataset.memoryPanel !== target);
       });
+      if (target === 'browse') _resetBrowsePanels();
       // Lazy-load skills tab (cascade=true → play the domino-in entrance)
       if (target === 'skills') {
         import('./skills.js').then(m => { if (m.loadSkills) m.loadSkills(true); else if (m.default?.loadSkills) m.default.loadSkills(true); });
