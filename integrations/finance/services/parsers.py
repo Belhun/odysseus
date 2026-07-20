@@ -277,8 +277,16 @@ def parse_ofx_qfx(content: bytes | str) -> list[ParsedTransaction]:
 
     if isinstance(content, str):
         content = content.encode("utf-8", errors="replace")
+    if not content:
+        raise ValueError("OFX/QFX file is empty")
     stream = io.BytesIO(content)
-    ofx = OfxParser.parse(stream)
+    try:
+        ofx = OfxParser.parse(stream)
+    except Exception as exc:
+        raise ValueError(
+            f"Could not parse OFX/QFX file ({type(exc).__name__}: {exc}). "
+            "Check that the file is a valid OFX/QFX export from your bank, or use CSV."
+        ) from exc
     out: list[ParsedTransaction] = []
     accounts: Iterable[Any] = []
     if getattr(ofx, "account", None):
@@ -310,6 +318,8 @@ def parse_ofx_qfx(content: bytes | str) -> list[ParsedTransaction]:
             )
             parsed.finalize()
             out.append(parsed)
+    if not out and not list(accounts):
+        raise ValueError("OFX/QFX file contains no accounts or transactions")
     return out
 
 
@@ -326,6 +336,8 @@ def parse_upload(
     content: bytes,
     preset: str | None = None,
 ) -> tuple[str, list[ParsedTransaction], list[RowParseError]]:
+    if not content:
+        raise ValueError("Upload file is empty")
     fmt = detect_file_format(filename, content)
     if fmt == "ofx":
         return "ofx", parse_ofx_qfx(content), []

@@ -12,7 +12,8 @@ from starlette.testclient import TestClient
 
 import integrations.finance.database as finance_db
 import integrations.finance.routes as finance_routes
-from integrations.finance.models import FinanceAccount, FinanceBase
+from integrations.finance.database import init_finance_db
+from integrations.finance.models import FinanceAccount, FinanceBase, FinanceTransaction
 from integrations.finance.routes import setup_finance_routes
 from integrations.finance.install import run_install
 from integrations.finance.uninstall import run_uninstall
@@ -87,6 +88,32 @@ def test_finance_import_preview_and_commit(finance_client):
 
 
 @pytest.mark.area_routes
+def test_finance_transactions_pagination(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "WF", "account_type": "checking"}).json()
+    account_id = acct["id"]
+
+    preview = finance_client.post(
+        "/api/finance/import/preview",
+        data={"account_id": account_id},
+        files={"file": ("wells.csv", WELLS_FARGO_SAMPLE.encode("utf-8"), "text/csv")},
+    ).json()
+    finance_client.post("/api/finance/import/commit", json={"preview_id": preview["preview_id"]})
+
+    page1 = finance_client.get(f"/api/finance/transactions?account_id={account_id}&limit=1&offset=0")
+    assert page1.status_code == 200
+    body1 = page1.json()
+    assert body1["total"] == 2
+    assert len(body1["transactions"]) == 1
+
+    page2 = finance_client.get(f"/api/finance/transactions?account_id={account_id}&limit=1&offset=1")
+    assert page2.status_code == 200
+    body2 = page2.json()
+    assert body2["total"] == 2
+    assert len(body2["transactions"]) == 1
+    assert body1["transactions"][0]["id"] != body2["transactions"][0]["id"]
+
+
+@pytest.mark.area_routes
 def test_plugin_install_writes_marker_and_feature(monkeypatch, tmp_path):
     plugins_root = tmp_path / "plugins"
     monkeypatch.setattr("src.plugins.registry.PLUGINS_DATA_ROOT", plugins_root)
@@ -158,3 +185,139 @@ def test_plugin_install_idempotent(monkeypatch, tmp_path):
     assert second["ok"] is True
     assert second.get("already_installed") is True
     assert second.get("reload_required") is False
+
+
+@pytest.mark.area_routes
+def test_finance_garbage_ofx_returns_400(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "WF", "account_type": "checking"}).json()
+    res = finance_client.post(
+        "/api/finance/import/preview",
+        data={"account_id": acct["id"]},
+        files={"file": ("bad.ofx", b"not valid ofx content", "application/octet-stream")},
+    )
+    assert res.status_code == 400
+    assert res.status_code != 500
+
+
+@pytest.mark.area_routes
+def test_finance_empty_upload_returns_400(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "WF", "account_type": "checking"}).json()
+    res = finance_client.post(
+        "/api/finance/import/preview",
+        data={"account_id": acct["id"]},
+        files={"file": ("empty.csv", b"", "text/csv")},
+    )
+    assert res.status_code == 400
+
+
+@pytest.mark.area_routes
+def test_finance_net_worth_route(finance_client):
+    finance_client.post("/api/finance/accounts", json={
+        "name": "Checking",
+        "account_type": "checking",
+        "opening_balance_cents": 100000,
+    })
+    finance_client.post("/api/finance/accounts", json={
+        "name": "Visa",
+        "account_type": "credit_card",
+        "opening_balance_cents": -50000,
+    })
+    res = finance_client.get("/api/finance/reports/net-worth")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["assets_cents"] == 100000
+    assert body["liabilities_cents"] == 50000
+    assert body["net_worth_cents"] == 50000
+
+
+@pytest.mark.area_routes
+def test_finance_transaction_filters_and_csv_export(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "WF", "account_type": "checking"}).json()
+    preview = finance_client.post(
+        "/api/finance/import/preview",
+        data={"account_id": acct["id"]},
+        files={"file": ("wells.csv", WELLS_FARGO_SAMPLE.encode("utf-8"), "text/csv")},
+    ).json()
+    finance_client.post("/api/finance/import/commit", json={"preview_id": preview["preview_id"]})
+
+    filtered = finance_client.get(
+        "/api/finance/transactions",
+        params={"search": "MERCHANT", "max_amount_cents": 0},
+    )
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] >= 1
+
+    csv_res = finance_client.get("/api/finance/transactions/export.csv", params={"search": "MERCHANT"})
+    assert csv_res.status_code == 200
+    assert "text/csv" in csv_res.headers.get("content-type", "")
+    assert "payee" in csv_res.text.splitlines()[0].lower()
+
+
+@pytest.mark.area_routes
+def test_finance_wal_pragmas_on_connect(monkeypatch, tmp_path):
+    finance_db.reset_engine_cache()
+    db_path = tmp_path / "pragma.db"
+    monkeypatch.setattr(finance_db, "finance_db_path", lambda: db_path)
+    engine = finance_db.get_engine()
+    with engine.connect() as conn:
+        journal = conn.exec_driver_sql("PRAGMA journal_mode").scalar()
+        busy = conn.exec_driver_sql("PRAGMA busy_timeout").scalar()
+        sync = conn.exec_driver_sql("PRAGMA synchronous").scalar()
+    assert str(journal).lower() == "wal"
+    assert int(busy) == 5000
+    assert int(sync) == 1  # NORMAL
+    finance_db.reset_engine_cache()
+
+
+@pytest.mark.area_routes
+def test_finance_dedup_unique_index_migration(monkeypatch, tmp_path):
+    finance_db.reset_engine_cache()
+    db_path = tmp_path / "dedup.db"
+    monkeypatch.setattr(finance_db, "finance_db_path", lambda: db_path)
+
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=NullPool,
+    )
+    FinanceBase.metadata.create_all(engine)
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS ix_finance_tx_account_dedup"))
+        conn.execute(text(
+            "CREATE INDEX ix_finance_tx_account_dedup "
+            "ON finance_transactions (account_id, dedup_hash)"
+        ))
+        conn.commit()
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = session_factory()
+    try:
+        acct = FinanceAccount(id="acct-dedup", owner="u1", name="Test", account_type="checking")
+        db.add(acct)
+        for i in range(2):
+            db.add(FinanceTransaction(
+                id=f"tx-dup-{i}",
+                owner="u1",
+                account_id=acct.id,
+                date=__import__("datetime").date(2026, 1, i + 1),
+                amount_cents=-100,
+                payee="DUP",
+                dedup_hash="same-hash",
+            ))
+        db.commit()
+    finally:
+        db.close()
+    engine.dispose()
+
+    finance_db.reset_engine_cache()
+    init_finance_db()
+
+    db2 = finance_db.get_session_factory()()
+    try:
+        count = db2.query(FinanceTransaction).filter(
+            FinanceTransaction.dedup_hash == "same-hash"
+        ).count()
+        assert count == 1
+    finally:
+        db2.close()
+    finance_db.reset_engine_cache()

@@ -2373,6 +2373,49 @@ function initAll() {
   initReminderSettings();
   initPluginIntegrations();
   initUnifiedIntegrations();
+  initFinanceAgentPrefs();
+}
+
+async function _bindPrefToggle(elementId, prefKey, onMsg, offMsg) {
+  const toggle = el(elementId);
+  if (!toggle || toggle.dataset.bound === '1') return;
+  toggle.dataset.bound = '1';
+  try {
+    const res = await fetch(`/api/prefs/${prefKey}`, { credentials: 'same-origin' });
+    if (res.ok) {
+      const data = await res.json();
+      toggle.checked = data.value === true;
+    }
+  } catch (e) {
+    console.error(`Failed to load ${prefKey} pref:`, e);
+  }
+  toggle.addEventListener('change', async () => {
+    try {
+      const res = await fetch(`/api/prefs/${prefKey}`, {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: toggle.checked }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (typeof showToast === 'function') {
+        showToast(toggle.checked ? onMsg : offMsg);
+      }
+    } catch (e) {
+      console.error(`Failed to save ${prefKey} pref:`, e);
+      toggle.checked = !toggle.checked;
+      if (typeof showError === 'function') showError('Failed to save preference');
+    }
+  });
+}
+
+function initFinanceAgentPrefs() {
+  _bindPrefToggle(
+    'auto-approve-finance-toggle',
+    'auto_approve_finance',
+    'Finance AI auto-approve enabled',
+    'Finance AI auto-approve disabled',
+  );
 }
 
 function notifyIntegrationsChanged() {

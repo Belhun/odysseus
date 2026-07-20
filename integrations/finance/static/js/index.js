@@ -22,9 +22,44 @@ let _activeAccountId = null;
 let _activeTab = 'transactions';
 let _preview = null;
 let _showCategoryForm = false;
+let _renderSeq = 0;
+let _txSearch = '';
+let _txPage = 0;
+let _txListAccountId = null;
+let _txSearchTimer = null;
+let _txShellBuiltForForm = null;
+const TX_PAGE_SIZE = 50;
+
+const PANEL_FADE_MS = 150;
 
 function _el(id) {
   return document.getElementById(id);
+}
+
+/**
+ * Smooth panel refresh: keep current content visible but dimmed while the
+ * next view loads, then fade the new content in. Avoids the blank
+ * "Loading…" flash that made account/tab switches look like a full reopen.
+ * Returns a seq token; callers bail if a newer render started meanwhile.
+ */
+function _panelLoading(panel) {
+  const seq = ++_renderSeq;
+  panel.style.transition = `opacity ${PANEL_FADE_MS}ms ease`;
+  if (panel.innerHTML.trim()) {
+    panel.style.opacity = '0.45';
+    panel.style.pointerEvents = 'none';
+  } else {
+    panel.innerHTML = '<p style="opacity:0.7;">Loading…</p>';
+  }
+  return seq;
+}
+
+function _panelSwap(panel, html) {
+  panel.innerHTML = html;
+  panel.scrollTop = 0;
+  panel.style.opacity = '0';
+  panel.style.pointerEvents = '';
+  requestAnimationFrame(() => { panel.style.opacity = '1'; });
 }
 
 function _fmtMoney(cents) {
@@ -218,47 +253,19 @@ function _tabStyle(tab) {
   return _activeTab === tab ? 'font-weight:600;text-decoration:underline;' : '';
 }
 
-async function _renderTransactions() {
-  const panel = _el('finance-panel');
-  if (!panel) return;
-  if (!_activeAccountId) {
-    panel.innerHTML = '<p>Create an account to get started.</p>';
-    return;
-  }
-  panel.innerHTML = '<p>Loading transactions…</p>';
-  const search = panel.dataset.search || '';
-  const data = await _api(`/transactions?account_id=${encodeURIComponent(_activeAccountId)}&limit=200&search=${encodeURIComponent(search)}`);
-  const rows = (data.transactions || []).map((tx) => {
-    const amtClass = tx.amount_cents < 0 ? 'color:var(--danger,#e74c3c)' : 'color:var(--success,#2ecc71)';
-    const catOpts = _categoryOptionsHtml(tx.category_id);
-    return `<tr>
-      <td>${tx.date || ''}</td>
-      <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(tx.payee)}">${_escHtml(tx.payee)}</td>
-      <td style="${amtClass};text-align:right;">${_fmtMoney(tx.amount_cents)}</td>
-      <td><select data-tx-cat="${tx.id}" class="finance-cat-select"><option value="">—</option>${catOpts}</select></td>
-    </tr>`;
-  }).join('');
-  panel.innerHTML = `
-    <div style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      <input id="finance-tx-search" placeholder="Search payee…" value="${search.replace(/"/g, '&quot;')}" style="flex:1;min-width:160px;" />
-      <button type="button" id="finance-add-category-btn" class="btn-secondary">+ Category</button>
-    </div>
-    ${_showCategoryForm ? _categoryFormHtml() : ''}
-    <table class="finance-table" style="width:100%;border-collapse:collapse;font-size:0.9rem;">
-      <thead><tr><th>Date</th><th>Payee</th><th style="text-align:right;">Amount</th><th>Category</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="4">No transactions yet. Import a CSV from your bank.</td></tr>'}</tbody>
-    </table>`;
-  _el('finance-tx-search')?.addEventListener('input', (e) => {
-    panel.dataset.search = e.target.value;
-    clearTimeout(panel._searchTimer);
-    panel._searchTimer = setTimeout(() => _renderTransactions(), 300);
-  });
-  _el('finance-add-category-btn')?.addEventListener('click', () => {
-    _showCategoryForm = true;
-    _renderTransactions();
-  });
-  if (_showCategoryForm) _bindCategoryForm();
-  panel.querySelectorAll('.finance-cat-select').forEach((sel) => {
+function _txRowHtml(tx) {
+  const amtClass = tx.amount_cents < 0 ? 'color:var(--danger,#e74c3c)' : 'color:var(--success,#2ecc71)';
+  const catOpts = _categoryOptionsHtml(tx.category_id);
+  return `<tr>
+    <td>${tx.date || ''}</td>
+    <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(tx.payee)}">${_escHtml(tx.payee)}</td>
+    <td style="${amtClass};text-align:right;">${_fmtMoney(tx.amount_cents)}</td>
+    <td><select data-tx-cat="${tx.id}" class="finance-cat-select"><option value="">—</option>${catOpts}</select></td>
+  </tr>`;
+}
+
+function _wireCategorySelects(root) {
+  root?.querySelectorAll('.finance-cat-select').forEach((sel) => {
     sel.addEventListener('change', async () => {
       await _api(`/transactions/${sel.dataset.txCat}`, {
         method: 'PATCH',
@@ -269,14 +276,176 @@ async function _renderTransactions() {
   });
 }
 
-async function _renderImport() {
+function _txPagerHtml(total, { border = 'top' } = {}) {
+  const pageCount = Math.max(1, Math.ceil(total / TX_PAGE_SIZE));
+  if (_txPage >= pageCount) _txPage = Math.max(0, pageCount - 1);
+  const start = total ? _txPage * TX_PAGE_SIZE + 1 : 0;
+  const end = Math.min(total, (_txPage + 1) * TX_PAGE_SIZE);
+  const edge = border === 'bottom'
+    ? 'margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border-color,#333);'
+    : 'margin-top:12px;padding-top:12px;border-top:1px solid var(--border-color,#333);';
+  return `
+    <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;${edge}">
+      <span style="font-size:0.85rem;opacity:0.85;">
+        ${total ? `Showing ${start}–${end} of ${total.toLocaleString()}` : 'No transactions'}
+      </span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button type="button" class="btn-secondary finance-tx-prev" ${_txPage <= 0 ? 'disabled' : ''}>Previous</button>
+        <span style="font-size:0.85rem;min-width:7rem;text-align:center;">Page ${_txPage + 1} of ${pageCount}</span>
+        <button type="button" class="btn-secondary finance-tx-next" ${_txPage >= pageCount - 1 ? 'disabled' : ''}>Next</button>
+      </div>
+    </div>`;
+}
+
+function _wireTxPagerButtons(root, pageCount) {
+  root?.querySelectorAll('.finance-tx-prev').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (_txPage > 0) {
+        _txPage -= 1;
+        _fetchTransactionPage();
+      }
+    });
+  });
+  root?.querySelectorAll('.finance-tx-next').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (_txPage < pageCount - 1) {
+        _txPage += 1;
+        _fetchTransactionPage();
+      }
+    });
+  });
+}
+
+function _renderTxPager(total) {
+  const pageCount = Math.max(1, Math.ceil(total / TX_PAGE_SIZE));
+  if (_txPage >= pageCount) _txPage = Math.max(0, pageCount - 1);
+
+  const top = _el('finance-tx-pager-top');
+  const bottom = _el('finance-tx-pager');
+  if (top) top.innerHTML = _txPagerHtml(total, { border: 'bottom' });
+  if (bottom) bottom.innerHTML = _txPagerHtml(total, { border: 'top' });
+
+  const root = _el('finance-tx-root');
+  _wireTxPagerButtons(root, pageCount);
+}
+
+async function _fetchTransactionPage() {
+  const tbody = _el('finance-tx-tbody');
+  const status = _el('finance-tx-status');
+  const searchInput = _el('finance-tx-search');
+  const hadFocus = document.activeElement === searchInput;
+  const selStart = searchInput?.selectionStart ?? null;
+  const selEnd = searchInput?.selectionEnd ?? null;
+
+  if (status) status.textContent = 'Loading…';
+  if (tbody) {
+    tbody.innerHTML = '<tr><td colspan="4" style="opacity:0.7;">Loading transactions…</td></tr>';
+  }
+
+  try {
+    const offset = _txPage * TX_PAGE_SIZE;
+    const data = await _api(
+      `/transactions?account_id=${encodeURIComponent(_activeAccountId)}`
+      + `&limit=${TX_PAGE_SIZE}&offset=${offset}&search=${encodeURIComponent(_txSearch)}`,
+    );
+    const txs = data.transactions || [];
+    const total = Number(data.total) || 0;
+    if (status) status.textContent = _txSearch ? `Filtered by “${_txSearch}”` : '';
+    if (tbody) {
+      tbody.innerHTML = txs.length
+        ? txs.map(_txRowHtml).join('')
+        : '<tr><td colspan="4">No matching transactions.</td></tr>';
+      _wireCategorySelects(tbody);
+    }
+    _renderTxPager(total);
+  } catch (err) {
+    if (status) status.textContent = '';
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger,#e74c3c);">${_escHtml(err.message || String(err))}</td></tr>`;
+    }
+    _renderTxPager(0);
+  }
+
+  if (hadFocus && searchInput) {
+    searchInput.focus();
+    if (selStart != null && selEnd != null) {
+      searchInput.setSelectionRange(selStart, selEnd);
+    }
+  }
+}
+
+function _ensureTransactionsShell() {
+  const panel = _el('finance-panel');
+  if (!panel) return;
+  const needRebuild = !panel.querySelector('#finance-tx-root')
+    || _txShellBuiltForForm !== _showCategoryForm;
+  if (!needRebuild) return;
+
+  _txShellBuiltForForm = _showCategoryForm;
+  _panelSwap(panel, `
+    <div id="finance-tx-root">
+      <div style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <input id="finance-tx-search" type="search" placeholder="Search payee…" autocomplete="off" style="flex:1;min-width:160px;" />
+        <button type="button" id="finance-add-category-btn" class="btn-secondary">+ Category</button>
+      </div>
+      ${_showCategoryForm ? _categoryFormHtml() : ''}
+      <div id="finance-tx-pager-top"></div>
+      <div id="finance-tx-status" style="font-size:0.85rem;opacity:0.8;min-height:1.2em;margin-bottom:4px;"></div>
+      <table class="finance-table" style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+        <thead><tr><th>Date</th><th>Payee</th><th style="text-align:right;">Amount</th><th>Category</th></tr></thead>
+        <tbody id="finance-tx-tbody"></tbody>
+      </table>
+      <div id="finance-tx-pager"></div>
+    </div>`);
+
+  const searchInput = _el('finance-tx-search');
+  if (searchInput) {
+    searchInput.value = _txSearch;
+    searchInput.addEventListener('input', (e) => {
+      _txSearch = e.target.value;
+      _txPage = 0;
+      clearTimeout(_txSearchTimer);
+      _txSearchTimer = setTimeout(() => _fetchTransactionPage(), 300);
+    });
+  }
+  _el('finance-add-category-btn')?.addEventListener('click', () => {
+    _showCategoryForm = true;
+    _renderTransactions();
+  });
+  if (_showCategoryForm) _bindCategoryForm();
+}
+
+async function _renderTransactions() {
   const panel = _el('finance-panel');
   if (!panel) return;
   if (!_activeAccountId) {
-    panel.innerHTML = '<p>Create an account first, then import a CSV or QFX export from your bank.</p>';
+    _txShellBuiltForForm = null;
+    _panelSwap(panel, '<p>Create an account to get started.</p>');
     return;
   }
-  panel.innerHTML = `
+  if (_txListAccountId !== _activeAccountId) {
+    _txListAccountId = _activeAccountId;
+    _txPage = 0;
+    _txSearch = '';
+    _txShellBuiltForForm = null;
+  }
+  _ensureTransactionsShell();
+  const searchInput = _el('finance-tx-search');
+  if (searchInput && searchInput.value !== _txSearch) {
+    searchInput.value = _txSearch;
+  }
+  await _fetchTransactionPage();
+}
+
+async function _renderImport() {
+  const panel = _el('finance-panel');
+  if (!panel) return;
+  _renderSeq += 1;
+  if (!_activeAccountId) {
+    _panelSwap(panel, '<p>Create an account first, then import a CSV or QFX export from your bank.</p>');
+    return;
+  }
+  _panelSwap(panel, `
     <p style="opacity:0.85;margin-top:0;">Upload a CSV or QFX/OFX export from Wells Fargo, Navy Federal, or another bank. Data stays on this server.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
       <input type="file" id="finance-import-file" accept=".csv,.qfx,.ofx,text/csv" />
@@ -289,7 +458,7 @@ async function _renderImport() {
       <button type="button" id="finance-import-preview-btn" class="btn-primary">Preview import</button>
     </div>
     <div id="finance-import-status"></div>
-    <div id="finance-import-preview"></div>`;
+    <div id="finance-import-preview"></div>`);
   _el('finance-import-preview-btn')?.addEventListener('click', _runImportPreview);
 }
 
@@ -357,8 +526,10 @@ async function _commitImport() {
 async function _renderBudget() {
   const panel = _el('finance-panel');
   if (!panel) return;
+  const seq = _panelLoading(panel);
   const month = new Date().toISOString().slice(0, 7);
   const data = await _api(`/budgets?month=${month}`);
+  if (seq !== _renderSeq) return;
   const rows = (data.categories || []).map((c) => `
     <tr>
       <td><span style="display:inline-block;width:10px;height:10px;background:${c.color};border-radius:2px;margin-right:6px;"></span>${c.category_name}</td>
@@ -367,14 +538,14 @@ async function _renderBudget() {
       <td style="text-align:right;">${c.remaining_cents != null ? _fmtMoney(c.remaining_cents) : '—'}</td>
       <td><input type="number" min="0" step="1" data-budget-cat="${c.category_id}" placeholder="Set $" value="${c.limit_cents != null ? (c.limit_cents / 100).toFixed(0) : ''}" style="width:80px;" /></td>
     </tr>`).join('');
-  panel.innerHTML = `
+  _panelSwap(panel, `
     <h3 style="margin-top:0;">Budget — ${data.month}</h3>
     <p style="opacity:0.8;font-size:0.85rem;">Set monthly limits (whole dollars). Spending is based on categorized outflows.</p>
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr><th>Category</th><th style="text-align:right;">Spent</th><th style="text-align:right;">Limit</th><th style="text-align:right;">Remaining</th><th>Set limit</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="5">No spending this month yet.</td></tr>'}</tbody>
     </table>
-    <button type="button" id="finance-save-budgets" class="btn-secondary" style="margin-top:12px;">Save limits</button>`;
+    <button type="button" id="finance-save-budgets" class="btn-secondary" style="margin-top:12px;">Save limits</button>`);
   _el('finance-save-budgets')?.addEventListener('click', async () => {
     const inputs = panel.querySelectorAll('[data-budget-cat]');
     for (const inp of inputs) {
@@ -397,18 +568,20 @@ async function _renderBudget() {
 async function _renderReports() {
   const panel = _el('finance-panel');
   if (!panel) return;
+  const seq = _panelLoading(panel);
   const month = new Date().toISOString().slice(0, 7);
   const [spending, trends] = await Promise.all([
     _api(`/reports/spending?month=${month}`),
     _api('/reports/trends?months=6'),
   ]);
+  if (seq !== _renderSeq) return;
   const catRows = (spending.categories || []).map((c) =>
     `<tr><td>${c.category_name}</td><td style="text-align:right;">${_fmtMoney(c.spent_cents)}</td><td style="text-align:right;">${c.transaction_count}</td></tr>`
   ).join('');
   const trendRows = (trends.trends || []).map((t) =>
     `<tr><td>${t.month}</td><td style="text-align:right;color:var(--success,#2ecc71);">${_fmtMoney(t.income_cents)}</td><td style="text-align:right;color:var(--danger,#e74c3c);">${_fmtMoney(t.spending_cents)}</td></tr>`
   ).join('');
-  panel.innerHTML = `
+  _panelSwap(panel, `
     <h3 style="margin-top:0;">Spending by category — ${spending.month}</h3>
     <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
       <thead><tr><th>Category</th><th style="text-align:right;">Spent</th><th style="text-align:right;">Txns</th></tr></thead>
@@ -418,7 +591,7 @@ async function _renderReports() {
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr><th>Month</th><th style="text-align:right;">Income</th><th style="text-align:right;">Spending</th></tr></thead>
       <tbody>${trendRows}</tbody>
-    </table>`;
+    </table>`);
 }
 
 async function _renderPanel() {
@@ -444,7 +617,7 @@ export async function openFinance() {
     await _renderPanel();
   } catch (err) {
     const panel = _el('finance-panel');
-    if (panel) panel.innerHTML = `<p style="color:var(--danger,#e74c3c);">${err.message || err}</p>`;
+    if (panel) _panelSwap(panel, `<p style="color:var(--danger,#e74c3c);">${_escHtml(err.message || err)}</p>`);
   }
   const Modals = await import('/static/js/modalManager.js');
   Modals.register('finance-modal', {

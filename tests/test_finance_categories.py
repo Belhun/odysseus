@@ -9,8 +9,9 @@ from sqlalchemy.pool import NullPool
 
 import integrations.finance.database as finance_db
 from integrations.finance.install import run_install
-from integrations.finance.models import FinanceAccount, FinanceCategory, FinanceTransaction
+from integrations.finance.models import FinanceAccount, FinanceCategory, FinanceCategorizationRule, FinanceTransaction
 from integrations.finance.services.categories import (
+    apply_rules_to_transactions,
     create_category_for_owner,
     deduplicate_categories,
     ensure_default_categories,
@@ -151,5 +152,48 @@ def test_format_category_path_shows_parent(finance_db_env):
         db.commit()
         cats_by_id = {"p1": parent, "c1": child}
         assert format_category_path(child, cats_by_id) == "Dining › Pizza"
+    finally:
+        db.close()
+
+
+@pytest.mark.area_routes
+def test_rule_priority_lower_number_wins_tiebreaker(finance_db_env):
+    owner = finance_db_env["owner"]
+    db = finance_db_env["session_factory"]()
+    try:
+        cat_a = FinanceCategory(id="cat-a", owner=owner, name="Groceries", is_income=False)
+        cat_b = FinanceCategory(id="cat-b", owner=owner, name="Dining", is_income=False)
+        acct = FinanceAccount(id="acct-1", owner=owner, name="Checking", account_type="checking")
+        db.add_all([cat_a, cat_b, acct])
+        db.commit()
+        db.add(FinanceCategorizationRule(
+            id="rule-high",
+            owner=owner,
+            pattern="WHOLE",
+            category_id=cat_a.id,
+            priority=50,
+        ))
+        db.add(FinanceCategorizationRule(
+            id="rule-low",
+            owner=owner,
+            pattern="WHOLE",
+            category_id=cat_b.id,
+            priority=10,
+        ))
+        tx = FinanceTransaction(
+            id="tx-1",
+            owner=owner,
+            account_id=acct.id,
+            date=__import__("datetime").date(2026, 6, 1),
+            amount_cents=-1000,
+            payee="WHOLE FOODS",
+            dedup_hash="hash-whole",
+        )
+        db.add(tx)
+        db.commit()
+
+        apply_rules_to_transactions(db, owner, [tx])
+        db.commit()
+        assert tx.category_id == cat_b.id
     finally:
         db.close()

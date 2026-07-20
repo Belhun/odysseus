@@ -149,24 +149,70 @@ async def test_manage_finance_categorize_by_prefix_and_name(finance_tool_env):
     finally:
         db.close()
 
-    by_prefix = await do_manage_finance(
+    blocked = await do_manage_finance(
         json.dumps({
             "action": "categorize_transaction",
             "transaction_id": "6d7d3c81",
             "category_id": "5b3cda32",
         }),
         owner=owner,
+        session_id="sess-cat",
+    )
+    assert blocked.get("exit_code") == 1
+
+    token, _ = mint_confirmation(
+        session_id="sess-cat",
+        owner=owner,
+        domain="finance",
+        tool_name="manage_finance",
+        action="categorize_transaction",
+        payload={
+            "transaction_id": "6d7d3c81-aaaa-bbbb-cccc-ddddeeeeffff",
+            "category_id": "5b3cda32-abcd-ef01-2345-6789abcdef01",
+        },
+    )
+    approve_pending_choice(
+        token=token,
+        session_id="sess-cat",
+        owner=owner,
+        choice="Yes",
+    )
+
+    by_prefix = await do_manage_finance(
+        json.dumps({
+            "action": "categorize_transaction",
+            "transaction_id": "6d7d3c81",
+            "category_id": "5b3cda32",
+            "confirmation_token": token,
+        }),
+        owner=owner,
+        session_id="sess-cat",
     )
     assert by_prefix.get("exit_code") == 0
     assert "Dining" in (by_prefix.get("response") or "")
+
+    token2, _ = mint_confirmation(
+        session_id="sess-cat2",
+        owner=owner,
+        domain="finance",
+        tool_name="manage_finance",
+        action="categorize_transaction",
+        payload={
+            "transaction_id": "6d7d3c81-aaaa-bbbb-cccc-ddddeeeeffff",
+            "category_id": "5b3cda32-abcd-ef01-2345-6789abcdef01",
+        },
+    )
+    approve_pending_choice(token=token2, session_id="sess-cat2", owner=owner, choice="Yes")
 
     by_name = await do_manage_finance(
         json.dumps({
             "action": "categorize_transaction",
             "transaction_id": "6d7d3c81",
             "category_id": "Dining",
+            "confirmation_token": token2,
         }),
         owner=owner,
+        session_id="sess-cat2",
     )
     assert by_name.get("exit_code") == 0
 
@@ -362,3 +408,232 @@ async def test_app_api_blocks_finance_paths():
     )
     assert result.get("exit_code") == 1
     assert "manage_finance" in (result.get("error") or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_list_rules(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        cat = FinanceCategory(id="cat-1", owner=owner, name="Dining", is_income=False)
+        db.add(cat)
+        db.commit()
+        from integrations.finance.models import FinanceCategorizationRule
+        db.add(FinanceCategorizationRule(
+            id="rule-1", owner=owner, pattern="PIZZA", category_id=cat.id, priority=10
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    result = await do_manage_finance(json.dumps({"action": "list_rules"}), owner=owner)
+    assert result.get("exit_code") == 0
+    assert "PIZZA" in (result.get("response") or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_net_worth(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(
+            id="acct-check", owner=owner, name="Checking", account_type="checking",
+            opening_balance_cents=50000,
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    result = await do_manage_finance(json.dumps({"action": "net_worth"}), owner=owner)
+    assert result.get("exit_code") == 0
+    assert "Net worth" in (result.get("response") or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_set_budget_requires_confirmation(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        cat = FinanceCategory(id="cat-bud", owner=owner, name="Groceries", is_income=False)
+        db.add(cat)
+        db.commit()
+    finally:
+        db.close()
+
+    blocked = await do_manage_finance(
+        json.dumps({"action": "set_budget", "category_id": "cat-bud", "limit_cents": 50000}),
+        owner=owner,
+        session_id="sess-bud",
+    )
+    assert blocked.get("exit_code") == 1
+
+    token, _ = mint_confirmation(
+        session_id="sess-bud",
+        owner=owner,
+        domain="finance",
+        tool_name="manage_finance",
+        action="set_budget",
+        payload={"category_id": "cat-bud", "month": __import__("datetime").date.today().strftime("%Y-%m"), "limit_cents": 50000},
+    )
+    approve_pending_choice(token=token, session_id="sess-bud", owner=owner, choice="Yes")
+
+    ok = await do_manage_finance(
+        json.dumps({
+            "action": "set_budget",
+            "category_id": "cat-bud",
+            "limit_cents": 50000,
+            "confirmation_token": token,
+        }),
+        owner=owner,
+        session_id="sess-bud",
+    )
+    assert ok.get("exit_code") == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+@pytest.mark.area_security
+async def test_manage_finance_auto_approve_skips_confirmation(finance_tool_env, monkeypatch):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        acct = FinanceAccount(
+            id="acct-auto",
+            owner=owner,
+            name="Checking",
+            account_type="checking",
+        )
+        cat = FinanceCategory(
+            id="cat-auto-1111-2222-3333-444455556666",
+            owner=owner,
+            name="Food",
+            is_income=False,
+        )
+        tx = FinanceTransaction(
+            id="tx-auto-aaaa-bbbb-cccc-ddddeeeeffff",
+            owner=owner,
+            account_id=acct.id,
+            date=__import__("datetime").date(2026, 6, 30),
+            amount_cents=-900,
+            payee="COFFEE SHOP",
+            dedup_hash="coffee-auto",
+        )
+        db.add_all([acct, cat, tx])
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "src.confirmation_gates.core.auto_approve_finance_enabled",
+        lambda user: user == owner,
+    )
+
+    result = await do_manage_finance(
+        json.dumps({
+            "action": "categorize_transaction",
+            "transaction_id": "tx-auto",
+            "category_id": "cat-auto",
+        }),
+        owner=owner,
+        session_id="sess-auto",
+    )
+    assert result.get("exit_code") == 0
+    assert "Food" in (result.get("response") or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_invalid_limit_returns_structured_error(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    result = await do_manage_finance(
+        json.dumps({"action": "list_transactions", "limit": "not-a-number"}),
+        owner=owner,
+    )
+    assert result.get("exit_code") == 1
+    assert "invalid argument value" in (result.get("error") or "").lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_suggest_categories(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        acct = FinanceAccount(id="acct-s", owner=owner, name="Checking", account_type="checking")
+        db.add(acct)
+        for i in range(3):
+            db.add(FinanceTransaction(
+                id=f"tx-s-{i}",
+                owner=owner,
+                account_id=acct.id,
+                date=__import__("datetime").date(2026, 5, i + 1),
+                amount_cents=-1500,
+                payee="NETFLIX.COM",
+                dedup_hash=f"nf-{i}",
+                bank_category="Entertainment",
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+    result = await do_manage_finance(json.dumps({"action": "suggest_categories"}), owner=owner)
+    assert result.get("exit_code") == 0
+    assert "NETFLIX" in (result.get("response") or "")
+    assert "create_rule" in (result.get("response") or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_create_rule_auto_applies_existing(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        acct = FinanceAccount(id="acct-rule", owner=owner, name="Checking", account_type="checking")
+        cat = FinanceCategory(id="cat-rule", owner=owner, name="Streaming", is_income=False)
+        tx = FinanceTransaction(
+            id="tx-rule-1",
+            owner=owner,
+            account_id=acct.id,
+            date=__import__("datetime").date(2026, 6, 1),
+            amount_cents=-1599,
+            payee="NETFLIX.COM",
+            dedup_hash="nf-rule-1",
+        )
+        db.add_all([acct, cat, tx])
+        db.commit()
+    finally:
+        db.close()
+
+    token, _ = mint_confirmation(
+        session_id="sess-rule",
+        owner=owner,
+        domain="finance",
+        tool_name="manage_finance",
+        action="create_rule",
+        payload={"pattern": "NETFLIX", "category_id": "cat-rule", "priority": 100},
+    )
+    approve_pending_choice(token=token, session_id="sess-rule", owner=owner, choice="Yes")
+
+    result = await do_manage_finance(
+        json.dumps({
+            "action": "create_rule",
+            "pattern": "NETFLIX",
+            "category_id": "cat-rule",
+            "priority": 100,
+            "confirmation_token": token,
+        }),
+        owner=owner,
+        session_id="sess-rule",
+    )
+    assert result.get("exit_code") == 0
+    assert "Categorized 1 existing" in (result.get("response") or "")
+
+    db = finance_tool_env["session_factory"]()
+    try:
+        refreshed = db.query(FinanceTransaction).filter_by(id="tx-rule-1").one()
+        assert refreshed.category_id == "cat-rule"
+    finally:
+        db.close()

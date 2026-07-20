@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections import Counter
+from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -13,6 +15,7 @@ from integrations.finance.models import (
     FinanceCategorizationRule,
     FinanceTransaction,
 )
+from integrations.finance.services.parsers import _normalize_payee
 
 
 DEFAULT_CATEGORIES = [
@@ -145,7 +148,7 @@ def apply_rules_to_transactions(db: Session, owner: str, transactions: list[Fina
     rules = (
         db.query(FinanceCategorizationRule)
         .filter(FinanceCategorizationRule.owner == owner)
-        .order_by(FinanceCategorizationRule.priority.desc(), FinanceCategorizationRule.created_at.asc())
+        .order_by(FinanceCategorizationRule.priority.asc(), FinanceCategorizationRule.created_at.asc())
         .all()
     )
     if not rules:
@@ -234,3 +237,108 @@ def create_category_for_owner(
     db.add(cat)
     db.commit()
     return cat
+
+
+def list_rules_for_owner(db: Session, owner: str) -> list[FinanceCategorizationRule]:
+    return (
+        db.query(FinanceCategorizationRule)
+        .filter(FinanceCategorizationRule.owner == owner)
+        .order_by(FinanceCategorizationRule.priority.asc(), FinanceCategorizationRule.created_at.asc())
+        .all()
+    )
+
+
+def create_rule_for_owner(
+    db: Session,
+    owner: str,
+    *,
+    pattern: str,
+    category_id: str,
+    priority: int = 100,
+) -> FinanceCategorizationRule:
+    clean_pattern = pattern.strip()
+    if not clean_pattern:
+        raise ValueError("Rule pattern is required")
+    cat = (
+        db.query(FinanceCategory)
+        .filter(FinanceCategory.id == category_id, FinanceCategory.owner == owner)
+        .first()
+    )
+    if not cat:
+        raise ValueError("Category not found")
+    rule = FinanceCategorizationRule(
+        id=str(uuid.uuid4()),
+        owner=owner,
+        pattern=clean_pattern,
+        category_id=category_id,
+        priority=int(priority),
+    )
+    db.add(rule)
+    db.commit()
+    return rule
+
+
+def delete_rule_for_owner(db: Session, owner: str, rule_id: str) -> None:
+    rule = (
+        db.query(FinanceCategorizationRule)
+        .filter(FinanceCategorizationRule.id == rule_id, FinanceCategorizationRule.owner == owner)
+        .first()
+    )
+    if not rule:
+        raise ValueError("Rule not found")
+    db.delete(rule)
+    db.commit()
+
+
+def suggest_category_groups(db: Session, owner: str, *, months: int = 6) -> dict:
+    """Group uncategorized transactions by normalized payee for agent suggestions."""
+    cutoff = date.today() - timedelta(days=months * 31)
+    txs = (
+        db.query(FinanceTransaction)
+        .filter(
+            FinanceTransaction.owner == owner,
+            FinanceTransaction.category_id.is_(None),
+            FinanceTransaction.date >= cutoff,
+        )
+        .all()
+    )
+    groups: dict[str, list[FinanceTransaction]] = {}
+    for tx in txs:
+        key = _normalize_payee(tx.payee or "")
+        if not key:
+            continue
+        groups.setdefault(key, []).append(tx)
+
+    ranked = sorted(
+        ((key, group) for key, group in groups.items() if len(group) >= 2),
+        key=lambda item: len(item[1]),
+        reverse=True,
+    )[:20]
+
+    hints: Counter[str] = Counter()
+    for tx in txs:
+        if tx.bank_category:
+            hints[tx.bank_category.strip()] += 1
+
+    cats = db.query(FinanceCategory).filter(FinanceCategory.owner == owner).all()
+    category_names = [c.name for c in ordered_category_list(cats)]
+
+    suggestions = []
+    for key, group in ranked:
+        bank_hints = sorted(
+            {tx.bank_category.strip() for tx in group if tx.bank_category},
+        )
+        suggestions.append({
+            "normalized_payee": key,
+            "display_payee": max((tx.payee or "" for tx in group), key=len),
+            "transaction_count": len(group),
+            "total_cents": sum(tx.amount_cents for tx in group),
+            "bank_category_hints": bank_hints,
+            "sample_dates": sorted({tx.date.isoformat() for tx in group})[:3],
+        })
+
+    return {
+        "suggestions": suggestions,
+        "owner_categories": category_names,
+        "top_bank_hints": [h for h, _ in hints.most_common(5)],
+    }
