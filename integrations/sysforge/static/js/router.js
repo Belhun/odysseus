@@ -167,7 +167,7 @@ function _ensureEntry(routeKey, params) {
       _host.appendChild(el);
     }
     def.mount(el, normalized);
-    entry = { el, lastUsed: 0, routeKey: key };
+    entry = { el, lastUsed: ++_clock, routeKey: key };
     _cache.set(cacheKey, entry);
     _evictIfNeeded();
   }
