@@ -587,6 +587,7 @@ GENERIC LOOPBACK to allowed Odysseus internal endpoints. Use this whenever the u
 - Research: `/api/research/start`, `/api/research/tasks` (note: `/api/research/report/{id}` renders HTML — to READ a report's text use the `manage_research` tool with `action:read`, not this endpoint)
 - Compare: `/api/compare/sessions`, `/api/compare/start`
 - Email: use named email tools (`list_email_accounts`, `list_emails`, `read_email`, `send_email`, `reply_to_email`). Do NOT use `/api/email/accounts`; it is owner-filtered in tool context and may falsely return empty.
+- Business Management (SysForge plugin, requires Integrations install): `/api/sysforge/*` — clients, invoices, outstanding, client/placeholder merge, parts, suppliers, projects, work orders, drafts, payments, settings, diagnostics, backup. Discover with `{"action":"endpoints","filter":"sysforge"}`. Examples: `GET /api/sysforge/clients/search?q=...`, `POST /api/sysforge/invoices`, `GET /api/sysforge/invoices/outstanding`, `POST /api/sysforge/clients/merge`. JSON body only — photo/screw-map uploads and backup file import need the UI.
 - Endpoints (model providers): `/api/endpoints`, `/api/endpoints/{id}`
 - Shell: do NOT use `app_api` for `/api/shell/*`; use named command tooling instead.
 
