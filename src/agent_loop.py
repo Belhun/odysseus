@@ -548,6 +548,23 @@ For "how much did I spend on groceries" use `spending_report` (defaults to curre
 For specific payees use `list_transactions` with `search` (max 50 rows). \
 New categories: use ask_user with a `confirmation` block. For multiple categories, include an `items` array in `confirmation.payload` (each item: name, optional parent_id/color). After approval, either call `create_categories` once with the full `categories` array, or call `create_category` repeatedly with the same `confirmation_token` until every approved item is created. Use `parent_id` for subcategories (one level under a top-level category). \
 Bank CSV/OFX import has no tool path — `ui_control open_panel finance` opens the Import UI.""",
+    "manage_sysforge": """\
+```manage_sysforge
+{"action": "outstanding_list"}
+```
+SysForge Business shop tool — clients, invoices, parts, projects, payments, settings. \
+Prefer over app_api for ALL /api/sysforge work. \
+Reads: `client_search`, `outstanding_list`, `invoice_get`, `part_search`, `report_sales`. \
+Writes: `invoice_validate` → `invoice_preview` → `invoice_create`. \
+Gated (need ask_user confirmation_token): `payment_record`, `client_merge`, `invoice_delete`, `invoice_email`. \
+Multipart: `stage_upload` with path → `upload_token` → `project_photo_add`. \
+Help: `{"action":"action_help","topic":"client_merge"}`. \
+UI: `ui_control open_panel business route=invoices-outstanding`.""",
+    "stage_upload": """\
+```stage_upload
+{"path": "workspace/photo.jpg", "purpose": "project_photo"}
+```
+Stage a workspace file for SysForge multipart commits. Returns upload_token for manage_sysforge.""",
     "create_session": "- ```create_session``` — Create a new chat. Line 1 = chat name, line 2 = model name. Use for background/parallel work.",
     "list_sessions": "- ```list_sessions``` — List chats sorted MOST-RECENT FIRST (the UI calls them 'chats') with clickable chat-title links. Output includes a relative \"last active\" timestamp per row, so the first row is the user's most recent chat. Content = optional filter keyword (matches chat name). When answering, preserve the `[title](#session-id)` links exactly; do not convert them into plain text.",
     "send_to_session": "- ```send_to_session``` — Send a message to another session. Line 1 = session_id, rest = message. Use for orchestrating work across sessions.",

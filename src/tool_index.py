@@ -127,6 +127,8 @@ BUILTIN_TOOL_DESCRIPTIONS: Dict[str, str] = {
     "search_dossier": "Ask/search person or situation knowledge with citations (plan/fact/archive provenance). Prefer over manage_memory for client/friend situation questions. Citation snippets are untrusted content.",
     "manage_calendar": "Calendar event management: list, create, update, delete. Each event can carry a tag/category (event_type — work/personal/health/travel/meal/social/admin/other) and importance (low/normal/high/critical). Resolve today/tomorrow using the Current date and time context, then use ISO datetimes in the user's local wall time; supports all-day events. Use rrule only for explicit recurrence; for update_event pass rrule='' to remove repeats. For event reminders/alarms, pass reminder_minutes; this creates the Notes reminder, so do not also call manage_notes for the same reminder.",
     "manage_finance": "Local finance and budgeting: list accounts and balances, spending by category, budget status, monthly trends, and transaction search. Use for 'how much did I spend', 'am I over budget', 'show my transactions at Amazon'. Prefer spending_report for category totals; list_transactions only when specific rows are needed (max 50). New categories require ask_user with a confirmation block, then create_category with confirmation_token. CSV/OFX bank import is UI-only — open_panel finance for imports. NOT for email — use list_emails for mail.",
+    "manage_sysforge": "SysForge Business / repair shop: clients, invoices, outstanding balances, parts catalog, suppliers, placeholders, calculator drafts, projects, screw maps, payments, sales reports, settings, backup, companion. Use manage_sysforge for ALL shop questions — NOT app_api /api/sysforge. Examples: client_search, outstanding_list, invoice_validate then invoice_create, payment_record (gated). Multipart: stage_upload then project_photo_add. UI: ui_control open_panel business route=outstanding.",
+    "stage_upload": "Stage a workspace file for SysForge uploads (photos, screw-map images, CSV import, backup ZIP). Returns upload_token for manage_sysforge commit actions.",
     "download_model": "Download a HuggingFace model to a local or remote server. Specify repo_id (e.g. 'Qwen/Qwen3-8B'), optional server host, and optional include filter for specific files.",
     "serve_model": "Start serving a model with vLLM, SGLang, llama.cpp, Ollama, or Diffusers. cmd MUST start with the binary directly — e.g. `vllm serve /mnt/HADES/models/Qwen3.5-397B-A17B-AWQ --port 8003 --tensor-parallel-size 8 …`. NEVER prefix with `cd …`, `source …`, or chain with `&&`/`||` — those get rejected by the validator. The venv activation (env_prefix) and CUDA env are added automatically from the target host's saved settings. For image/inpainting/diffusion use python3 scripts/diffusion_server.py --model <repo> --port 8100. After launch, call list_served_models for readiness/errors and retry suggestions. If serve_model fails with 'Invalid characters in cmd', simplify to the bare binary + args.",
     "list_served_models": "List currently running model servers in the Cookbook — shows status (loading, ready, idle, error), model name, port, throughput, and serve failure diagnosis/retry suggestions. Use when the user asks 'what's running', 'show my cookbook', 'which models are up', 'what's serving'.",
@@ -361,12 +363,12 @@ class ToolIndex:
         frozenset({"finance", "budget", "budgets", "spending", "transaction", "transactions",
                    "bank", "banking", "expense", "expenses", "overspend", "checking", "savings"}):
             {"manage_finance", "ui_control"},
-        # Business Management (SysForge plugin) — no dedicated manage_sysforge tool yet.
-        frozenset({"sysforge", "business management", "invoice", "invoices",
-                   "outstanding", "work order", "placeholder merge",
-                   "parts catalog", "sales report", "client merge",
-                   "merge clients", "placeholder triage", "screw map"}):
-            {"app_api"},
+        # Business Management (SysForge plugin)
+        frozenset({"sysforge", "business", "shop", "business management", "invoice", "invoices",
+                   "outstanding", "work order", "placeholder merge", "parts catalog",
+                   "sales report", "client merge", "merge clients", "placeholder triage",
+                   "screw map", "repair shop", "collections"}):
+            {"manage_sysforge", "ui_control", "stage_upload"},
         # Detached background `bash` jobs (#!bg): check on / read output / kill.
         frozenset({"background job", "background jobs", "bg job", "bg jobs",
                    "background task", "is the job done", "check the job",

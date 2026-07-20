@@ -15,6 +15,7 @@ from typing import Optional
 from src.agent_tools import ToolBlock, TOOL_TAGS
 from src.tool_parsing import _TOOL_NAME_MAP
 from src.tool_security import BUILTIN_EMAIL_TOOLS
+from src.tools.sysforge_constants import ALL_ACTIONS as SYSFORGE_ACTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -649,6 +650,74 @@ FUNCTION_TOOL_SCHEMAS = [
                     "priority": {"type": "integer", "description": "Rule priority for create_rule"},
                 },
                 "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_sysforge",
+            "description": (
+                "SysForge Business shop tool: clients, invoices, outstanding balances, parts, "
+                "suppliers, placeholders, drafts, projects, screw maps, payments, settings, backup, "
+                "and companion status. Prefer this over app_api for all /api/sysforge/* work. "
+                "Use action_help for field docs. Destructive/financial actions need ask_user "
+                "confirmation_token. Multipart uploads: stage_upload then commit action with upload_token. "
+                "Open the Business UI: ui_control open_panel business route=<view>."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": list(SYSFORGE_ACTIONS),
+                        "description": "Business action (entity_verb). Use action_help first when unsure.",
+                    },
+                    "topic": {"type": "string", "description": "For action_help: action name or domain"},
+                    "confirmation_token": {"type": "string", "description": "From ask_user for gated T2+ actions"},
+                    "q": {"type": "string", "description": "Search query"},
+                    "client_id": {"type": "integer"},
+                    "invoice_id": {"type": "integer"},
+                    "part_id": {"type": "integer"},
+                    "supplier_id": {"type": "integer"},
+                    "project_id": {"type": "integer"},
+                    "draft_id": {"type": "string"},
+                    "payment_id": {"type": "integer"},
+                    "person_id": {"type": "string", "description": "Dossier person for client_link_dossier"},
+                    "line_items": {"type": "array", "items": {"type": "object"}},
+                    "draft": {"type": "object", "description": "DraftDocument shape for invoice validate/create"},
+                    "dry_run": {"type": "boolean"},
+                    "batch_id": {"type": "string"},
+                    "upload_token": {"type": "string"},
+                    "rows": {"type": "array", "items": {"type": "object"}},
+                    "amount_cents": {"type": "integer"},
+                    "amount_dollars": {"type": "number"},
+                    "from": {"type": "string", "description": "Report date from YYYY-MM-DD"},
+                    "to": {"type": "string", "description": "Report date to YYYY-MM-DD"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stage_upload",
+            "description": (
+                "Stage a file from the agent workspace for SysForge multipart commits "
+                "(project photos, screw-map images, parts CSV, backup ZIP). "
+                "Returns upload_token for manage_sysforge commit actions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Workspace file path to stage"},
+                    "purpose": {
+                        "type": "string",
+                        "enum": ["generic", "project_photo", "screw_map_image", "parts_csv", "backup_zip"],
+                    },
+                },
+                "required": ["path"],
             },
         },
     },

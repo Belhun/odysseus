@@ -564,4 +564,18 @@ export default {
   isSysforgeFeatureOn,
   sysforgeShortcutTarget,
   runSysforgeShortcut,
+  navigateBusiness,
 };
+
+export function navigateBusiness(route, entityId) {
+  if (!route && !entityId) {
+    router.goHome();
+    return;
+  }
+  const params = {};
+  if (entityId != null && entityId !== '') {
+    params.id = String(entityId);
+  }
+  const routeKey = route || 'dashboard';
+  router.navigate(routeKey, { params, replace: false });
+}
