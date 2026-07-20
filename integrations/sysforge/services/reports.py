@@ -219,8 +219,66 @@ def _iso(value: Any) -> str | None:
         return str(value)
 
 
+def aging_report(*, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Bucket outstanding invoices by days since DateCreated (no DueDate column)."""
+    from datetime import datetime, timezone
+
+    from integrations.sysforge.services import payments as payments_service
+
+    own = conn is None
+    if own:
+        conn = db_connection.connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT i.Id, i.ClientId, i.Name, i.Status, i.DateCreated, i.FinalTotalCents
+            FROM Invoices i
+            WHERE IFNULL(i.IsDeleted, 0) = 0
+            """
+        ).fetchall()
+        buckets: dict[str, list[dict[str, Any]]] = {
+            "current": [],
+            "30": [],
+            "60": [],
+            "90_plus": [],
+        }
+        now = datetime.now(timezone.utc)
+        for r in rows:
+            iid = int(r["Id"])
+            total = int(r["FinalTotalCents"] or 0)
+            paid = payments_service.paid_cents(iid, conn=conn)
+            balance = total - paid
+            if balance <= 0:
+                continue
+            try:
+                created = utc.parse_storage(str(r["DateCreated"]))
+            except ValueError:
+                created = now
+            days = (now - utc.to_utc(created)).days
+            item = {
+                "invoice_id": iid,
+                "client_id": r["ClientId"],
+                "name": r["Name"],
+                "balance_cents": balance,
+                "days_old": days,
+            }
+            if days < 30:
+                buckets["current"].append(item)
+            elif days < 60:
+                buckets["30"].append(item)
+            elif days < 90:
+                buckets["60"].append(item)
+            else:
+                buckets["90_plus"].append(item)
+        return {"buckets": buckets}
+    finally:
+        if own:
+            conn.close()
+
+
 __all__ = [
     "ReportValidationError",
     "sales_report",
     "sales_report_csv",
+    "aging_report",
 ]

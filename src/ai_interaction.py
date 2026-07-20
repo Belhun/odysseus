@@ -812,15 +812,49 @@ async def do_ui_control(content: str, session_id: Optional[str] = None, owner: O
             "budget": "finance",
             "budgets": "finance",
             "money": "finance",
+            "business": "business",
+            "sysforge": "business",
+            "shop": "business",
+            "calculator": "business",
+            "outstanding": "business",
+            "parts": "business",
+            "projects": "business",
+            "drafts": "business",
+            "diagnostics": "business",
+            "settings-business": "business",
+            "merge-clients": "business",
+            "placeholders": "business",
         }
         target = _panel_aliases.get(panel)
         if not target:
-            return {"error": f"Unknown panel '{panel}'. Valid: documents, gallery, email, sessions, notes, memories, skills, settings, cookbook, finance."}
-        return {
+            return {"error": f"Unknown panel '{panel}'. Valid: documents, gallery, email, sessions, notes, memories, skills, settings, cookbook, finance, business."}
+        result = {
             "ui_event": "open_panel",
             "panel": target,
             "results": f"Opening {target} panel",
         }
+        if target == "business":
+            route = None
+            entity_id = None
+            if len(parts) > 2:
+                extra = " ".join(parts[2:]).strip()
+                for token in extra.split():
+                    if token.startswith("route="):
+                        route = token.split("=", 1)[1].strip()
+                    elif token.startswith("id=") or token.startswith("entity_id="):
+                        entity_id = token.split("=", 1)[1].strip()
+            for line in lines[1:]:
+                line = line.strip()
+                for token in line.split():
+                    if token.startswith("route="):
+                        route = token.split("=", 1)[1].strip()
+                    elif token.startswith("id=") or token.startswith("entity_id="):
+                        entity_id = token.split("=", 1)[1].strip()
+            if route:
+                result["route"] = route
+            if entity_id:
+                result["entity_id"] = entity_id
+        return result
 
     elif action == "open_email_reply":
         # Two forms supported:

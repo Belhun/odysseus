@@ -15,6 +15,7 @@ from typing import Optional
 from src.agent_tools import ToolBlock, TOOL_TAGS
 from src.tool_parsing import _TOOL_NAME_MAP
 from src.tool_security import BUILTIN_EMAIL_TOOLS
+from src.tools.sysforge_constants import ALL_ACTIONS as SYSFORGE_ACTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -655,6 +656,74 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "manage_sysforge",
+            "description": (
+                "SysForge Business shop tool: clients, invoices, outstanding balances, parts, "
+                "suppliers, placeholders, drafts, projects, screw maps, payments, settings, backup, "
+                "and companion status. Prefer this over app_api for all /api/sysforge/* work. "
+                "Use action_help for field docs. Destructive/financial actions need ask_user "
+                "confirmation_token. Multipart uploads: stage_upload then commit action with upload_token. "
+                "Open the Business UI: ui_control open_panel business route=<view>."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": list(SYSFORGE_ACTIONS),
+                        "description": "Business action (entity_verb). Use action_help first when unsure.",
+                    },
+                    "topic": {"type": "string", "description": "For action_help: action name or domain"},
+                    "confirmation_token": {"type": "string", "description": "From ask_user for gated T2+ actions"},
+                    "q": {"type": "string", "description": "Search query"},
+                    "client_id": {"type": "integer"},
+                    "invoice_id": {"type": "integer"},
+                    "part_id": {"type": "integer"},
+                    "supplier_id": {"type": "integer"},
+                    "project_id": {"type": "integer"},
+                    "draft_id": {"type": "string"},
+                    "payment_id": {"type": "integer"},
+                    "person_id": {"type": "string", "description": "Dossier person for client_link_dossier"},
+                    "line_items": {"type": "array", "items": {"type": "object"}},
+                    "draft": {"type": "object", "description": "DraftDocument shape for invoice validate/create"},
+                    "dry_run": {"type": "boolean"},
+                    "batch_id": {"type": "string"},
+                    "upload_token": {"type": "string"},
+                    "rows": {"type": "array", "items": {"type": "object"}},
+                    "amount_cents": {"type": "integer"},
+                    "amount_dollars": {"type": "number"},
+                    "from": {"type": "string", "description": "Report date from YYYY-MM-DD"},
+                    "to": {"type": "string", "description": "Report date to YYYY-MM-DD"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stage_upload",
+            "description": (
+                "Stage a file from the agent workspace for SysForge multipart commits "
+                "(project photos, screw-map images, parts CSV, backup ZIP). "
+                "Returns upload_token for manage_sysforge commit actions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Workspace file path to stage"},
+                    "purpose": {
+                        "type": "string",
+                        "enum": ["generic", "project_photo", "screw_map_image", "parts_csv", "backup_zip"],
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "manage_notes",
             "description": "Manage notes and checklists (Google Keep-style): list, view, add, update, delete, toggle_item. Use list/search to find candidate notes, then view with the note id when you need the full body. IMPORTANT: For to-do lists / checklists, set note_type='checklist' and pass the items as the `checklist_items` array — do NOT serialize them into `content` as plain text. For freeform notes, use note_type='note' and put the body in `content`. `due_date` accepts natural language like 'tomorrow at 9am' (parsed in the user's timezone) and fires a notification — do not also create a calendar event for the same reminder.",
             "parameters": {
@@ -1133,12 +1202,12 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "app_api",
-            "description": "Generic loopback to allowed internal Odysseus endpoints. Use this when there's no named tool for what the user wants. Hits the same routes the UI buttons hit (cookbook, gallery, library/documents, memory, notes, calendar, tasks, settings, themes, research, compare, etc.). action='endpoints' returns the OpenAPI surface (use `filter` to narrow). action='call' (default) takes method+path+body. Sensitive auth/user/admin/shell paths and host-control Cookbook mutation routes are blocked for safety. Do not use for shell commands; use named command tooling instead. Do not use for package installs, engine rebuilds, PID signalling, or email account discovery; use list_email_accounts for email accounts because /api/email/accounts is owner-filtered in tool context.",
+            "description": "Generic loopback to allowed internal Odysseus endpoints. Use this when there's no named tool for what the user wants. Hits the same routes the UI buttons hit (cookbook, gallery, library/documents, memory, notes, calendar, tasks, settings, themes, research, compare, Business Management at /api/sysforge/*, etc.). action='endpoints' returns the OpenAPI surface (use `filter` to narrow, e.g. filter='sysforge'). action='call' (default) takes method+path+body (JSON only). Sensitive auth/user/admin/shell paths and host-control Cookbook mutation routes are blocked for safety. Do not use for shell commands; use named command tooling instead. Do not use for package installs, engine rebuilds, PID signalling, or email account discovery; use list_email_accounts for email accounts because /api/email/accounts is owner-filtered in tool context.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["call", "endpoints"], "description": "'call' to hit an endpoint, 'endpoints' to list what's available"},
-                    "path": {"type": "string", "description": "Endpoint path starting with /api/ (e.g. '/api/cookbook/gpus', '/api/gallery/list', '/api/calendar/events')"},
+                    "path": {"type": "string", "description": "Endpoint path starting with /api/ (e.g. '/api/cookbook/gpus', '/api/gallery/list', '/api/calendar/events', '/api/sysforge/clients/search')"},
                     "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"], "description": "HTTP method (default GET)"},
                     "body": {"type": "object", "description": "JSON request body for POST/PUT/PATCH"},
                     "query": {"type": "object", "description": "Querystring params as a key-value object"},

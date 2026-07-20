@@ -451,7 +451,7 @@ function _getModal() {
 
 function _initShell() {
   if (_shellReady) return;
-  const host = _el('sysforge-view-host');
+  const host = _modal?.querySelector('#sysforge-view-host') || _el('sysforge-view-host');
   if (!host) return;
   _registerRoutes();
   router.mount(host, { onChange: _syncChrome });
@@ -545,7 +545,9 @@ export async function openSysforge() {
     railBtnId: 'rail-sysforge',
     sidebarBtnId: 'tool-sysforge-btn',
     closeFn: () => closeSysforge(),
-    restoreFn: () => {},
+    restoreFn: () => {
+      if (_shellReady) router.activateCurrent();
+    },
   });
 }
 
@@ -562,4 +564,18 @@ export default {
   isSysforgeFeatureOn,
   sysforgeShortcutTarget,
   runSysforgeShortcut,
+  navigateBusiness,
 };
+
+export function navigateBusiness(route, entityId) {
+  if (!route && !entityId) {
+    router.goHome();
+    return;
+  }
+  const params = {};
+  if (entityId != null && entityId !== '') {
+    params.id = String(entityId);
+  }
+  const routeKey = route || 'dashboard';
+  router.navigate(routeKey, { params, replace: false });
+}

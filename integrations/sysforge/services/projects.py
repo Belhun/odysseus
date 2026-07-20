@@ -642,6 +642,31 @@ def get_photos(project_id: int, *, conn: sqlite3.Connection | None = None) -> di
             conn.close()
 
 
+def read_photo_file(project_id: int, photo_id: int) -> tuple[Path, str | None]:
+    """Return resolved file path and mime for a project attachment."""
+    conn = db_connection.connect()
+    try:
+        row = conn.execute(
+            """
+            SELECT FilePath, MimeType, ProjectId FROM ProjectAttachments
+            WHERE Id = ? AND ProjectId = ?
+            """,
+            (photo_id, project_id),
+        ).fetchone()
+        if row is None:
+            raise ProjectNotFoundError(f"Photo {photo_id} not found on project {project_id}")
+        raw = Path(str(row["FilePath"]))
+        root = attachments_root().resolve()
+        resolved = raw.resolve()
+        if not str(resolved).startswith(str(root)):
+            raise ProjectError("Invalid photo path")
+        if not resolved.is_file():
+            raise ProjectError("Photo file missing on disk")
+        return resolved, row["MimeType"]
+    finally:
+        conn.close()
+
+
 def add_photo(
     project_id: int,
     phase: str,

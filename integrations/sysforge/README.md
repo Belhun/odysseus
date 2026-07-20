@@ -242,6 +242,60 @@ LAN browser upload (Method A) + inbox folder (Method B) + Tailscale/HTTPS config
 - **Notes (P4 light):** markdown toolbar + live preview on First contact / Client issue / Repair plan. Still explicit **Save notes**. Full Obsidian/PDF-in-notes deferred.
 - **Inventory light (P6):** `PartStock` (`0033`); `GET`/`PUT`/`PATCH /parts/{id}/stock`; catalog On hand field; project parts show stock badges; soft-reserve on create-from-invoice / release on archive.
 
+## Agent tooling (Odysseus AI)
+
+Agents use dedicated tools instead of raw `app_api` for `/api/sysforge/*`. `app_api` blocks all SysForge paths and redirects to `manage_sysforge`.
+
+| Tool | Purpose |
+|------|---------|
+| `manage_sysforge` | Single shop surface (~110 actions): clients, invoices, parts, suppliers, placeholders, drafts, projects, payments, settings, backup, companion |
+| `stage_upload` | Stage a workspace file → `upload_token` for multipart commits |
+| `ui_control` | Open Business panel: `open_panel business route=<shell-route> id=<entity>` |
+| `ask_user` | Mint `confirmation_token` for gated mutations (T2+) |
+
+### `manage_sysforge` workflow
+
+1. `action_help` with a topic (`clients`, `invoices`, `part_import`, …) for tier and payload shape.
+2. Read actions (T0): `client_search`, `outstanding_list`, `invoice_validate`, `backup_restore_preview`, `invoice_batch_validate`, `suggest_payment_plan` (advisory only).
+3. Bulk/financial writes (T2): always `dry_run: true` first → `ask_user` with preview → same action with `confirmation_token` (+ `batch_id` when returned).
+4. Catastrophic admin (T4): `backup_restore` needs token + explicit user phrase.
+
+### `stage_upload` → commit
+
+| `purpose` | Commit action | API |
+|-----------|---------------|-----|
+| `project_photo` | `project_photo_add` | `POST /projects/{id}/photos` |
+| `backup_zip` | `backup_restore` | `POST /backup/restore` (multipart) |
+| `parts_csv` | `part_import` (`rows` from parsed CSV) | `POST /parts/import` |
+| `screw_map_image` | `screw_map_image_add` (phase 4) | `POST /screw-maps/{id}/images` |
+
+Example: stage backup ZIP, preview manifest, gated restore:
+
+```json
+{"path": "/workspace/sysforge-backup.zip", "purpose": "backup_zip"}
+→ upload_token
+
+{"action": "backup_restore_preview", "backup_id": "<listed id>"}
+
+{"action": "backup_restore", "upload_token": "<token>", "confirmation_token": "<from ask_user>"}
+```
+
+### Bulk API routes (agent-backed)
+
+| Method | Path | Tool action |
+|--------|------|-------------|
+| `POST` | `/suppliers/bulk` | `supplier_bulk_upsert` |
+| `POST` | `/placeholders/bulk-convert` | `placeholder_bulk_convert` |
+| `POST` | `/invoices/batch` | `invoice_batch_create` |
+| `GET` | `/backup/{id}/manifest` | `backup_restore_preview` |
+
+### Deferred (documented, not wired)
+
+- `payment_plan_create` / `payment_plan_list` / `payment_plan_record` — needs schema migration; use `suggest_payment_plan` for advisory schedules until then.
+- `business_navigate` — ui_hint wrapper (phase 7 stub).
+
+Confirmation gate registry: `integrations/sysforge/confirmation_gate.py` + `src/confirmation_gates/sysforge.py`.
+
 ## Drafts (file-based)
 
 - Folder: `data/plugins/sysforge/drafts/` (`draft_{uuid}.json`, rotating `autosave_1..3.json`).
