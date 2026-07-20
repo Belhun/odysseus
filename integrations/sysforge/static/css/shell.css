@@ -93,22 +93,28 @@
 }
 
 #sysforge-modal .sysforge-card-grid {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
+  align-items: stretch;
 }
 
 #sysforge-modal .sysforge-card-wrap {
   position: relative;
-  width: min(240px, 100%);
+  display: flex;
+  width: 100%;
+  min-height: 96px;
 }
 
 #sysforge-modal .sysforge-card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  justify-content: flex-start;
   gap: 6px;
   width: 100%;
+  height: 100%;
+  min-height: 96px;
   padding: 14px 16px;
   padding-right: 36px;
   text-align: left;
@@ -153,11 +159,19 @@
 #sysforge-modal .sysforge-card-title {
   font-weight: 600;
   font-size: 0.95rem;
+  line-height: 1.25;
+  padding-right: 4px;
 }
 
 #sysforge-modal .sysforge-card-preview {
   font-size: 0.8rem;
   opacity: 0.7;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
 }
 
 #sysforge-modal .sysforge-placeholder-body {
