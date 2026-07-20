@@ -67,15 +67,26 @@ export function mountScrewMapView(container, deps) {
             <span id="sysforge-sm-locked" class="sysforge-sm-locked" hidden>Locked (read-only)</span>
           </div>
           <p class="sysforge-dashboard-lead">
-            Click the image to place the next screw. Details autosave as you type.
-            Ctrl+Z undoes edits for this screw. Escape shows the full screw list.
+            Click the image to place the next screw (or switch Place mode to Note).
+            Right-click always places a note. Wheel zooms; Alt-drag or middle-drag pans.
+            Details autosave as you type. Ctrl+Z undoes edits for this screw.
+            Escape shows the full screw list.
           </p>
+          <div class="sysforge-sm-place-mode" id="sysforge-sm-place-mode">
+            <span>Place:</span>
+            <button type="button" class="btn-secondary is-active" data-mode="screw"
+              id="sysforge-sm-mode-screw">Screw</button>
+            <button type="button" class="btn-secondary" data-mode="note"
+              id="sysforge-sm-mode-note">Note</button>
+          </div>
           <div id="sysforge-sm-canvas-host" class="sysforge-sm-canvas-host"></div>
         </div>
         <aside class="sysforge-sm-side" aria-label="Screw details">
           <div id="sysforge-sm-list-panel">
             <h5>Screws</h5>
             <ul id="sysforge-sm-screw-list" class="sysforge-hub-list"></ul>
+            <h5 class="sysforge-sm-notes-heading">Notes on this photo</h5>
+            <ul id="sysforge-sm-note-list" class="sysforge-hub-list"></ul>
           </div>
           <div id="sysforge-sm-detail-panel" hidden>
             <h5>Screw <span id="sysforge-sm-detail-num"></span></h5>
@@ -94,9 +105,41 @@ export function mountScrewMapView(container, deps) {
             <label class="sysforge-field"><span>Head Ø (mm)</span>
               <input type="number" step="0.01" id="sysforge-sm-head" /></label>
             <p class="sysforge-sm-save-status" id="sysforge-sm-save-status"></p>
+            <button type="button" class="btn-secondary" id="sysforge-sm-delete-screw">
+              Delete screw
+            </button>
             <button type="button" class="btn-secondary" id="sysforge-sm-clear-sel">
               Show screw list
             </button>
+          </div>
+          <div id="sysforge-sm-note-detail-panel" hidden>
+            <h5>Note marker</h5>
+            <label class="sysforge-field"><span>Note text</span>
+              <textarea id="sysforge-sm-note-text" rows="4"></textarea></label>
+            <p class="sysforge-sm-save-status" id="sysforge-sm-note-save-status"></p>
+            <button type="button" class="btn-secondary" id="sysforge-sm-delete-note">
+              Delete note
+            </button>
+            <button type="button" class="btn-secondary" id="sysforge-sm-clear-note-sel">
+              Show lists
+            </button>
+          </div>
+          <div class="sysforge-sm-lookup" id="sysforge-sm-lookup">
+            <h5>Find by measurements</h5>
+            <p class="sysforge-dashboard-lead">
+              Enter ≥1 value. Top 3 matches; click to select (never auto-assigned).
+            </p>
+            <label class="sysforge-field"><span>Length (mm)</span>
+              <input type="number" step="0.01" id="sysforge-sm-lookup-length" /></label>
+            <label class="sysforge-field"><span>Shaft Ø (mm)</span>
+              <input type="number" step="0.01" id="sysforge-sm-lookup-shaft" /></label>
+            <label class="sysforge-field"><span>Head Ø (mm)</span>
+              <input type="number" step="0.01" id="sysforge-sm-lookup-head" /></label>
+            <button type="button" class="btn-secondary" id="sysforge-sm-lookup-go">
+              Find matches
+            </button>
+            <p class="sysforge-sm-lookup-status" id="sysforge-sm-lookup-status"></p>
+            <ul id="sysforge-sm-lookup-results" class="sysforge-hub-list"></ul>
           </div>
         </aside>
       </div>
@@ -118,16 +161,23 @@ export function mountScrewMapView(container, deps) {
     projectId: null,
     map: null,
     screws: [],
+    notes: [],
     imageIndex: 0,
     selectedId: null,
+    selectedKind: null,
+    placeMode: 'screw',
     dirty: false,
+    noteDirty: false,
     debounceTimer: null,
+    noteDebounceTimer: null,
     intervalTimer: null,
     saving: false,
+    noteSaving: false,
     undoStack: [],
     sessionBaseline: null,
     lastAnchor: null,
     applyingForm: false,
+    applyingNoteForm: false,
     canvas: null,
   };
   container._sysforgeScrewMap = st;
@@ -185,11 +235,28 @@ export function mountScrewMapView(container, deps) {
     return st.screws.filter((s) => s.screw_map_image_id === img.id);
   }
 
+  function notesForCurrent() {
+    const img = currentImage();
+    if (!img) return [];
+    return st.notes.filter((n) => n.screw_map_image_id === img.id);
+  }
+
   function showList(show) {
     const list = el('#sysforge-sm-list-panel');
     const detail = el('#sysforge-sm-detail-panel');
+    const noteDetail = el('#sysforge-sm-note-detail-panel');
     if (list) list.hidden = !show;
     if (detail) detail.hidden = show;
+    if (noteDetail) noteDetail.hidden = true;
+  }
+
+  function showNoteDetail(show) {
+    const list = el('#sysforge-sm-list-panel');
+    const detail = el('#sysforge-sm-detail-panel');
+    const noteDetail = el('#sysforge-sm-note-detail-panel');
+    if (list) list.hidden = show;
+    if (detail) detail.hidden = true;
+    if (noteDetail) noteDetail.hidden = !show;
   }
 
   function fillDetail(screw) {
@@ -211,7 +278,35 @@ export function mountScrewMapView(container, deps) {
     Object.values(f).forEach((input) => {
       if (input) input.disabled = disabled;
     });
+    const del = /** @type {HTMLButtonElement|null} */ (el('#sysforge-sm-delete-screw'));
+    if (del) del.disabled = disabled;
     st.applyingForm = false;
+  }
+
+  function fillNoteDetail(note) {
+    st.applyingNoteForm = true;
+    const ta = /** @type {HTMLTextAreaElement|null} */ (el('#sysforge-sm-note-text'));
+    if (ta) {
+      ta.value = note.note_text || '';
+      ta.disabled = isLocked();
+    }
+    const del = /** @type {HTMLButtonElement|null} */ (el('#sysforge-sm-delete-note'));
+    if (del) del.disabled = isLocked();
+    st.applyingNoteForm = false;
+    st.noteDirty = false;
+    setNoteSaveStatus(isLocked() ? 'Locked' : '');
+  }
+
+  function setNoteSaveStatus(text) {
+    const node = el('#sysforge-sm-note-save-status');
+    if (node) node.textContent = text || '';
+  }
+
+  function updatePlaceModeChrome() {
+    el('#sysforge-sm-mode-screw')?.classList.toggle('is-active', st.placeMode === 'screw');
+    el('#sysforge-sm-mode-note')?.classList.toggle('is-active', st.placeMode === 'note');
+    const bar = el('#sysforge-sm-place-mode');
+    if (bar) bar.hidden = isLocked();
   }
 
   function resetUndo() {
@@ -243,7 +338,9 @@ export function mountScrewMapView(container, deps) {
   }
 
   function onDetailChanged() {
-    if (st.applyingForm || isLocked() || st.selectedId == null) return;
+    if (st.applyingForm || isLocked() || st.selectedKind !== 'screw' || st.selectedId == null) {
+      return;
+    }
     if (st.lastAnchor) pushUndo(st.lastAnchor);
     st.lastAnchor = captureSnap();
     st.dirty = !snapshotsEqual(st.lastAnchor, st.sessionBaseline);
@@ -254,45 +351,20 @@ export function mountScrewMapView(container, deps) {
     }, DEBOUNCE_MS);
   }
 
-  async function flushAutosave() {
-    clearTimeout(st.debounceTimer);
-    st.debounceTimer = null;
-    if (!st.dirty || st.saving || st.selectedId == null || isLocked()) return;
-    st.saving = true;
-    setSaveStatus('Saving…');
-    const id = st.selectedId;
-    const snap = captureSnap();
-    try {
-      const updated = await deps.api(`/screw-maps/screws/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          label: snap.label || null,
-          notes: snap.notes,
-          warning_flag: snap.warning_flag,
-          length_mm: parseOptionalFloat(snap.length_mm),
-          shaft_diameter_mm: parseOptionalFloat(snap.shaft_diameter_mm),
-          head_diameter_mm: parseOptionalFloat(snap.head_diameter_mm),
-        }),
-      });
-      const idx = st.screws.findIndex((s) => s.id === id);
-      if (idx >= 0) st.screws[idx] = updated;
-      st.sessionBaseline = snap;
-      st.lastAnchor = snap;
-      st.dirty = false;
-      setSaveStatus('Saved');
-      renderList();
-    } catch (err) {
-      setSaveStatus('Save failed');
-      setError(err.message || String(err));
-      void _toast(err.message || String(err), 'error');
-    } finally {
-      st.saving = false;
+  function onNoteDetailChanged() {
+    if (st.applyingNoteForm || isLocked() || st.selectedKind !== 'note' || st.selectedId == null) {
+      return;
     }
+    st.noteDirty = true;
+    setNoteSaveStatus('Unsaved changes');
+    clearTimeout(st.noteDebounceTimer);
+    st.noteDebounceTimer = setTimeout(() => {
+      void flushNoteAutosave();
+    }, DEBOUNCE_MS);
   }
 
   function tryUndo() {
-    if (isLocked() || st.selectedId == null) return;
+    if (isLocked() || st.selectedKind !== 'screw' || st.selectedId == null) return;
     if (st.undoStack.length) {
       const prev = st.undoStack.pop();
       applySnap(prev);
@@ -359,6 +431,25 @@ export function mountScrewMapView(container, deps) {
         void selectScrew(Number(btn.getAttribute('data-id')));
       });
     });
+
+    const noteNode = el('#sysforge-sm-note-list');
+    if (!noteNode) return;
+    const notes = notesForCurrent();
+    noteNode.innerHTML = notes.length
+      ? notes
+          .map((n) => {
+            const preview = (n.note_text || 'Empty note').slice(0, 40);
+            return `<li><button type="button" class="sysforge-sm-list-btn sysforge-sm-note-list-btn" data-id="${n.id}">
+              ${escapeHtml(preview)}
+            </button></li>`;
+          })
+          .join('')
+      : `<li class="sysforge-classic-empty">No notes on this photo.</li>`;
+    noteNode.querySelectorAll('.sysforge-sm-note-list-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        void selectNote(Number(btn.getAttribute('data-id')));
+      });
+    });
   }
 
   function updateChrome() {
@@ -371,6 +462,7 @@ export function mountScrewMapView(container, deps) {
     const lockBtn = /** @type {HTMLButtonElement|null} */ (el('#sysforge-sm-lock'));
     if (file) file.disabled = isLocked();
     if (lockBtn) lockBtn.disabled = isLocked();
+    updatePlaceModeChrome();
   }
 
   function ensureCanvas() {
@@ -379,17 +471,115 @@ export function mountScrewMapView(container, deps) {
     st.canvas = createScrewMapCanvas(host, {
       getImageUrl: () => imageUrl(currentImage()),
       getMarkers: () => markersForCurrent(),
+      getNoteMarkers: () => notesForCurrent(),
       getSelectedId: () => st.selectedId,
+      getSelectedKind: () => st.selectedKind,
+      getPlaceMode: () => st.placeMode,
       isReadOnly: () => isLocked(),
-      onPlace: (x, y) => void placeScrew(x, y),
-      onSelect: (id) => void selectScrew(id),
-      onMove: (id, x, y) => void moveScrew(id, x, y),
+      onPlace: (x, y, kind) => {
+        if (kind === 'note') void placeNote(x, y);
+        else void placeScrew(x, y);
+      },
+      onSelect: (id, kind) => {
+        if (id == null || kind == null) {
+          void clearSelection();
+          return;
+        }
+        if (kind === 'note') void selectNote(id);
+        else void selectScrew(id);
+      },
+      onMove: (id, x, y, kind) => {
+        if (kind === 'note') void moveNote(id, x, y);
+        else void moveScrew(id, x, y);
+      },
     });
   }
 
+  async function flushNoteAutosave() {
+    clearTimeout(st.noteDebounceTimer);
+    st.noteDebounceTimer = null;
+    if (!st.noteDirty || st.noteSaving || st.selectedKind !== 'note' || st.selectedId == null) {
+      return;
+    }
+    if (isLocked()) return;
+    st.noteSaving = true;
+    setNoteSaveStatus('Saving…');
+    const id = st.selectedId;
+    const ta = /** @type {HTMLTextAreaElement|null} */ (el('#sysforge-sm-note-text'));
+    const text = ta?.value || '';
+    try {
+      const updated = await deps.api(`/screw-maps/notes/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note_text: text }),
+      });
+      const idx = st.notes.findIndex((n) => n.id === id);
+      if (idx >= 0) st.notes[idx] = updated;
+      st.noteDirty = false;
+      setNoteSaveStatus('Saved');
+      renderList();
+    } catch (err) {
+      setNoteSaveStatus('Save failed');
+      setError(err.message || String(err));
+      void _toast(err.message || String(err), 'error');
+    } finally {
+      st.noteSaving = false;
+    }
+  }
+
+  async function flushAutosave() {
+    clearTimeout(st.debounceTimer);
+    st.debounceTimer = null;
+    await flushNoteAutosave();
+    if (!st.dirty || st.saving || st.selectedId == null || isLocked()) return;
+    if (st.selectedKind !== 'screw') return;
+    st.saving = true;
+    setSaveStatus('Saving…');
+    const id = st.selectedId;
+    const snap = captureSnap();
+    try {
+      const updated = await deps.api(`/screw-maps/screws/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: snap.label || null,
+          notes: snap.notes,
+          warning_flag: snap.warning_flag,
+          length_mm: parseOptionalFloat(snap.length_mm),
+          shaft_diameter_mm: parseOptionalFloat(snap.shaft_diameter_mm),
+          head_diameter_mm: parseOptionalFloat(snap.head_diameter_mm),
+        }),
+      });
+      const idx = st.screws.findIndex((s) => s.id === id);
+      if (idx >= 0) st.screws[idx] = updated;
+      st.sessionBaseline = snap;
+      st.lastAnchor = snap;
+      st.dirty = false;
+      setSaveStatus('Saved');
+      renderList();
+    } catch (err) {
+      setSaveStatus('Save failed');
+      setError(err.message || String(err));
+      void _toast(err.message || String(err), 'error');
+    } finally {
+      st.saving = false;
+    }
+  }
+
+  async function clearSelection() {
+    await flushAutosave();
+    st.selectedId = null;
+    st.selectedKind = null;
+    showList(true);
+    st.canvas?.refresh();
+  }
+
   async function selectScrew(id) {
-    if (st.selectedId != null && st.selectedId !== id) await flushAutosave();
+    if (st.selectedId != null && (st.selectedId !== id || st.selectedKind !== 'screw')) {
+      await flushAutosave();
+    }
     st.selectedId = id;
+    st.selectedKind = id == null ? null : 'screw';
     if (id == null) {
       showList(true);
       st.canvas?.refresh();
@@ -413,14 +603,44 @@ export function mountScrewMapView(container, deps) {
     st.canvas?.refresh();
   }
 
+  async function selectNote(id) {
+    if (st.selectedId != null && (st.selectedId !== id || st.selectedKind !== 'note')) {
+      await flushAutosave();
+    }
+    st.selectedId = id;
+    st.selectedKind = id == null ? null : 'note';
+    if (id == null) {
+      showList(true);
+      st.canvas?.refresh();
+      return;
+    }
+    const note = st.notes.find((n) => n.id === id);
+    if (!note) {
+      showList(true);
+      return;
+    }
+    const images = st.map?.images || [];
+    const idx = images.findIndex((img) => img.id === note.screw_map_image_id);
+    if (idx >= 0 && idx !== st.imageIndex) {
+      st.imageIndex = idx;
+      renderThumbs();
+      updateChrome();
+    }
+    showNoteDetail(true);
+    fillNoteDetail(note);
+    st.canvas?.refresh();
+  }
+
   async function switchImage(index) {
     await flushAutosave();
     const images = st.map?.images || [];
     if (index < 0 || index >= images.length) return;
     st.imageIndex = index;
     st.selectedId = null;
+    st.selectedKind = null;
     showList(true);
     renderThumbs();
+    renderList();
     updateChrome();
     st.canvas?.refresh();
   }
@@ -446,6 +666,26 @@ export function mountScrewMapView(container, deps) {
     }
   }
 
+  async function placeNote(x, y) {
+    if (isLocked()) return;
+    const img = currentImage();
+    if (!img) return;
+    await flushAutosave();
+    try {
+      const note = await deps.api(`/screw-maps/images/${img.id}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ position_x: x, position_y: y, note_text: '' }),
+      });
+      st.notes.push(note);
+      renderList();
+      await selectNote(note.id);
+    } catch (err) {
+      setError(err.message || String(err));
+      void _toast(err.message || String(err), 'error');
+    }
+  }
+
   async function moveScrew(id, x, y) {
     if (isLocked()) return;
     try {
@@ -460,22 +700,50 @@ export function mountScrewMapView(container, deps) {
     } catch (err) {
       setError(err.message || String(err));
       void _toast(err.message || String(err), 'error');
-      await reloadScrews();
+      await reloadMarkers();
     }
   }
 
-  async function reloadScrews() {
+  async function moveNote(id, x, y) {
+    if (isLocked()) return;
+    try {
+      const updated = await deps.api(`/screw-maps/notes/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ position_x: x, position_y: y }),
+      });
+      const idx = st.notes.findIndex((n) => n.id === id);
+      if (idx >= 0) st.notes[idx] = { ...st.notes[idx], ...updated };
+      st.canvas?.refresh();
+    } catch (err) {
+      setError(err.message || String(err));
+      void _toast(err.message || String(err), 'error');
+      await reloadMarkers();
+    }
+  }
+
+  async function reloadMarkers() {
     if (!st.map) return;
-    const data = await deps.api(`/screw-maps/${st.map.id}/screws`);
-    st.screws = data.screws || [];
+    const [screwData, noteData] = await Promise.all([
+      deps.api(`/screw-maps/${st.map.id}/screws`),
+      deps.api(`/screw-maps/${st.map.id}/notes`),
+    ]);
+    st.screws = screwData.screws || [];
+    st.notes = noteData.notes || [];
     renderList();
     st.canvas?.refresh();
+  }
+
+  async function reloadScrews() {
+    await reloadMarkers();
   }
 
   async function loadWorkspace(projectId, imageId) {
     st.projectId = projectId;
     st.selectedId = null;
+    st.selectedKind = null;
     st.dirty = false;
+    st.noteDirty = false;
     setError('');
     let map;
     try {
@@ -490,14 +758,27 @@ export function mountScrewMapView(container, deps) {
     } else {
       st.imageIndex = 0;
     }
-    const data = await deps.api(`/screw-maps/${map.id}/screws`);
-    st.screws = data.screws || [];
+    const [screwData, noteData] = await Promise.all([
+      deps.api(`/screw-maps/${map.id}/screws`),
+      deps.api(`/screw-maps/${map.id}/notes`),
+    ]);
+    st.screws = screwData.screws || [];
+    st.notes = noteData.notes || [];
     showList(true);
     renderThumbs();
     renderList();
     updateChrome();
     ensureCanvas();
     st.canvas?.refresh();
+    try {
+      await deps.api('/companion/context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, mode: 'screw_map' }),
+      });
+    } catch (_) {
+      /* companion optional */
+    }
   }
 
   // Wire controls once
@@ -507,7 +788,60 @@ export function mountScrewMapView(container, deps) {
     input.addEventListener(key === 'warning' ? 'change' : 'input', () => onDetailChanged());
   });
 
-  el('#sysforge-sm-clear-sel')?.addEventListener('click', () => void selectScrew(null));
+  el('#sysforge-sm-note-text')?.addEventListener('input', () => onNoteDetailChanged());
+
+  el('#sysforge-sm-mode-screw')?.addEventListener('click', () => {
+    st.placeMode = 'screw';
+    updatePlaceModeChrome();
+    st.canvas?.refresh();
+  });
+  el('#sysforge-sm-mode-note')?.addEventListener('click', () => {
+    st.placeMode = 'note';
+    updatePlaceModeChrome();
+    st.canvas?.refresh();
+  });
+
+  el('#sysforge-sm-clear-sel')?.addEventListener('click', () => void clearSelection());
+  el('#sysforge-sm-clear-note-sel')?.addEventListener('click', () => void clearSelection());
+
+  el('#sysforge-sm-delete-screw')?.addEventListener('click', async () => {
+    if (isLocked() || st.selectedKind !== 'screw' || st.selectedId == null) return;
+    if (!window.confirm('Delete this screw marker?')) return;
+    const id = st.selectedId;
+    try {
+      await deps.api(`/screw-maps/screws/${id}`, { method: 'DELETE' });
+      st.screws = st.screws.filter((s) => s.id !== id);
+      st.selectedId = null;
+      st.selectedKind = null;
+      st.dirty = false;
+      showList(true);
+      renderList();
+      st.canvas?.refresh();
+    } catch (err) {
+      setError(err.message || String(err));
+      void _toast(err.message || String(err), 'error');
+    }
+  });
+
+  el('#sysforge-sm-delete-note')?.addEventListener('click', async () => {
+    if (isLocked() || st.selectedKind !== 'note' || st.selectedId == null) return;
+    if (!window.confirm('Delete this note marker?')) return;
+    const id = st.selectedId;
+    try {
+      await deps.api(`/screw-maps/notes/${id}`, { method: 'DELETE' });
+      st.notes = st.notes.filter((n) => n.id !== id);
+      st.selectedId = null;
+      st.selectedKind = null;
+      st.noteDirty = false;
+      showList(true);
+      renderList();
+      st.canvas?.refresh();
+    } catch (err) {
+      setError(err.message || String(err));
+      void _toast(err.message || String(err), 'error');
+    }
+  });
+
   el('#sysforge-sm-prev')?.addEventListener('click', () => void switchImage(st.imageIndex - 1));
   el('#sysforge-sm-next')?.addEventListener('click', () => void switchImage(st.imageIndex + 1));
 
@@ -527,8 +861,10 @@ export function mountScrewMapView(container, deps) {
       st.map.images = [...(st.map.images || []), img];
       st.imageIndex = st.map.images.length - 1;
       st.selectedId = null;
+      st.selectedKind = null;
       showList(true);
       renderThumbs();
+      renderList();
       updateChrome();
       st.canvas?.refresh();
       void _toast('Photo added');
@@ -545,9 +881,12 @@ export function mountScrewMapView(container, deps) {
     try {
       st.map = await deps.api(`/screw-maps/${st.map.id}/lock`, { method: 'POST' });
       updateChrome();
-      if (st.selectedId != null) {
+      if (st.selectedKind === 'screw' && st.selectedId != null) {
         const screw = st.screws.find((s) => s.id === st.selectedId);
         if (screw) fillDetail(screw);
+      } else if (st.selectedKind === 'note' && st.selectedId != null) {
+        const note = st.notes.find((n) => n.id === st.selectedId);
+        if (note) fillNoteDetail(note);
       }
       st.canvas?.refresh();
       void _toast('Screw map locked');
@@ -562,14 +901,93 @@ export function mountScrewMapView(container, deps) {
     deps.navigate('project', { params: { id: st.projectId } });
   });
 
+  function formatDelta(v) {
+    if (v == null || !Number.isFinite(Number(v))) return '—';
+    const n = Number(v);
+    const sign = n > 0 ? '+' : '';
+    return `${sign}${n.toFixed(2)}`;
+  }
+
+  async function runMeasurementLookup() {
+    const status = el('#sysforge-sm-lookup-status');
+    const results = el('#sysforge-sm-lookup-results');
+    if (results) results.innerHTML = '';
+    if (!st.map) return;
+    const lengthMm = parseOptionalFloat(
+      /** @type {HTMLInputElement} */ (el('#sysforge-sm-lookup-length'))?.value
+    );
+    const shaftMm = parseOptionalFloat(
+      /** @type {HTMLInputElement} */ (el('#sysforge-sm-lookup-shaft'))?.value
+    );
+    const headMm = parseOptionalFloat(
+      /** @type {HTMLInputElement} */ (el('#sysforge-sm-lookup-head'))?.value
+    );
+    if (lengthMm == null && shaftMm == null && headMm == null) {
+      if (status) status.textContent = 'Enter at least one measurement (mm).';
+      return;
+    }
+    if (status) status.textContent = 'Searching…';
+    try {
+      const data = await deps.api(`/screw-maps/${st.map.id}/measurement-matches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          length_mm: lengthMm,
+          shaft_diameter_mm: shaftMm,
+          head_diameter_mm: headMm,
+          max_results: 3,
+        }),
+      });
+      const matches = data.matches || [];
+      if (!matches.length) {
+        if (status) {
+          status.textContent =
+            'No logged screws on this map match those dimensions. Save measurements on markers first.';
+        }
+        return;
+      }
+      if (status) {
+        status.textContent = `Top ${matches.length} match(es). Pick the hole you mean; the app will not auto-assign.`;
+      }
+      if (results) {
+        results.innerHTML = matches
+          .map((m) => {
+            const photo = Number(m.image_sort_order) || '?';
+            return `<li><button type="button" class="sysforge-sm-list-btn sysforge-sm-lookup-hit"
+              data-screw-id="${m.screw_id}">
+              #${m.screw_number} · photo ${photo} · score ${Number(m.score).toFixed(2)}
+              <span class="sysforge-sm-lookup-deltas">
+                ΔL ${formatDelta(m.length_delta_mm)} ·
+                Δshaft ${formatDelta(m.shaft_diameter_delta_mm)} ·
+                Δhead ${formatDelta(m.head_diameter_delta_mm)}
+              </span>
+            </button></li>`;
+          })
+          .join('');
+        results.querySelectorAll('.sysforge-sm-lookup-hit').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            void selectScrew(Number(btn.getAttribute('data-screw-id')));
+          });
+        });
+      }
+    } catch (err) {
+      if (status) status.textContent = err.message || String(err);
+      void _toast(err.message || String(err), 'error');
+    }
+  }
+
+  el('#sysforge-sm-lookup-go')?.addEventListener('click', () => {
+    void runMeasurementLookup();
+  });
+
   const keyHandler = (e) => {
     if (!container.isConnected) return;
     if (e.key === 'Escape') {
-      void selectScrew(null);
+      void clearSelection();
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-      if (st.selectedId != null) {
+      if (st.selectedKind === 'screw' && st.selectedId != null) {
         e.preventDefault();
         tryUndo();
       }
@@ -579,6 +997,7 @@ export function mountScrewMapView(container, deps) {
   st._keyHandler = keyHandler;
   st.intervalTimer = setInterval(() => {
     if (st.dirty && !st.saving) void flushAutosave();
+    else if (st.noteDirty && !st.noteSaving) void flushNoteAutosave();
   }, INTERVAL_MS);
 
   st.loadWorkspace = loadWorkspace;

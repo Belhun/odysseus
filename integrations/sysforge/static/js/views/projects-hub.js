@@ -37,7 +37,7 @@ export function mountProjectsHub(container, deps) {
       <h3 class="sysforge-view-heading" tabindex="-1">Projects</h3>
       <p class="sysforge-dashboard-lead">Active work, estimates waiting accept, and accepted devices missing projects.</p>
       <div class="sysforge-hub-toolbar">
-        <input type="search" id="sysforge-hub-q" class="sysforge-clients-q" placeholder="Search Device ID, title…" />
+        <input type="search" id="sysforge-hub-q" class="sysforge-clients-q" placeholder="Search Device ID, DisplayCode, title…" />
         <label class="sysforge-field-check">
           <input type="checkbox" id="sysforge-hub-archived" />
           <span>Include archived in search</span>
@@ -139,7 +139,7 @@ async function runSearch(container, deps, q) {
             .map(
               (p) => `<li>
               <button type="button" data-project-id="${p.id}">
-                <strong>${escapeHtml(p.device_id)}</strong>
+                <strong>${escapeHtml(p.display_code || p.device_id)}</strong>
                 <span>${escapeHtml(p.title || '')}</span>
                 <span class="sysforge-hub-status">${escapeHtml(p.status || '')}</span>
               </button>
@@ -178,8 +178,8 @@ async function reloadHub(container, deps) {
       (hub.active || []).map((r) => ({
         kind: 'project',
         id: r.project_id,
-        title: r.device_id,
-        sub: r.title || r.client_name || '',
+        title: r.display_code || r.device_id,
+        sub: [r.title, r.device_id].filter(Boolean).join(' · ') || r.client_name || '',
         status: r.status,
       }))
     );

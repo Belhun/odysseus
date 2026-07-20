@@ -80,10 +80,37 @@
   overflow: hidden;
 }
 
+.sysforge-sm-place-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
+
+.sysforge-sm-place-mode .btn-secondary.is-active {
+  outline: 2px solid var(--accent, #3b82f6);
+}
+
 .sysforge-sm-canvas-wrap {
   position: relative;
   width: 100%;
   height: 100%;
+}
+
+.sysforge-sm-zoom-bar {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 4px;
+  z-index: 2;
+}
+
+.sysforge-sm-zoom-bar .btn-secondary {
+  min-width: 2rem;
+  padding: 4px 8px;
+  font-size: 0.8rem;
 }
 
 .sysforge-sm-canvas-img {
@@ -124,11 +151,25 @@
   fill: #f59e0b;
 }
 
+.sysforge-sm-note-dot {
+  fill: #7c3aed;
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.sysforge-sm-note-marker.is-selected .sysforge-sm-note-dot {
+  fill: #f59e0b;
+}
+
 .sysforge-sm-marker-num {
   fill: #fff;
   font-size: 12px;
   font-weight: 700;
   pointer-events: none;
+}
+
+.sysforge-sm-notes-heading {
+  margin-top: 14px;
 }
 
 .sysforge-sm-side {
@@ -212,6 +253,41 @@
 .sysforge-screw-map-preview .sysforge-sm-preview-meta {
   opacity: 0.8;
   font-size: 0.8rem;
+}
+
+.sysforge-sm-library-reuse,
+.sysforge-sm-library-publish {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color, #444);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sysforge-sm-library-reuse h6,
+.sysforge-sm-library-publish h6 {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.sysforge-sm-lookup {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color, #444);
+}
+
+.sysforge-sm-lookup-status {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  margin: 6px 0;
+}
+
+.sysforge-sm-lookup-deltas {
+  display: block;
+  font-size: 0.72rem;
+  opacity: 0.75;
+  margin-top: 2px;
 }
 
 @media (max-width: 900px) {

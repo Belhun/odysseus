@@ -170,10 +170,29 @@ def get_part(part_id: int, conn: sqlite3.Connection | None = None) -> dict[str, 
         conn = db_connection.connect()
     try:
         row = conn.execute("SELECT * FROM Parts WHERE Id = ?", (part_id,)).fetchone()
-        return _row_to_part(row)
+        part = _row_to_part(row)
+        return _attach_stock(part, conn=conn)
     finally:
         if owns and conn is not None:
             conn.close()
+
+
+def _attach_stock(
+    part: dict[str, Any] | None, *, conn: sqlite3.Connection | None = None
+) -> dict[str, Any] | None:
+    if part is None:
+        return None
+    try:
+        from integrations.sysforge.services import stock as stock_service
+
+        return stock_service.enrich_part(part, conn=conn)
+    except sqlite3.OperationalError:
+        # PartStock migration not applied yet.
+        part.setdefault("quantity_on_hand", 0)
+        part.setdefault("quantity_reserved", 0)
+        part.setdefault("available", 0)
+        part.setdefault("stock_status", "untracked")
+        return part
 
 
 def list_parts(
@@ -193,7 +212,8 @@ def list_parts(
         else:
             sql = "SELECT * FROM Parts ORDER BY Name"
         rows = conn.execute(sql).fetchall()
-        return [_row_to_part(r) for r in rows if r is not None]  # type: ignore[misc]
+        parts = [_row_to_part(r) for r in rows if r is not None]  # type: ignore[misc]
+        return [_attach_stock(p, conn=conn) for p in parts]  # type: ignore[misc]
     finally:
         if owns and conn is not None:
             conn.close()
@@ -553,7 +573,8 @@ def _fetch_fts_parts(
         ).fetchall()
     except (sqlite3.OperationalError, sqlite3.DatabaseError):
         return []
-    return [_row_to_part(r) for r in rows if r is not None]  # type: ignore[misc]
+    parts = [_row_to_part(r) for r in rows if r is not None]  # type: ignore[misc]
+    return [_attach_stock(p, conn=conn) for p in parts]  # type: ignore[misc]
 
 
 def _rank_bucket(part: dict[str, Any], query: str, sku_like: bool) -> int:

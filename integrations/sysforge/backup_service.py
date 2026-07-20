@@ -13,6 +13,8 @@ BUG-018: after JSON import with ``import_clients`` / ``import_parts`` (even Skip
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import os
@@ -44,6 +46,7 @@ from integrations.sysforge.db import connection as db_connection
 from integrations.sysforge.db import money, utc
 from integrations.sysforge.services.client_query import normalize_phone
 from integrations.sysforge.services.clients import rebuild_clients_fts
+from integrations.sysforge.services import invoice_documents
 from integrations.sysforge.services.parts import rebuild_parts_fts
 from src.plugins import registry
 
@@ -579,9 +582,10 @@ def _extract_zip_safe(zip_path: Path, dest: Path) -> tuple[Path, Path | None]:
 def export_to_json() -> dict[str, Any]:
     """Build SysForgeExportData v1.0 from the live Business database.
 
-    Includes payments, invoice document metadata, and ``mergedIntoClientId``.
-    Soft-deleted merge losers (``MergedIntoClientId`` set) are exported so
-    merge links survive JSON round-trip. ZIP backups already carry full DB.
+    Includes payments, invoice documents (metadata + ``contentBase64`` when the
+    file is on disk), and ``mergedIntoClientId``. Soft-deleted merge losers
+    (``MergedIntoClientId`` set) are exported so merge links survive JSON
+    round-trip. ZIP backups carry the full DB (and optional drafts/config).
     """
     live = db_connection.db_path()
     if not live.is_file():
@@ -885,7 +889,7 @@ def _row_payment_export(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _row_invoice_document_export(row: dict[str, Any]) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "id": row["Id"],
         "invoiceId": row.get("InvoiceId"),
         "kind": row.get("Kind") or "pdf",
@@ -896,6 +900,58 @@ def _row_invoice_document_export(row: dict[str, Any]) -> dict[str, Any]:
         "sha256": row.get("Sha256"),
         "createdAt": _iso_from_storage(row.get("CreatedAt")),
     }
+    rel = str(row.get("StoredRelPath") or "").strip()
+    if not rel:
+        return payload
+    try:
+        path = invoice_documents.resolve_stored_path(rel)
+    except ValueError:
+        logger.warning(
+            "Skipping document binary for export id=%s: invalid path %r",
+            row.get("Id"),
+            rel,
+        )
+        return payload
+    if not path.is_file():
+        logger.warning(
+            "Invoice document id=%s missing on disk (%s); exporting metadata only",
+            row.get("Id"),
+            rel,
+        )
+        return payload
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        logger.warning(
+            "Could not read invoice document id=%s (%s): %s",
+            row.get("Id"),
+            rel,
+            exc,
+        )
+        return payload
+    payload["contentBase64"] = base64.b64encode(raw).decode("ascii")
+    payload["sizeBytes"] = len(raw)
+    payload["sha256"] = hashlib.sha256(raw).hexdigest()
+    return payload
+
+
+def _safe_document_rel_path(rel: str) -> str | None:
+    """Normalize StoredRelPath; reject empty / traversal."""
+    cleaned = str(rel or "").strip().replace("\\", "/")
+    if not cleaned or cleaned.startswith("/") or ".." in cleaned.split("/"):
+        return None
+    try:
+        invoice_documents.resolve_stored_path(cleaned)
+    except ValueError:
+        return None
+    return cleaned
+
+
+def _write_document_binary(rel: str, data: bytes) -> None:
+    """Write bytes under documents root for an already-validated relative path."""
+    path = invoice_documents.resolve_stored_path(rel)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
 
 
 def _iso_from_storage(value: Any) -> str | None:
@@ -1064,15 +1120,45 @@ def _import_one_invoice_document(
     ).fetchone()
     if existing and opts.conflict == "skip":
         return
+
+    rel_raw = _get(raw, "storedRelPath", "StoredRelPath") or ""
+    rel = _safe_document_rel_path(str(rel_raw)) or ""
+    size_bytes = _as_int(_get(raw, "sizeBytes", "SizeBytes"), 0)
+    sha256 = _get(raw, "sha256", "Sha256")
+
+    b64 = _get(raw, "contentBase64", "content_base64", "ContentBase64")
+    if b64:
+        try:
+            raw_bytes = base64.b64decode(str(b64))
+        except (ValueError, TypeError) as exc:
+            raise BackupError(
+                f"Invalid contentBase64 for invoice document id={did}."
+            ) from exc
+        if not rel:
+            # Prefer a deterministic path when metadata omitted the rel path.
+            name = _get(raw, "fileName", "FileName") or f"invoice-{invoice_id}.pdf"
+            safe_name = "".join(
+                c if c.isalnum() or c in ("-", "_", ".") else "_" for c in str(name)
+            )
+            digest = hashlib.sha256(raw_bytes).hexdigest()
+            rel = f"invoices/{invoice_id}/{digest[:16]}_{safe_name}"
+            if not _safe_document_rel_path(rel):
+                raise BackupError(
+                    f"Could not derive a safe path for invoice document id={did}."
+                )
+        _write_document_binary(rel, raw_bytes)
+        size_bytes = len(raw_bytes)
+        sha256 = hashlib.sha256(raw_bytes).hexdigest()
+
     params = {
         "Id": did,
         "InvoiceId": invoice_id,
         "Kind": str(_get(raw, "kind", "Kind") or "pdf"),
         "FileName": _get(raw, "fileName", "FileName") or "invoice.pdf",
         "MimeType": _get(raw, "mimeType", "MimeType") or "application/pdf",
-        "SizeBytes": _as_int(_get(raw, "sizeBytes", "SizeBytes"), 0),
-        "StoredRelPath": _get(raw, "storedRelPath", "StoredRelPath") or "",
-        "Sha256": _get(raw, "sha256", "Sha256"),
+        "SizeBytes": size_bytes,
+        "StoredRelPath": rel,
+        "Sha256": sha256,
         "CreatedAt": _parse_ts(_get(raw, "createdAt", "CreatedAt")),
     }
     if existing:

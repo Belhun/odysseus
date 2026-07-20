@@ -1516,6 +1516,60 @@
   align-items: center;
   margin-bottom: 12px;
 }
+.sysforge-display-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  opacity: 0.85;
+}
+.sysforge-note-block {
+  margin-bottom: 0.75rem;
+}
+.sysforge-note-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.25rem;
+}
+.sysforge-note-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-right: 0.25rem;
+}
+.sysforge-md-btn {
+  padding: 0.15rem 0.45rem;
+  min-width: 1.75rem;
+  font-size: 0.8rem;
+}
+.sysforge-note-preview {
+  margin-top: 0.35rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  min-height: 2rem;
+  background: rgba(0, 0, 0, 0.02);
+}
+.sysforge-note-preview code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+.sysforge-stock-out {
+  background: #b42318;
+  color: #fff;
+}
+.sysforge-stock-low {
+  background: #b54708;
+  color: #fff;
+}
+.sysforge-stock-ok {
+  background: #027a48;
+  color: #fff;
+}
+.sysforge-stock-untracked {
+  background: #667085;
+  color: #fff;
+}
 .sysforge-project-columns {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1537,6 +1591,45 @@
   margin-bottom: 12px;
   border-radius: 4px;
   font-size: 0.85rem;
+}
+.sysforge-companion-panel {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-color, #555);
+}
+.sysforge-companion-panel h6 {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+}
+.sysforge-companion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.sysforge-companion-pair-ui {
+  margin-top: 8px;
+  text-align: center;
+}
+.sysforge-companion-pair-ui img {
+  display: block;
+  margin: 0 auto 8px;
+  background: #fff;
+  padding: 8px;
+  border-radius: 4px;
+}
+.sysforge-companion-code {
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
+  margin: 4px 0;
+}
+.sysforge-companion-inbox {
+  margin-top: 12px;
+}
+.sysforge-companion-settings {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color, #333);
 }
 .sysforge-device-readonly dt {
   font-size: 0.75rem;

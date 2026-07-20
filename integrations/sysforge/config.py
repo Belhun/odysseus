@@ -45,6 +45,16 @@ DEFAULTS: dict[str, Any] = {
     # Future UI / MRU shell polish (VI1 column; VI2 nav persist = no)
     "dashboard_favorites": [],
     "client_mru_autoselect": True,
+    # S5 mobile companion (LAN browser + inbox + optional public URL)
+    "companion": {
+        "enabled": True,
+        "session_hours": 48,
+        "pair_code_minutes": 15,
+        "inbox_enabled": False,
+        "inbox_path": None,
+        "inbox_auto_import": False,
+        "public_base_url": None,
+    },
 }
 
 CURRENCY_ALLOWLIST = frozenset({"USD", "CAD", "EUR", "GBP"})
@@ -179,6 +189,34 @@ def load_config() -> dict[str, Any]:
     merged["client_mru_autoselect"] = bool(
         merged.get("client_mru_autoselect", DEFAULTS["client_mru_autoselect"])
     )
+
+    companion_default = DEFAULTS["companion"]
+    raw_companion = raw.get("companion") if isinstance(raw.get("companion"), dict) else {}
+    companion = {**companion_default, **raw_companion}
+    companion["enabled"] = bool(companion.get("enabled", True))
+    companion["inbox_enabled"] = bool(companion.get("inbox_enabled", False))
+    companion["inbox_auto_import"] = bool(companion.get("inbox_auto_import", False))
+    try:
+        companion["session_hours"] = max(
+            1, min(168, int(companion.get("session_hours", 48)))
+        )
+    except (TypeError, ValueError):
+        companion["session_hours"] = 48
+    try:
+        companion["pair_code_minutes"] = max(
+            1, min(120, int(companion.get("pair_code_minutes", 15)))
+        )
+    except (TypeError, ValueError):
+        companion["pair_code_minutes"] = 15
+    inbox_path = companion.get("inbox_path")
+    if inbox_path is not None and str(inbox_path).strip() == "":
+        inbox_path = None
+    companion["inbox_path"] = inbox_path
+    public = companion.get("public_base_url")
+    if public is not None:
+        public = str(public).strip().rstrip("/") or None
+    companion["public_base_url"] = public
+    merged["companion"] = companion
     return merged
 
 
@@ -308,6 +346,73 @@ def validate_partial(partial: dict[str, Any]) -> dict[str, Any]:
         drafts_partial = validate_drafts_retention(partial["drafts"])
         if drafts_partial:
             cleaned["drafts"] = drafts_partial
+
+    if "companion" in partial and partial["companion"] is not None:
+        if not isinstance(partial["companion"], dict):
+            raise ConfigValidationError("companion must be an object")
+        companion_partial = validate_companion(partial["companion"])
+        if companion_partial:
+            cleaned["companion"] = companion_partial
+
+    return cleaned
+
+
+def validate_companion(partial: dict[str, Any]) -> dict[str, Any]:
+    """Validate companion settings partial; return cleaned keys only."""
+    if not isinstance(partial, dict):
+        raise ConfigValidationError("companion body must be an object")
+
+    cleaned: dict[str, Any] = {}
+
+    for key in ("enabled", "inbox_enabled", "inbox_auto_import"):
+        if key in partial and partial[key] is not None:
+            if not isinstance(partial[key], bool):
+                raise ConfigValidationError(f"{key} must be a boolean")
+            cleaned[key] = partial[key]
+
+    if "session_hours" in partial and partial["session_hours"] is not None:
+        try:
+            hours = int(partial["session_hours"])
+        except (TypeError, ValueError) as exc:
+            raise ConfigValidationError("session_hours must be an integer") from exc
+        if hours < 1 or hours > 168:
+            raise ConfigValidationError("session_hours must be between 1 and 168")
+        cleaned["session_hours"] = hours
+
+    if "pair_code_minutes" in partial and partial["pair_code_minutes"] is not None:
+        try:
+            minutes = int(partial["pair_code_minutes"])
+        except (TypeError, ValueError) as exc:
+            raise ConfigValidationError(
+                "pair_code_minutes must be an integer"
+            ) from exc
+        if minutes < 1 or minutes > 120:
+            raise ConfigValidationError(
+                "pair_code_minutes must be between 1 and 120"
+            )
+        cleaned["pair_code_minutes"] = minutes
+
+    if "inbox_path" in partial:
+        raw_path = partial["inbox_path"]
+        if raw_path is None or str(raw_path).strip() == "":
+            cleaned["inbox_path"] = None
+        else:
+            cleaned["inbox_path"] = str(raw_path).strip()
+
+    if "public_base_url" in partial:
+        raw_url = partial["public_base_url"]
+        if raw_url is None or str(raw_url).strip() == "":
+            cleaned["public_base_url"] = None
+        else:
+            url = str(raw_url).strip().rstrip("/")
+            if not (
+                url.startswith("http://")
+                or url.startswith("https://")
+            ):
+                raise ConfigValidationError(
+                    "public_base_url must start with http:// or https://"
+                )
+            cleaned["public_base_url"] = url
 
     return cleaned
 
@@ -461,6 +566,18 @@ def save_config(partial: dict[str, Any]) -> dict[str, Any]:
         merged["projects"] = {**base_projects, **raw_projects, **cleaned["projects"]}
     elif isinstance(raw.get("projects"), dict):
         merged["projects"] = {**DEFAULTS["projects"], **raw["projects"]}
+    if "companion" in cleaned:
+        base_companion = DEFAULTS["companion"]
+        raw_companion = (
+            raw.get("companion") if isinstance(raw.get("companion"), dict) else {}
+        )
+        merged["companion"] = {
+            **base_companion,
+            **raw_companion,
+            **cleaned["companion"],
+        }
+    elif isinstance(raw.get("companion"), dict):
+        merged["companion"] = {**DEFAULTS["companion"], **raw["companion"]}
 
     # Atomic replace
     fd, tmp_name = tempfile.mkstemp(
@@ -486,6 +603,7 @@ def settings_response(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     bps = int(data["tax_rate_bps"])
     drafts = data.get("drafts") if isinstance(data.get("drafts"), dict) else {}
     projects = data.get("projects") if isinstance(data.get("projects"), dict) else {}
+    companion = data.get("companion") if isinstance(data.get("companion"), dict) else {}
     include_archived = bool(projects.get("include_archived_in_search", False))
     return {
         "ok": True,
@@ -510,4 +628,13 @@ def settings_response(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         "include_archived_in_search": include_archived,
         "dashboard_favorites": list(data.get("dashboard_favorites") or []),
         "client_mru_autoselect": bool(data.get("client_mru_autoselect", True)),
+        "companion": {
+            "enabled": bool(companion.get("enabled", True)),
+            "session_hours": int(companion.get("session_hours", 48)),
+            "pair_code_minutes": int(companion.get("pair_code_minutes", 15)),
+            "inbox_enabled": bool(companion.get("inbox_enabled", False)),
+            "inbox_path": companion.get("inbox_path"),
+            "inbox_auto_import": bool(companion.get("inbox_auto_import", False)),
+            "public_base_url": companion.get("public_base_url"),
+        },
     }

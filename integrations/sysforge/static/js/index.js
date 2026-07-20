@@ -6,6 +6,7 @@
 import { makeWindowDraggable } from '/static/js/windowDrag.js';
 import * as router from './router.js';
 import { normalizeRouteKey, parseHash, ROUTE } from './routes-contract.js';
+import { sysforgeShortcutTarget } from './sysforge-shortcuts.js';
 import { mountDashboard, activateDashboard } from './views/dashboard.js';
 import { mountSettings, activateSettings } from './views/settings.js';
 import {
@@ -491,6 +492,43 @@ export function isSysforgeOpen() {
   return _open;
 }
 
+/** True when host feature flag allows Business (button may still be hidden). */
+export function isSysforgeFeatureOn() {
+  if (typeof window !== 'undefined' && window._pluginFeaturesOff?.has('sysforge')) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Host shortcut target for in-Business actions (pure; used by tests).
+ * @param {string} action
+ * @returns {{ kind: 'home' } | { kind: 'navigate', routeId: string } | null}
+ */
+export { sysforgeShortcutTarget } from './sysforge-shortcuts.js';
+
+/**
+ * Run a host-registered in-Business shortcut. Opens Business if closed.
+ * No-ops when the plugin feature is off. Does not use a plugin-local keybind store.
+ * @param {string} action
+ * @returns {Promise<boolean>}
+ */
+export async function runSysforgeShortcut(action) {
+  const target = sysforgeShortcutTarget(action);
+  if (!target) return false;
+  if (!isSysforgeFeatureOn()) return false;
+
+  if (!_open) {
+    await openSysforge();
+  }
+  if (target.kind === 'home') {
+    router.goHome();
+    return true;
+  }
+  router.navigate(target.routeId);
+  return true;
+}
+
 export async function openSysforge() {
   _getModal();
   _open = true;
@@ -517,4 +555,11 @@ export function closeSysforge() {
   if (_modal) _modal.style.display = 'none';
 }
 
-export default { openSysforge, closeSysforge, isSysforgeOpen };
+export default {
+  openSysforge,
+  closeSysforge,
+  isSysforgeOpen,
+  isSysforgeFeatureOn,
+  sysforgeShortcutTarget,
+  runSysforgeShortcut,
+};

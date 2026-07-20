@@ -26,6 +26,8 @@ from integrations.sysforge.services.parts import PartValidationError
 from integrations.sysforge.services.sku import SkuConflictError
 from integrations.sysforge.services import price_history as price_history_service
 from integrations.sysforge.services.price_history import PriceHistoryValidationError
+from integrations.sysforge.services import stock as stock_service
+from integrations.sysforge.services.stock import StockError, StockNotFoundError
 from integrations.sysforge.services import suppliers as supplier_service
 from integrations.sysforge.services.suppliers import (
     SupplierNameConflictError,
@@ -96,6 +98,7 @@ class SettingsUpdate(BaseModel):
     autosave_interval_seconds: int | None = None
     include_archived_in_search: bool | None = None
     projects: dict[str, Any] | None = None
+    companion: dict[str, Any] | None = None
 
 
 class PartBody(BaseModel):
@@ -267,6 +270,15 @@ class ProjectNotesBody(BaseModel):
     Plan: str | None = None
 
 
+class PartStockBody(BaseModel):
+    quantity_on_hand: int = Field(ge=0)
+    notes: str | None = None
+
+
+class PartStockAdjustBody(BaseModel):
+    delta: int
+
+
 class PlaceScrewBody(BaseModel):
     position_x: float
     position_y: float
@@ -282,6 +294,35 @@ class PatchScrewBody(BaseModel):
     shaft_diameter_mm: float | None = None
     head_diameter_mm: float | None = None
     head_type: str | None = None
+
+
+class PlaceNoteBody(BaseModel):
+    position_x: float
+    position_y: float
+    note_text: str | None = None
+
+
+class PatchNoteBody(BaseModel):
+    position_x: float | None = None
+    position_y: float | None = None
+    note_text: str | None = None
+
+
+class PublishScrewMapBody(BaseModel):
+    title: str
+    tags: str | list[str] | None = None
+    notes: str | None = None
+
+
+class CloneLibrarySetBody(BaseModel):
+    set_id: int
+
+
+class MeasurementLookupBody(BaseModel):
+    length_mm: float | None = None
+    shaft_diameter_mm: float | None = None
+    head_diameter_mm: float | None = None
+    max_results: int = 3
 
 
 class InvoiceEmailBody(BaseModel):
@@ -825,6 +866,38 @@ def setup_sysforge_routes() -> APIRouter:
         if parts_service.get_part(part_id) is None:
             raise HTTPException(404, "Part not found")
         return {"count": parts_service.get_part_usage_count(part_id)}
+
+    @router.get("/parts/{part_id}/stock")
+    def get_part_stock(part_id: int):
+        ensure_schema()
+        stock = stock_service.get_stock(part_id)
+        if stock is None:
+            raise HTTPException(404, "Part not found")
+        return stock
+
+    @router.put("/parts/{part_id}/stock")
+    def put_part_stock(part_id: int, body: PartStockBody):
+        ensure_schema()
+        try:
+            return stock_service.set_on_hand(
+                part_id,
+                body.quantity_on_hand,
+                notes=body.notes,
+            )
+        except StockNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except StockError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.patch("/parts/{part_id}/stock")
+    def patch_part_stock(part_id: int, body: PartStockAdjustBody):
+        ensure_schema()
+        try:
+            return stock_service.adjust_on_hand(part_id, body.delta)
+        except StockNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except StockError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @router.post("/parts")
     def create_part(body: PartBody):
@@ -1609,6 +1682,54 @@ def setup_sysforge_routes() -> APIRouter:
             raise _screw_map_http_error(exc) from exc
         return Response(status_code=204)
 
+    @router.get("/screw-maps/{screw_map_id}/notes")
+    def list_screw_map_notes(screw_map_id: int):
+        if screw_map_id < 1:
+            raise HTTPException(400, "Invalid screw map id")
+        _ensure_projects_schema()
+        if screw_map_service.get_by_id(screw_map_id) is None:
+            raise HTTPException(404, "Screw map not found")
+        return {"notes": screw_map_service.get_notes_for_map(screw_map_id)}
+
+    @router.post("/screw-maps/images/{image_id}/notes", status_code=201)
+    def place_note_marker(image_id: int, body: PlaceNoteBody):
+        if image_id < 1:
+            raise HTTPException(400, "Invalid image id")
+        _ensure_projects_schema()
+        try:
+            return screw_map_service.add_note_marker(
+                image_id,
+                body.position_x,
+                body.position_y,
+                note_text=body.note_text,
+            )
+        except Exception as exc:
+            raise _screw_map_http_error(exc) from exc
+
+    @router.patch("/screw-maps/notes/{note_id}")
+    def patch_note_marker(note_id: int, body: PatchNoteBody):
+        if note_id < 1:
+            raise HTTPException(400, "Invalid note id")
+        _ensure_projects_schema()
+        fields = body.model_dump(exclude_unset=True)
+        if not fields:
+            raise HTTPException(400, "No fields to update")
+        try:
+            return screw_map_service.update_note_marker(note_id, fields)
+        except Exception as exc:
+            raise _screw_map_http_error(exc) from exc
+
+    @router.delete("/screw-maps/notes/{note_id}", status_code=204)
+    def delete_note_marker(note_id: int):
+        if note_id < 1:
+            raise HTTPException(400, "Invalid note id")
+        _ensure_projects_schema()
+        try:
+            screw_map_service.delete_note_marker(note_id)
+        except Exception as exc:
+            raise _screw_map_http_error(exc) from exc
+        return Response(status_code=204)
+
     @router.post("/screw-maps/{screw_map_id}/lock")
     def lock_screw_map(screw_map_id: int):
         if screw_map_id < 1:
@@ -1619,9 +1740,83 @@ def setup_sysforge_routes() -> APIRouter:
         except Exception as exc:
             raise _screw_map_http_error(exc) from exc
 
+    # --- Screw map library (S4) + measurement lookup (S3) ---
+
+    @router.get("/screw-map-library")
+    def list_screw_map_library(
+        device_model: str | None = None, limit: int = 20
+    ):
+        _ensure_projects_schema()
+        if limit < 1:
+            limit = 1
+        if limit > 100:
+            limit = 100
+        sets = screw_map_service.get_library_sets_for_model(
+            device_model, max_results=limit
+        )
+        return {"sets": sets}
+
+    @router.post("/screw-maps/{screw_map_id}/publish", status_code=201)
+    def publish_screw_map(screw_map_id: int, body: PublishScrewMapBody):
+        if screw_map_id < 1:
+            raise HTTPException(400, "Invalid screw map id")
+        _ensure_projects_schema()
+        try:
+            return screw_map_service.publish_to_library(
+                screw_map_id,
+                body.title,
+                tags=body.tags,
+                notes=body.notes,
+            )
+        except Exception as exc:
+            raise _screw_map_http_error(exc) from exc
+
+    @router.post("/projects/{project_id}/screw-map/clone-from-library", status_code=201)
+    def clone_screw_map_from_library(project_id: int, body: CloneLibrarySetBody):
+        if project_id < 1:
+            raise HTTPException(400, "Invalid project id")
+        if body.set_id < 1:
+            raise HTTPException(400, "Invalid set id")
+        _ensure_projects_schema()
+        try:
+            return screw_map_service.clone_library_set_into_project(
+                body.set_id, project_id
+            )
+        except Exception as exc:
+            raise _screw_map_http_error(exc) from exc
+
+    @router.post("/screw-maps/{screw_map_id}/measurement-matches")
+    def find_screw_measurement_matches(
+        screw_map_id: int, body: MeasurementLookupBody
+    ):
+        if screw_map_id < 1:
+            raise HTTPException(400, "Invalid screw map id")
+        _ensure_projects_schema()
+        max_results = body.max_results
+        if max_results < 1:
+            max_results = 1
+        if max_results > 3:
+            max_results = 3
+        try:
+            matches = screw_map_service.find_matches_by_measurement(
+                screw_map_id,
+                length_mm=body.length_mm,
+                shaft_diameter_mm=body.shaft_diameter_mm,
+                head_diameter_mm=body.head_diameter_mm,
+                max_results=max_results,
+            )
+            return {"matches": matches}
+        except Exception as exc:
+            raise _screw_map_http_error(exc) from exc
+
     # Business backup / restore (plugin-scoped; not Odysseus /api/export)
     from integrations.sysforge.routes_backup import register_backup_routes
 
     register_backup_routes(router)
+
+    # S5 mobile companion (desk + phone)
+    from integrations.sysforge.routes_companion import register_companion_routes
+
+    register_companion_routes(router)
 
     return router
