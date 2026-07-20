@@ -69,6 +69,7 @@ export function mountPartsCatalog(container, deps) {
                 <th>Name</th>
                 <th>SKU</th>
                 <th>Price</th>
+                <th>Stock</th>
                 <th></th>
               </tr>
             </thead>
@@ -115,6 +116,10 @@ export function mountPartsCatalog(container, deps) {
             <input type="hidden" id="sysforge-part-preferred" />
             <button type="button" class="btn-secondary" id="sysforge-part-preferred-clear" hidden>Clear</button>
             <ul class="sysforge-parts-suggest" id="sysforge-part-preferred-suggest" hidden></ul>
+          </label>
+          <label class="sysforge-field">
+            <span>On hand (stock)</span>
+            <input type="number" id="sysforge-part-stock" min="0" step="1" value="0" />
           </label>
           <label class="sysforge-field sysforge-field-check">
             <input type="checkbox" id="sysforge-part-warranty" />
@@ -163,6 +168,13 @@ export function mountPartsCatalog(container, deps) {
     _setSupplierField('supplier', f.supplier_id, f.supplier_label);
     _setSupplierField('preferred', f.preferred_supplier_id, f.preferred_supplier_label);
     container.querySelector('#sysforge-part-warranty').checked = Boolean(f.has_warranty);
+    const stockEl = container.querySelector('#sysforge-part-stock');
+    if (stockEl) {
+      stockEl.value = String(
+        f.quantity_on_hand != null ? f.quantity_on_hand : 0
+      );
+      stockEl.disabled = false;
+    }
     const phNote = container.querySelector('#sysforge-part-ph-note');
     const convertBtn = container.querySelector('#sysforge-part-convert');
     const deleteBtn = container.querySelector('#sysforge-part-delete');
@@ -235,10 +247,17 @@ export function mountPartsCatalog(container, deps) {
           : '';
         const name = String(p.name || '').replace(/</g, '&lt;');
         const sku = String(p.sku || '—').replace(/</g, '&lt;');
+        const onHand = p.quantity_on_hand != null ? p.quantity_on_hand : 0;
+        const avail = p.available != null ? p.available : onHand;
+        const stockLabel =
+          p.stock_status === 'out'
+            ? `<span class="sysforge-badge sysforge-stock-out">0</span>`
+            : String(avail);
         return `<tr data-id="${p.id}">
           <td>${name} ${badge}</td>
           <td>${sku}</td>
           <td>${_formatCents(p.base_price_cents)}</td>
+          <td>${stockLabel}</td>
           <td><button type="button" class="btn-secondary sysforge-parts-edit" data-id="${p.id}">Edit</button></td>
         </tr>`;
       })
@@ -378,6 +397,8 @@ export function mountPartsCatalog(container, deps) {
     e.preventDefault();
     showError('');
     const body = readForm();
+    const stockRaw = container.querySelector('#sysforge-part-stock')?.value;
+    const onHand = Math.max(0, Math.floor(Number(stockRaw || 0)));
     try {
       if (state.form.id) {
         await deps.api(`/parts/${state.form.id}`, {
@@ -385,13 +406,25 @@ export function mountPartsCatalog(container, deps) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
+        await deps.api(`/parts/${state.form.id}/stock`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ quantity_on_hand: onHand }),
+        });
         await _toast('Part saved', false);
       } else {
-        await deps.api('/parts', {
+        const created = await deps.api('/parts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
+        if (created?.id != null && onHand > 0) {
+          await deps.api(`/parts/${created.id}/stock`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ quantity_on_hand: onHand }),
+          });
+        }
         await _toast('Part created', false);
       }
       if (formEl) formEl.hidden = true;

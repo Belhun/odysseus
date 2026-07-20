@@ -403,6 +403,188 @@ def test_export_import_payments_and_merge_column(monkeypatch, tmp_path):
 
 
 @pytest.mark.area_routes
+def test_export_import_invoice_document_binaries(monkeypatch, tmp_path):
+    """JSON export embeds contentBase64; import restores PDF bytes under documents/."""
+    _install_active(monkeypatch, tmp_path)
+    from integrations.sysforge.services import clients as clients_service
+    from integrations.sysforge.services import invoice_documents
+    from integrations.sysforge.services import invoices as invoice_service
+
+    client = clients_service.add_client(
+        {"first_name": "Pat", "last_name": "Docs", "phone_number": "5552001"}
+    )
+    inv = invoice_service.create_invoice(
+        {
+            "name": "PDF round-trip",
+            "client_id": client["id"],
+            "client_info": "Pat Docs",
+            "include_tax": False,
+            "tax_rate_bps": 0,
+        },
+        [
+            {
+                "part_id": None,
+                "part_name": "Labor",
+                "sku": None,
+                "quantity_milliunits": 1000,
+                "unit_price_cents": 5000,
+                "discount_type": "None",
+                "discount_value": 0,
+                "is_taxable": True,
+                "sort_order": 0,
+                "item_type": "Labor",
+                "supplier_id": None,
+            }
+        ],
+    )
+    pdf_bytes, _invoice, doc = invoice_documents.generate_and_persist(inv["id"])
+    assert pdf_bytes.startswith(b"%PDF")
+    assert doc["stored_rel_path"]
+
+    payload = backup_service.export_to_json()
+    docs = payload["invoiceDocuments"]
+    assert len(docs) == 1
+    exported = docs[0]
+    assert "contentBase64" in exported
+    assert exported["sha256"] == doc["sha256"]
+    assert exported["sizeBytes"] == len(pdf_bytes)
+
+    # Wipe DB rows + on-disk PDF, then import.
+    rel = doc["stored_rel_path"]
+    disk_path = invoice_documents.resolve_stored_path(rel)
+    assert disk_path.is_file()
+    disk_path.unlink()
+    conn = db_connection.connect()
+    try:
+        conn.execute("DELETE FROM InvoiceDocuments")
+        conn.execute("DELETE FROM InvoiceItems")
+        conn.execute("DELETE FROM Invoices")
+        conn.execute("DELETE FROM Clients")
+        conn.commit()
+    finally:
+        conn.close()
+    assert not disk_path.is_file()
+
+    result = backup_service.import_from_json(payload, ImportOptions())
+    assert result.success is True
+    assert result.invoice_documents_imported == 1
+
+    restored = invoice_documents.resolve_stored_path(rel)
+    assert restored.is_file()
+    assert restored.read_bytes() == pdf_bytes
+    conn = db_connection.connect()
+    try:
+        row = conn.execute(
+            "SELECT Sha256, SizeBytes, StoredRelPath FROM InvoiceDocuments"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == doc["sha256"]
+        assert int(row[1]) == len(pdf_bytes)
+        assert row[2] == rel
+    finally:
+        conn.close()
+
+
+@pytest.mark.area_routes
+def test_import_invoice_document_metadata_only_still_works(monkeypatch, tmp_path):
+    """Older JSON without contentBase64 still imports document metadata rows."""
+    _install_active(monkeypatch, tmp_path)
+    from integrations.sysforge.services import clients as clients_service
+    from integrations.sysforge.services import invoices as invoice_service
+
+    client = clients_service.add_client(
+        {"first_name": "Meta", "last_name": "Only", "phone_number": "5552002"}
+    )
+    inv = invoice_service.create_invoice(
+        {
+            "name": "Meta doc",
+            "client_id": client["id"],
+            "client_info": "Meta Only",
+            "include_tax": False,
+            "tax_rate_bps": 0,
+        },
+        [
+            {
+                "part_id": None,
+                "part_name": "Part",
+                "sku": None,
+                "quantity_milliunits": 1000,
+                "unit_price_cents": 1000,
+                "discount_type": "None",
+                "discount_value": 0,
+                "is_taxable": True,
+                "sort_order": 0,
+                "item_type": "Part",
+                "supplier_id": None,
+            }
+        ],
+    )
+    payload = {
+        "exportVersion": "1.0",
+        "clients": [
+            {
+                "id": client["id"],
+                "firstName": "Meta",
+                "lastName": "Only",
+                "phoneNumber": "5552002",
+                "isDeleted": False,
+            }
+        ],
+        "parts": [],
+        "invoices": [
+            {
+                "id": inv["id"],
+                "clientId": client["id"],
+                "name": "Meta doc",
+                "status": "Estimate",
+                "partsSubtotalCents": 1000,
+                "laborCostCents": 0,
+                "shippingCostCents": 0,
+                "taxAmountCents": 0,
+                "finalTotalCents": 1000,
+            }
+        ],
+        "invoiceItems": [],
+        "invoiceDocuments": [
+            {
+                "id": 901,
+                "invoiceId": inv["id"],
+                "kind": "pdf",
+                "fileName": "meta.pdf",
+                "mimeType": "application/pdf",
+                "sizeBytes": 12,
+                "storedRelPath": "invoices/1/deadbeef_meta.pdf",
+                "sha256": "abc",
+                "createdAt": "2026-01-01T00:00:00Z",
+            }
+        ],
+    }
+    # Wipe seeded invoice so import owns the tree
+    conn = db_connection.connect()
+    try:
+        conn.execute("DELETE FROM InvoiceItems")
+        conn.execute("DELETE FROM Invoices")
+        conn.execute("DELETE FROM Clients")
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = backup_service.import_from_json(payload, ImportOptions())
+    assert result.success is True
+    assert result.invoice_documents_imported == 1
+    conn = db_connection.connect()
+    try:
+        row = conn.execute(
+            "SELECT FileName, StoredRelPath FROM InvoiceDocuments WHERE Id = 901"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "meta.pdf"
+        assert row[1] == "invoices/1/deadbeef_meta.pdf"
+    finally:
+        conn.close()
+
+
+@pytest.mark.area_routes
 def test_sql_upload_rejected(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     res = client.post(

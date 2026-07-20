@@ -7,7 +7,7 @@ Optional Odysseus plugin for repair-shop systems (clients, invoices, parts, proj
 Settings → Integrations → **Business Management** → Install / Uninstall.
 
 - Install writes `data/plugins/sysforge/installed.json` and sets `features.sysforge = true`.
-- Install applies checksummed SQLite migrations `0002`–`0030` into `data/plugins/sysforge/sysforge.db`.
+- Install applies checksummed SQLite migrations `0002`–`0034` into `data/plugins/sysforge/sysforge.db`.
 - Uninstall clears the marker, sets the feature flag false, and hides sidebar/rail nav.
 - Plugin APIs under `/api/sysforge/*` return 404 when inactive.
 
@@ -57,7 +57,12 @@ Inner router: `static/js/router.js` + `routes-contract.js`. Route ids:
 
 - Migration: `0026_clients_last_interacted.sql` (`LastInteractedAt` + index). Concurrent siblings: payments `0027`, invoice documents `0028`, part price history `0029`, client merge `0030`.
 - Implicit touches: client update, invoice create/update; Classic pick + calculator client select call `POST …/touch`.
-- Host shortcut: `open_sysforge` (label “Open Business”, unbound by default) in Settings → Shortcuts; hidden when `features.sysforge` is off. Themes stay Odysseus global.
+- Host shortcuts (Settings → Shortcuts; no plugin-local keybinds):
+  - `open_sysforge` — Open Business (unbound by default)
+  - `sysforge_home` — Business dashboard (opens Business if closed)
+  - `sysforge_clients` — Classic client workspace
+  - `sysforge_calculator` — Invoice calculator
+  - All four hidden when `features.sysforge` is off. Themes stay Odysseus global.
 - Dashboard favorites: `config.json` `dashboard_favorites` card ids; star pins to top. Chrome breadcrumb: `Business › {route title}` (in-session; nav history not persisted across reload).
 
 ## Invoices API + calculator save contracts
@@ -136,12 +141,14 @@ Safe defaults: **off**. Cleanup never runs on install, plugin load, or app boot.
 | `POST` | `/backup/create` | Create Business ZIP (`include_drafts` optional) |
 | `GET` | `/backup/download/{id}` | Download backup file |
 | `POST` | `/backup/restore` | Restore from `backup_id` JSON or uploaded `.zip`/`.db` |
-| `GET` | `/backup/export.json` | Portable JSON (`exportVersion` `1.0`; includes `payments`, `invoiceDocuments`, `mergedIntoClientId`) |
+| `GET` | `/backup/export.json` | Portable JSON (`exportVersion` `1.0`; includes `payments`, `invoiceDocuments` with optional `contentBase64`, `mergedIntoClientId`) |
 | `POST` | `/backup/import.json` | Import JSON (multipart; Skip default; Overwrite supported) |
 | `POST` | `/backup/search/rebuild` | Manual client FTS rebuild |
 | `GET`/`PUT` | `/backup/schedule` | Schedule enable / interval / retention |
 
 **BUG-018:** JSON import with `import_clients` rebuilds `clients_fts` even when conflict Skip imports **0** clients. `.db` restore also rebuilds search before success. Restart alone does not heal a stale index.
+
+**Invoice documents in JSON:** Each `invoiceDocuments[]` entry includes metadata (`storedRelPath`, `sha256`, …). When the PDF exists under `data/plugins/sysforge/documents/`, export also embeds `contentBase64`. Import writes that binary back to `storedRelPath` (path-safe under `documents/`). Older exports without `contentBase64` still import metadata only. ZIP backups carry the DB (+ config/drafts); keep using ZIP or a host plugin-folder copy for full on-disk `documents/` trees when you are not using JSON.
 
 **Not ported:** unchecked SQL dump import. `.sql` uploads return 400; use JSON or `.db`/ZIP.
 
@@ -184,6 +191,56 @@ Desktop Lucene is **not** ported. Client typeahead uses SQLite **FTS5** in the s
 - Domain: `integrations/sysforge/services/clients.py`, `client_query.py`, `client_merge.py` (`normalize_phone`, `parse_client_query`, `rebuild_clients_fts`).
 - UI: `#clients` list/create/edit; shared typeahead `static/js/clientSearch.js` (250 ms debounce, AbortController, **matches before Add New**). Merge tool: `#sysforge/clients/merge`.
 - Duplicate banner: warn only; **Use this client** / **Create new client anyway** (no uniqueness constraints). Merge is a separate intentional tool.
+
+## Screw maps (annotate + library + S3 lookup)
+
+Schema `0020`–`0022` + `0031` (UNIQUE source map). Service: `integrations/sysforge/services/screw_maps.py`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET`/`POST` | `/projects/{id}/screw-map` | Get or create map (HW/Other only) |
+| `POST` | `/screw-maps/{id}/images` | Multipart photo upload |
+| `GET` | `/screw-maps/images/{id}/file` | Serve image bytes |
+| `GET` | `/screw-maps/{id}/screws` | Global numbered markers |
+| `POST` | `/screw-maps/images/{id}/screws` | Place marker |
+| `PATCH`/`DELETE` | `/screw-maps/screws/{id}` | Update / delete marker |
+| `GET` | `/screw-maps/{id}/notes` | Note markers for map |
+| `POST` | `/screw-maps/images/{id}/notes` | Place note marker |
+| `PATCH`/`DELETE` | `/screw-maps/notes/{id}` | Update / delete note |
+| `POST` | `/screw-maps/{id}/lock` | Manual lock (read-only) |
+| `GET` | `/screw-map-library?device_model=&limit=` | Browse sets (`LOWER(TRIM(DeviceModel))`) |
+| `POST` | `/screw-maps/{id}/publish` | Publish locked map once (`title`, tags, notes) |
+| `POST` | `/projects/{id}/screw-map/clone-from-library` | Full clone into empty map (`set_id`) |
+| `POST` | `/screw-maps/{id}/measurement-matches` | Top-N scored matches (no auto-assign) |
+
+### Mobile companion (S5 — `0.18.0`)
+
+LAN browser upload (Method A) + inbox folder (Method B) + Tailscale/HTTPS config hooks (Method C docs).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/companion/pair/start` | Desk: new QR token + 6-digit code |
+| `GET` | `/companion/pair/active` | Desk: current unused challenge |
+| `POST`/`GET` | `/companion/context` | Desk: set/get active project for phone |
+| `GET` | `/companion/sessions` | List paired phones |
+| `DELETE` | `/companion/sessions/{id}` | Revoke one |
+| `POST` | `/companion/sessions/revoke-all` | Revoke all |
+| `POST` | `/companion/inbox/scan` | Discover inbox photos |
+| `POST` | `/companion/inbox/import` | Import pending → active map |
+| `POST` | `/companion/phone/pair` | Phone: exchange code → session (auth-exempt) |
+| `GET` | `/companion/phone/context` | Phone: active context (Bearer) |
+| `POST` | `/companion/phone/upload` | Phone: multipart image → active map |
+| `GET` | `/companion/phone/events` | Phone: SSE context/upload (Bearer) |
+
+- UI: project detail **Phone upload** QR panel; Settings companion block; phone page `/static/plugins/sysforge/companion/`.
+- Migration: `0034_companion.sql`. Remote access notes: `docs/companion-remote-access.md`.
+- Still deferred: image delete/reorder (desktop has neither); custom VPS relay.
+
+## Projects polish (`0.17.0`)
+
+- **DisplayCode:** auto `YYMMDD-ABBR-CAT-SEQ` on create (e.g. `250216-IP14-HW-001`); unique index `0032`; shown in hub/detail/picker; searchable.
+- **Notes (P4 light):** markdown toolbar + live preview on First contact / Client issue / Repair plan. Still explicit **Save notes**. Full Obsidian/PDF-in-notes deferred.
+- **Inventory light (P6):** `PartStock` (`0033`); `GET`/`PUT`/`PATCH /parts/{id}/stock`; catalog On hand field; project parts show stock badges; soft-reserve on create-from-invoice / release on archive.
 
 ## Drafts (file-based)
 

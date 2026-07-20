@@ -34,7 +34,7 @@ def test_sysforge_install_writes_marker_and_feature(monkeypatch, tmp_path):
     conn = sqlite3.connect(str(db))
     try:
         count = conn.execute("SELECT COUNT(*) FROM SchemaVersion").fetchone()[0]
-        assert count == 29
+        assert count == 32
     finally:
         conn.close()
 
@@ -71,9 +71,9 @@ def test_sysforge_status_includes_schema(monkeypatch, tmp_path):
         assert body["ok"] is True
         schema = body["schema"]
         assert schema["db_exists"] is True
-        assert schema["latest_id"] == 30
-        assert schema["latest_name"] == "0030_client_merge"
-        assert schema["applied_count"] == 29
+        assert schema["latest_id"] == 33
+        assert schema["latest_name"] == "0033_part_stock"
+        assert schema["applied_count"] == 32
 
 
 @pytest.mark.area_routes

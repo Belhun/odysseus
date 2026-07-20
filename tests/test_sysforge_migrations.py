@@ -41,10 +41,10 @@ def _column_type(conn, table: str, column: str) -> str | None:
 def test_fresh_migrate_creates_core_tables(tmp_path):
     db = tmp_path / "sysforge.db"
     report = run_migrations(db)
-    assert report.applied_count == 29
-    assert report.latest_id == 30
-    assert report.latest_name == "0030_client_merge"
-    assert len(report.applied_now) == 29
+    assert report.applied_count == 32
+    assert report.latest_id == 33
+    assert report.latest_name == "0033_part_stock"
+    assert len(report.applied_now) == 32
 
     conn = connect(db)
     try:
@@ -123,7 +123,7 @@ def test_migrate_idempotent(tmp_path):
     db = tmp_path / "sysforge.db"
     first = run_migrations(db)
     second = run_migrations(db)
-    assert first.applied_count == second.applied_count == 29
+    assert first.applied_count == second.applied_count == 32
     assert second.applied_now == []
     assert set(second.already_applied) == set(first.applied_now)
 
@@ -176,8 +176,8 @@ def test_file_tamper_after_apply(tmp_path):
 def test_discover_starts_at_0002_not_0001():
     migrations = discover_migrations()
     assert migrations[0].id == 2
-    assert migrations[-1].id == 30
-    assert len(migrations) == 29
+    assert migrations[-1].id == 33
+    assert len(migrations) == 32
 
 
 @pytest.mark.area_routes
@@ -205,7 +205,7 @@ def test_install_populates_schema_version(monkeypatch, tmp_path):
     conn = connect(db)
     try:
         count = conn.execute("SELECT COUNT(*) FROM SchemaVersion").fetchone()[0]
-        assert count == 29
+        assert count == 32
         names = {
             r[0]
             for r in conn.execute(

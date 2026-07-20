@@ -57,6 +57,62 @@ def generate_device_id() -> str:
     return f"DEV-{date}-{suffix}"
 
 
+def model_abbr(text: str | None) -> str:
+    """Build a short model token for DisplayCode (e.g. iPhone 14 → IP14)."""
+    raw = (text or "").strip()
+    if not raw:
+        return "DEV"
+    chunks = re.findall(r"[A-Za-z]+|\d+", raw)
+    letters: list[str] = []
+    digits: list[str] = []
+    for chunk in chunks:
+        if chunk.isdigit():
+            digits.append(chunk)
+            continue
+        # CamelCase: iPhone → i, Phone
+        parts = re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])", chunk)
+        if not parts:
+            parts = [chunk]
+        for part in parts:
+            letters.append(part[0].upper())
+    abbr = ("".join(letters) + "".join(digits))[:6]
+    if abbr:
+        return abbr.upper()
+    cleaned = re.sub(r"[^A-Za-z0-9]", "", raw).upper()
+    return (cleaned[:6] or "DEV")
+
+
+def generate_display_code(
+    category: str,
+    label: str | None,
+    *,
+    conn: sqlite3.Connection,
+) -> str:
+    """Human-readable code: YYMMDD-ABBR-CAT-SEQ (e.g. 250216-IP14-HW-001)."""
+    from integrations.sysforge.db.utc import utc_now
+
+    cat = str(category or "HW").strip().upper()
+    if cat not in CATEGORIES:
+        cat = "HW"
+    date = utc_now().strftime("%y%m%d")
+    abbr = model_abbr(label)
+    prefix = f"{date}-{abbr}-{cat}-"
+    rows = conn.execute(
+        """
+        SELECT DisplayCode FROM Projects
+        WHERE DisplayCode LIKE ?
+        """,
+        (f"{prefix}%",),
+    ).fetchall()
+    max_seq = 0
+    for row in rows:
+        code = row["DisplayCode"] or ""
+        tail = code[len(prefix) :] if code.startswith(prefix) else ""
+        if tail.isdigit():
+            max_seq = max(max_seq, int(tail))
+    return f"{prefix}{max_seq + 1:03d}"
+
+
 def _row_to_project(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     data = dict(row)
     return {
@@ -89,6 +145,7 @@ def _hub_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     return {
         "project_id": int(data["ProjectId"]),
         "device_id": data.get("DeviceId") or "",
+        "display_code": data.get("DisplayCode"),
         "title": data.get("Title"),
         "status": data.get("Status") or "Intake",
         "updated_at": _storage_to_iso(data.get("UpdatedAt")),
@@ -154,17 +211,19 @@ def create_project(
 
         conn.execute("BEGIN")
         try:
+            display_code = generate_display_code(cat, device["Label"], conn=conn)
             cur = conn.execute(
                 """
                 INSERT INTO Projects (
-                    WorkOrderId, ClientId, DeviceId, Category, Status, Title,
+                    WorkOrderId, ClientId, DeviceId, DisplayCode, Category, Status, Title,
                     SourceInvoiceId, CreatedAt, UpdatedAt
-                ) VALUES (?, ?, ?, ?, 'Intake', ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, 'Intake', ?, ?, ?, ?)
                 """,
                 (
                     work_order_id,
                     wo["ClientId"],
                     resolved,
+                    display_code,
                     cat,
                     device["Label"],
                     device["InvoiceId"],
@@ -178,6 +237,8 @@ def create_project(
                 (project_id, invoice_device_id),
             )
             if item_ids:
+                from integrations.sysforge.services import stock as stock_service
+
                 placeholders = ",".join("?" * len(item_ids))
                 items = conn.execute(
                     f"""
@@ -188,6 +249,7 @@ def create_project(
                     (*item_ids, int(device["InvoiceId"])),
                 ).fetchall()
                 for item in items:
+                    qty_milli = int(item["QuantityMilliunits"] or 1000)
                     conn.execute(
                         """
                         INSERT INTO ProjectParts (
@@ -199,9 +261,14 @@ def create_project(
                             int(item["Id"]),
                             item["PartId"],
                             item["PartName"] or "",
-                            int(item["QuantityMilliunits"] or 1000),
+                            qty_milli,
                         ),
                     )
+                    if item["PartId"] is not None:
+                        units = max(1, (qty_milli + 999) // 1000)
+                        stock_service.reserve_units(
+                            int(item["PartId"]), units, conn=conn
+                        )
             for section in NOTE_SECTIONS:
                 conn.execute(
                     """
@@ -224,7 +291,11 @@ def create_project(
         except Exception:
             conn.execute("ROLLBACK")
             raise
-        return {"project_id": project_id, "device_id": resolved}
+        return {
+            "project_id": project_id,
+            "device_id": resolved,
+            "display_code": display_code,
+        }
     finally:
         conn.close()
 
@@ -258,6 +329,7 @@ def get_active_projects(*, include_archived: bool = False) -> list[dict[str, Any
             SELECT
                 p.Id AS ProjectId,
                 p.DeviceId,
+                p.DisplayCode,
                 p.Title,
                 p.Status,
                 p.UpdatedAt,
@@ -401,6 +473,15 @@ def update_device_fields(
             """,
             (model, serial, color, new_title, now, project_id),
         )
+        # Keep map device fields aligned with project for publish/browse.
+        conn.execute(
+            """
+            UPDATE ScrewMaps SET
+                DeviceModel = ?, DeviceSerial = ?, UpdatedAt = ?
+            WHERE ProjectId = ?
+            """,
+            (model, serial, now, project_id),
+        )
         conn.commit()
         proj = get_project(project_id, conn=conn)
         assert proj is not None
@@ -473,28 +554,51 @@ def get_parts(project_id: int, *, conn: sqlite3.Connection | None = None) -> lis
     if own:
         conn = db_connection.connect()
     try:
+        from integrations.sysforge.services import stock as stock_service
+
         rows = conn.execute(
             """
             SELECT * FROM ProjectParts WHERE ProjectId = ? ORDER BY Id
             """,
             (project_id,),
         ).fetchall()
-        return [
-            {
-                "id": int(r["Id"]),
-                "project_id": int(r["ProjectId"]),
-                "invoice_item_id": (
-                    int(r["InvoiceItemId"]) if r["InvoiceItemId"] is not None else None
-                ),
-                "part_id": int(r["PartId"]) if r["PartId"] is not None else None,
-                "part_name": r["PartName"] or "",
-                "vendor": r["Vendor"],
-                "tracking_id": r["TrackingId"],
-                "tracking_status": r["TrackingStatus"],
-                "quantity_milliunits": int(r["QuantityMilliunits"] or 1000),
-            }
-            for r in rows
-        ]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            part_id = int(r["PartId"]) if r["PartId"] is not None else None
+            qty_milli = int(r["QuantityMilliunits"] or 1000)
+            needed = max(1, (qty_milli + 999) // 1000)
+            stock = (
+                stock_service.get_stock(part_id, conn=conn) if part_id is not None else None
+            )
+            available = stock["available"] if stock else None
+            if stock is None:
+                stock_status = "untracked"
+            elif available is not None and available <= 0:
+                stock_status = "out"
+            elif available is not None and available < needed:
+                stock_status = "low"
+            else:
+                stock_status = "in_stock"
+            out.append(
+                {
+                    "id": int(r["Id"]),
+                    "project_id": int(r["ProjectId"]),
+                    "invoice_item_id": (
+                        int(r["InvoiceItemId"]) if r["InvoiceItemId"] is not None else None
+                    ),
+                    "part_id": part_id,
+                    "part_name": r["PartName"] or "",
+                    "vendor": r["Vendor"],
+                    "tracking_id": r["TrackingId"],
+                    "tracking_status": r["TrackingStatus"],
+                    "quantity_milliunits": qty_milli,
+                    "quantity_on_hand": stock["quantity_on_hand"] if stock else None,
+                    "quantity_reserved": stock["quantity_reserved"] if stock else None,
+                    "available": available,
+                    "stock_status": stock_status,
+                }
+            )
+        return out
     finally:
         if own:
             conn.close()
@@ -634,13 +738,32 @@ def archive_project(project_id: int) -> dict[str, Any]:
     now = format_storage()
     conn = db_connection.connect()
     try:
-        cur = conn.execute(
-            "UPDATE Projects SET ArchivedAt = ?, UpdatedAt = ? WHERE Id = ?",
-            (now, now, project_id),
-        )
-        if cur.rowcount == 0:
+        row = conn.execute("SELECT Id FROM Projects WHERE Id = ?", (project_id,)).fetchone()
+        if row is None:
             raise ProjectNotFoundError(f"Project {project_id} not found")
-        conn.commit()
+        from integrations.sysforge.services import stock as stock_service
+
+        parts = conn.execute(
+            """
+            SELECT PartId, QuantityMilliunits FROM ProjectParts
+            WHERE ProjectId = ? AND PartId IS NOT NULL
+            """,
+            (project_id,),
+        ).fetchall()
+        conn.execute("BEGIN")
+        try:
+            for part in parts:
+                qty_milli = int(part["QuantityMilliunits"] or 1000)
+                units = max(1, (qty_milli + 999) // 1000)
+                stock_service.release_units(int(part["PartId"]), units, conn=conn)
+            conn.execute(
+                "UPDATE Projects SET ArchivedAt = ?, UpdatedAt = ? WHERE Id = ?",
+                (now, now, project_id),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         proj = get_project(project_id, conn=conn)
         assert proj is not None
         return proj

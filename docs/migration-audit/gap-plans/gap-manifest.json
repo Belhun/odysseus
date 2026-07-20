@@ -249,7 +249,7 @@
     "phase": "P3",
     "priority": "medium",
     "domain": "screw-maps",
-    "summary": "Desktop is in progress on migrations 0019–0021, ScrewMapService, and ScrewMapView (single-click place, numbered dots, autosave+undo, HW/Other only, 1:1 map/project, preview above Before/After). Odysseus has nothing. Port schema + image store under plugin data + HTML canvas/SVG ScrewMapView; defer S5 mobile, zoom/pan extras, and repair timeline.",
+    "summary": "Schema 0020–0022 + 0031 UNIQUE + ScrewMapView annotate/autosave/undo/lock shipped. Library publish/clone + S3 measurement lookup shipped in 0.16.0 (tighten 0.16.1). Zoom/pan + note markers shipped in 0.17.0. Still deferred: S5 mobile; image delete/reorder skipped (not on desktop).",
     "source_refs": [
       "MASTER §5 Phase 4",
       "feature-gap-matrix §7 Screw maps",

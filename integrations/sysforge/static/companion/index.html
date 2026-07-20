@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>SysForge Phone Upload</title>
+  <link rel="stylesheet" href="/static/plugins/sysforge/companion/companion.css" />
+</head>
+<body>
+  <main class="sf-c-app" id="sf-c-app">
+    <header class="sf-c-header">
+      <h1>SysForge</h1>
+      <p class="sf-c-sub">Screw map photo upload</p>
+    </header>
+
+    <section id="sf-c-pair" class="sf-c-card" hidden>
+      <h2>Pair this phone</h2>
+      <p>Enter the 6-digit code shown on the laptop.</p>
+      <label class="sf-c-field">
+        <span>Pair code</span>
+        <input type="text" id="sf-c-code" inputmode="numeric" pattern="[0-9]*"
+          maxlength="6" autocomplete="one-time-code" placeholder="123456" />
+      </label>
+      <button type="button" class="sf-c-btn sf-c-btn-primary" id="sf-c-pair-btn">
+        Trust this phone
+      </button>
+      <p class="sf-c-error" id="sf-c-pair-error" hidden></p>
+    </section>
+
+    <section id="sf-c-main" class="sf-c-card" hidden>
+      <div class="sf-c-context" id="sf-c-context">
+        <p class="sf-c-muted">Loading context…</p>
+      </div>
+      <label class="sf-c-shutter">
+        <span>Take photo</span>
+        <input type="file" id="sf-c-file" accept="image/*" capture="environment" />
+      </label>
+      <button type="button" class="sf-c-btn sf-c-btn-secondary" id="sf-c-refresh">
+        Refresh
+      </button>
+      <p class="sf-c-status" id="sf-c-status" hidden></p>
+      <p class="sf-c-error" id="sf-c-upload-error" hidden></p>
+      <button type="button" class="sf-c-btn sf-c-btn-ghost" id="sf-c-unpair">
+        Forget this phone
+      </button>
+    </section>
+
+    <section id="sf-c-need-token" class="sf-c-card" hidden>
+      <h2>Scan the QR again</h2>
+      <p>Open the phone-upload QR from the laptop project screen, then enter the pair code.</p>
+    </section>
+
+    <footer class="sf-c-foot">
+      <p>LAN companion · same Wi-Fi as the shop laptop</p>
+    </footer>
+  </main>
+  <script src="/static/plugins/sysforge/companion/companion.js"></script>
+</body>
+</html>

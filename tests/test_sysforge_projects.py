@@ -118,12 +118,15 @@ def test_create_project_happy_path(monkeypatch, tmp_path):
     body = res.json()
     assert body["project_id"] >= 1
     assert body["device_id"] == "DEV-260717-TEST01"
+    assert body["display_code"]
+    assert "-HW-" in body["display_code"]
 
     detail = client.get(f"/api/sysforge/projects/{body['project_id']}")
     assert detail.status_code == 200
     data = detail.json()
     assert data["project"]["status"] == "Intake"
     assert data["project"]["title"] == "Phone A"
+    assert data["project"]["display_code"] == body["display_code"]
     assert data["notes"]["FirstContact"] == ""
     assert data["notes"]["ClientIssue"] == ""
     assert data["notes"]["Plan"] == ""
@@ -135,6 +138,11 @@ def test_create_project_happy_path(monkeypatch, tmp_path):
     linked = next(d for d in devices.json()["devices"] if d["id"] == device["id"])
     assert linked["has_project"] is True
     assert linked["project_id"] == body["project_id"]
+
+    # Search by DisplayCode
+    found = client.get(f"/api/sysforge/projects?q={body['display_code']}")
+    assert found.status_code == 200
+    assert any(p["id"] == body["project_id"] for p in found.json()["projects"])
 
 
 @pytest.mark.area_routes
@@ -330,10 +338,132 @@ def test_save_notes(monkeypatch, tmp_path):
     ).json()["project_id"]
     res = client.put(
         f"/api/sysforge/projects/{pid}/notes",
-        json={"FirstContact": "Called in", "ClientIssue": "Cracked", "Plan": "Replace"},
+        json={
+            "FirstContact": "Called in **urgent**",
+            "ClientIssue": "Cracked *screen*",
+            "Plan": "Replace with [guide](https://example.com)",
+        },
     )
     assert res.status_code == 200
-    assert res.json()["notes"]["Plan"] == "Replace"
+    notes = res.json()["notes"]
+    assert notes["Plan"] == "Replace with [guide](https://example.com)"
+    assert "**urgent**" in notes["FirstContact"]
+
+
+@pytest.mark.area_routes
+def test_display_code_seq_and_model_abbr(monkeypatch, tmp_path):
+    from integrations.sysforge.services.projects import model_abbr
+
+    assert model_abbr("iPhone 14") == "IP14"
+    assert model_abbr("MacBook Pro") == "MBP"
+    assert model_abbr("") == "DEV"
+
+    client = _client(monkeypatch, tmp_path)
+    ctx = _setup_accepted_with_devices(client, labels=("iPhone 14", "iPhone 14"))
+    first = client.post(
+        "/api/sysforge/projects/from-invoice",
+        json={
+            "invoice_id": ctx["invoice"]["id"],
+            "invoice_device_id": ctx["devices"][0]["id"],
+            "category": "HW",
+        },
+    ).json()
+    second = client.post(
+        "/api/sysforge/projects/from-invoice",
+        json={
+            "invoice_id": ctx["invoice"]["id"],
+            "invoice_device_id": ctx["devices"][1]["id"],
+            "category": "HW",
+        },
+    ).json()
+    assert first["display_code"].endswith("-001")
+    assert second["display_code"].endswith("-002")
+    assert "IP14" in first["display_code"]
+    assert first["display_code"].rsplit("-", 1)[0] == second["display_code"].rsplit("-", 1)[0]
+
+
+@pytest.mark.area_routes
+def test_part_stock_and_project_reserve(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    part = client.post(
+        "/api/sysforge/parts",
+        json={
+            "name": "OEM Battery",
+            "base_price_cents": 4500,
+            "sku": "BAT-001",
+            "is_placeholder": False,
+        },
+    )
+    assert part.status_code == 200, part.text
+    part_id = part.json()["id"]
+
+    stock = client.put(
+        f"/api/sysforge/parts/{part_id}/stock",
+        json={"quantity_on_hand": 5},
+    )
+    assert stock.status_code == 200, stock.text
+    assert stock.json()["quantity_on_hand"] == 5
+    assert stock.json()["available"] == 5
+
+    person = client.post(
+        "/api/sysforge/clients",
+        json={"first_name": "Sam", "last_name": "Lee", "phone_number": "5559999"},
+    ).json()
+    inv = client.post(
+        "/api/sysforge/invoices",
+        json={
+            "name": "Stock est",
+            "client_id": person["id"],
+            "client_info": "Sam Lee",
+            "items": [
+                {
+                    "part_id": part_id,
+                    "part_name": "OEM Battery",
+                    "sku": "BAT-001",
+                    "quantity_milliunits": 2000,
+                    "unit_price_cents": 4500,
+                    "discount_type": "None",
+                    "discount_value": 0,
+                    "is_taxable": True,
+                    "sort_order": 0,
+                    "item_type": "Part",
+                    "supplier_id": None,
+                }
+            ],
+        },
+    )
+    assert inv.status_code == 201, inv.text
+    invoice = inv.json()
+    devices = client.put(
+        f"/api/sysforge/invoices/{invoice['id']}/devices",
+        json={"devices": [{"label": "Phone", "sort_order": 0}]},
+    ).json()["devices"]
+    client.post(
+        "/api/sysforge/work-orders/from-accepted-estimate",
+        json={"invoice_id": invoice["id"]},
+    )
+    created = client.post(
+        "/api/sysforge/projects/from-invoice",
+        json={
+            "invoice_id": invoice["id"],
+            "invoice_device_id": devices[0]["id"],
+            "category": "HW",
+            "invoice_item_ids": [invoice["items"][0]["id"]],
+        },
+    )
+    assert created.status_code == 201, created.text
+    detail = client.get(f"/api/sysforge/projects/{created.json()['project_id']}")
+    assert detail.status_code == 200
+    parts = detail.json()["parts"]
+    assert len(parts) == 1
+    assert parts[0]["part_id"] == part_id
+    assert parts[0]["quantity_reserved"] == 2
+    assert parts[0]["available"] == 3
+    assert parts[0]["stock_status"] == "in_stock"
+
+    after = client.get(f"/api/sysforge/parts/{part_id}/stock")
+    assert after.json()["quantity_reserved"] == 2
+    assert after.json()["available"] == 3
 
 
 @pytest.mark.area_routes
@@ -358,6 +488,7 @@ def test_migrations_include_project_tables(monkeypatch, tmp_path):
             "ProjectParts",
             "ProjectNotes",
             "ProjectAttachments",
+            "PartStock",
         ):
             assert table in names, table
         cols = {
@@ -365,5 +496,12 @@ def test_migrations_include_project_tables(monkeypatch, tmp_path):
             for r in conn.execute("PRAGMA table_info(InvoiceDevices)").fetchall()
         }
         assert "ProjectId" in cols
+        indexes = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        assert "ux_Projects_DisplayCode" in indexes
     finally:
         conn.close()

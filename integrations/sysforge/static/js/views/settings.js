@@ -138,6 +138,61 @@ export function mountSettings(container, deps) {
           <button type="submit" class="btn-secondary" data-backup-action="schedule-save">Save schedule</button>
         </form>
       </section>
+
+      <section class="sysforge-companion-settings" aria-labelledby="sysforge-companion-heading">
+        <h4 id="sysforge-companion-heading" class="sysforge-backup-heading">Phone companion (S5)</h4>
+        <p class="sysforge-field-hint">
+          LAN browser upload (Method A). Inbox folder is the Wi-Fi fallback (Method B).
+          Optional public URL for Tailscale / HTTPS (Method C docs).
+        </p>
+        <label class="sysforge-field sysforge-field-check">
+          <input type="checkbox" id="sysforge-companion-enabled" />
+          <span>Enable phone companion</span>
+        </label>
+        <label class="sysforge-field">
+          <span>Pair code lifetime (minutes)</span>
+          <input type="number" id="sysforge-companion-pair-mins" min="1" max="120" step="1" />
+        </label>
+        <label class="sysforge-field">
+          <span>Session lifetime (hours)</span>
+          <input type="number" id="sysforge-companion-session-hrs" min="1" max="168" step="1" />
+        </label>
+        <label class="sysforge-field sysforge-field-check">
+          <input type="checkbox" id="sysforge-companion-inbox-enabled" />
+          <span>Enable inbox folder import</span>
+        </label>
+        <label class="sysforge-field">
+          <span>Inbox folder path</span>
+          <input type="text" id="sysforge-companion-inbox-path"
+            placeholder="Default: plugin data / Inbox" />
+        </label>
+        <label class="sysforge-field sysforge-field-check">
+          <input type="checkbox" id="sysforge-companion-inbox-auto" />
+          <span>Auto-import inbox photos into active screw map</span>
+        </label>
+        <label class="sysforge-field">
+          <span>Public base URL (optional)</span>
+          <input type="url" id="sysforge-companion-public-url"
+            placeholder="https://sysforge-pc.tailnet.ts.net:7000" />
+          <span class="sysforge-field-hint">
+            Tailscale MagicDNS or reverse-proxy HTTPS origin for QR links.
+            Leave empty for LAN-only.
+          </span>
+        </label>
+        <div class="sysforge-settings-actions">
+          <button type="button" class="btn-secondary" id="sysforge-companion-save">
+            Save companion settings
+          </button>
+          <button type="button" class="btn-secondary" id="sysforge-companion-revoke">
+            Revoke all paired phones
+          </button>
+        </div>
+        <ul id="sysforge-companion-sessions" class="sysforge-hub-list"></ul>
+        <p class="sysforge-settings-error" id="sysforge-companion-error" hidden></p>
+        <p class="sysforge-field-hint">
+          Docs: <code>integrations/sysforge/docs/companion-remote-access.md</code>
+        </p>
+      </section>
     </div>`;
 
   const form = container.querySelector('#sysforge-settings-form');
@@ -162,6 +217,17 @@ export function mountSettings(container, deps) {
   const retentionSave = container.querySelector('#sysforge-retention-save');
   const retentionCleanup = container.querySelector('#sysforge-retention-cleanup');
   const retentionError = container.querySelector('#sysforge-retention-error');
+  const companionEnabled = container.querySelector('#sysforge-companion-enabled');
+  const companionPairMins = container.querySelector('#sysforge-companion-pair-mins');
+  const companionSessionHrs = container.querySelector('#sysforge-companion-session-hrs');
+  const companionInboxEnabled = container.querySelector('#sysforge-companion-inbox-enabled');
+  const companionInboxPath = container.querySelector('#sysforge-companion-inbox-path');
+  const companionInboxAuto = container.querySelector('#sysforge-companion-inbox-auto');
+  const companionPublicUrl = container.querySelector('#sysforge-companion-public-url');
+  const companionSave = container.querySelector('#sysforge-companion-save');
+  const companionRevoke = container.querySelector('#sysforge-companion-revoke');
+  const companionSessions = container.querySelector('#sysforge-companion-sessions');
+  const companionError = container.querySelector('#sysforge-companion-error');
 
   let _retentionWarned = false;
   let _previewWouldDelete = 0;
@@ -184,9 +250,40 @@ export function mountSettings(container, deps) {
           data.projects?.include_archived_in_search
       );
     }
+    const c = data.companion || {};
+    if (companionEnabled) companionEnabled.checked = Boolean(c.enabled ?? true);
+    if (companionPairMins) companionPairMins.value = String(c.pair_code_minutes ?? 15);
+    if (companionSessionHrs) companionSessionHrs.value = String(c.session_hours ?? 48);
+    if (companionInboxEnabled) companionInboxEnabled.checked = Boolean(c.inbox_enabled);
+    if (companionInboxPath) companionInboxPath.value = c.inbox_path || '';
+    if (companionInboxAuto) companionInboxAuto.checked = Boolean(c.inbox_auto_import);
+    if (companionPublicUrl) companionPublicUrl.value = c.public_base_url || '';
     if (errorEl) {
       errorEl.hidden = true;
       errorEl.textContent = '';
+    }
+  }
+
+  async function reloadCompanionSessions() {
+    if (!companionSessions) return;
+    try {
+      const data = await deps.api('/companion/sessions');
+      const sessions = data.sessions || [];
+      if (!sessions.length) {
+        companionSessions.innerHTML =
+          '<li class="sysforge-classic-empty">No paired phones.</li>';
+        return;
+      }
+      companionSessions.innerHTML = sessions
+        .map((s) => {
+          const label = s.device_label || `Session ${s.id}`;
+          const state = s.active ? 'active' : s.revoked ? 'revoked' : 'expired';
+          return `<li>${label} · ${state} · expires ${s.expires_at || ''}</li>`;
+        })
+        .join('');
+    } catch (_) {
+      companionSessions.innerHTML =
+        '<li class="sysforge-classic-empty">Could not load sessions.</li>';
     }
   }
 
@@ -535,12 +632,59 @@ export function mountSettings(container, deps) {
     }
   });
 
+  companionSave?.addEventListener('click', async () => {
+    if (companionError) {
+      companionError.hidden = true;
+      companionError.textContent = '';
+    }
+    const body = {
+      companion: {
+        enabled: Boolean(companionEnabled?.checked),
+        pair_code_minutes: Number(companionPairMins?.value || 15),
+        session_hours: Number(companionSessionHrs?.value || 48),
+        inbox_enabled: Boolean(companionInboxEnabled?.checked),
+        inbox_path: (companionInboxPath?.value || '').trim() || null,
+        inbox_auto_import: Boolean(companionInboxAuto?.checked),
+        public_base_url: (companionPublicUrl?.value || '').trim() || null,
+      },
+    };
+    try {
+      const data = await deps.api('/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      applyLoaded(data);
+      await _toast('Companion settings saved', false);
+    } catch (err) {
+      const msg = err?.message || String(err);
+      if (companionError) {
+        companionError.textContent = msg;
+        companionError.hidden = false;
+      }
+      await _toast(msg, true);
+    }
+  });
+
+  companionRevoke?.addEventListener('click', async () => {
+    const ok = window.confirm('Revoke all paired phones? They must pair again.');
+    if (!ok) return;
+    try {
+      const data = await deps.api('/companion/sessions/revoke-all', { method: 'POST' });
+      await _toast(`Revoked ${data.revoked || 0} session(s)`, false);
+      await reloadCompanionSessions();
+    } catch (err) {
+      await _toast(err?.message || String(err), true);
+    }
+  });
+
   container.dataset.mounted = '1';
   container._sysforgeReloadSettings = async () => {
     await reload();
     await reloadSchedule();
     await reloadBackups();
     await reloadRetention();
+    await reloadCompanionSessions();
   };
 }
 
