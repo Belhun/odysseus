@@ -196,6 +196,7 @@ export function handleUIControl(uiData) {
             });
           }
         }).catch(function(){});
+      }
 
     } else if (uiEvent === 'open_email_reply' || uiData.ui_event === 'open_email_reply') {
       try {
