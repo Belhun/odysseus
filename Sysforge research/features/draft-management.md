@@ -13,16 +13,23 @@ JSON file drafts outside SQLite; triple-buffer autosave; draft list; load into c
 
 ## Status
 
-**Done** — auto-delete on startup **partial** (`DeleteOldDrafts` not wired to startup).
+**Done (Odysseus)** — optional retention with safe defaults (`draft-retention-draft-08`):
+
+- `auto_delete_old` defaults **false**; missing key → false
+- No cleanup on install / startup / plugin load
+- Settings UI + confirm + post-delete notice + pin
+- Lazy weekly schedule gated by toggle (default schedule off)
+
+Desktop SysForge still has `DeleteOldDrafts` unwired (BUG-017 / DRAFT-08 by design). Do not “fix” by adding a silent boot hook.
 
 ## Dependencies
 
-- Filesystem under `%LOCALAPPDATA%\SysForge\Drafts\`
-- `JsonSchemaValidator` for draft payload shape
+- Filesystem under `%LOCALAPPDATA%\SysForge\Drafts\` (desktop) / `data/plugins/sysforge/drafts/` (Odysseus)
+- `JsonSchemaValidator` for draft payload shape (desktop)
 
 ## Port approach
 
-Near-direct port: same JSON files in `data/addons/sysforge/drafts/`. File APIs + calculator autosave debounce in JS. Wire optional cleanup job in Odysseus task scheduler.
+Near-direct port: same JSON files. File APIs + calculator autosave debounce in JS. Optional cleanup is settings-gated (default off); pin survives retention.
 
 ## Effort
 

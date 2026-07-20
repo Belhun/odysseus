@@ -1,0 +1,176 @@
+/* SysForge S5 phone companion — gloves-friendly, large targets */
+
+:root {
+  --sf-c-bg: #1a1c1e;
+  --sf-c-card: #25282c;
+  --sf-c-text: #f2f4f6;
+  --sf-c-muted: #9aa3ad;
+  --sf-c-accent: #3d9a6a;
+  --sf-c-accent-press: #2f7a53;
+  --sf-c-danger: #d4534a;
+  --sf-c-radius: 14px;
+  --sf-c-pad: 1.25rem;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--sf-c-bg);
+  color: var(--sf-c-text);
+}
+
+.sf-c-app {
+  max-width: 28rem;
+  margin: 0 auto;
+  padding: var(--sf-c-pad);
+  padding-bottom: 3rem;
+}
+
+.sf-c-header h1 {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.sf-c-sub {
+  margin: 0.25rem 0 1.25rem;
+  color: var(--sf-c-muted);
+  font-size: 0.95rem;
+}
+
+.sf-c-card {
+  background: var(--sf-c-card);
+  border-radius: var(--sf-c-radius);
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.sf-c-card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+}
+
+.sf-c-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 1rem 0;
+}
+
+.sf-c-field input {
+  font-size: 1.75rem;
+  letter-spacing: 0.35em;
+  text-align: center;
+  padding: 0.85rem;
+  border-radius: 10px;
+  border: 2px solid #3a4048;
+  background: #121416;
+  color: var(--sf-c-text);
+}
+
+.sf-c-btn {
+  display: block;
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 0.65rem;
+}
+
+.sf-c-btn-primary {
+  background: var(--sf-c-accent);
+  color: #fff;
+}
+
+.sf-c-btn-primary:active {
+  background: var(--sf-c-accent-press);
+}
+
+.sf-c-btn-secondary {
+  background: #3a4048;
+  color: var(--sf-c-text);
+}
+
+.sf-c-btn-ghost {
+  background: transparent;
+  color: var(--sf-c-muted);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.sf-c-shutter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 8rem;
+  margin: 1.25rem 0;
+  border-radius: 16px;
+  background: var(--sf-c-accent);
+  color: #fff;
+  font-size: 1.35rem;
+  font-weight: 700;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+.sf-c-shutter:active {
+  background: var(--sf-c-accent-press);
+}
+
+.sf-c-shutter input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
+
+.sf-c-context {
+  text-align: center;
+}
+
+.sf-c-context strong {
+  display: block;
+  font-size: 1.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.sf-c-muted {
+  color: var(--sf-c-muted);
+  margin: 0.25rem 0;
+}
+
+.sf-c-error {
+  color: var(--sf-c-danger);
+  margin-top: 0.75rem;
+  font-size: 0.95rem;
+}
+
+.sf-c-status {
+  color: var(--sf-c-accent);
+  text-align: center;
+  margin-top: 0.75rem;
+}
+
+.sf-c-foot {
+  text-align: center;
+  color: var(--sf-c-muted);
+  font-size: 0.8rem;
+  margin-top: 1.5rem;
+}
+
+.sf-c-warn {
+  color: #e0a84a;
+}

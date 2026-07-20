@@ -1,0 +1,1726 @@
+/* Business Management shell — plugin-scoped layout */
+
+#sysforge-modal .sysforge-modal-content {
+  width: min(1100px, 96vw);
+  height: min(720px, 90vh);
+  display: flex;
+  flex-direction: column;
+}
+
+#sysforge-modal .sysforge-chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color, #333);
+  flex-wrap: wrap;
+}
+
+#sysforge-modal .sysforge-chrome-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  flex: 1;
+  min-width: 8rem;
+}
+
+#sysforge-modal .sysforge-chrome-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+#sysforge-modal .sysforge-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+#sysforge-modal .sysforge-nav {
+  width: 140px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-color, #333);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+}
+
+#sysforge-modal .sysforge-nav-btn {
+  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+#sysforge-modal .sysforge-nav-btn:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  opacity: 1;
+}
+
+#sysforge-modal .sysforge-nav-btn.is-active {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  opacity: 1;
+  font-weight: 600;
+}
+
+#sysforge-modal #sysforge-view-host {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  position: relative;
+}
+
+#sysforge-modal .sysforge-view {
+  outline: none;
+}
+
+#sysforge-modal .sysforge-view-heading {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+
+#sysforge-modal .sysforge-dashboard-lead {
+  margin: 0 0 16px;
+  opacity: 0.7;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-card-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+#sysforge-modal .sysforge-card-wrap {
+  position: relative;
+  width: min(240px, 100%);
+}
+
+#sysforge-modal .sysforge-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 14px 16px;
+  padding-right: 36px;
+  text-align: left;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  color: inherit;
+  cursor: pointer;
+}
+
+#sysforge-modal .sysforge-card.is-favorite {
+  border-color: color-mix(in srgb, var(--section-accent, #c9a227) 55%, var(--border-color, #333));
+}
+
+#sysforge-modal .sysforge-card:hover {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+#sysforge-modal .sysforge-card-fav {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.45;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+#sysforge-modal .sysforge-card-fav:hover,
+#sysforge-modal .sysforge-card-fav.is-on {
+  opacity: 1;
+  color: var(--section-accent, #c9a227);
+}
+
+#sysforge-modal .sysforge-card-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+#sysforge-modal .sysforge-card-preview {
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+#sysforge-modal .sysforge-placeholder-body {
+  margin: 0 0 12px;
+  opacity: 0.85;
+  max-width: 36rem;
+}
+
+#sysforge-modal .sysforge-placeholder-note {
+  margin: 0;
+  font-size: 0.8rem;
+  opacity: 0.55;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+#sysforge-modal .sysforge-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 28rem;
+}
+
+#sysforge-modal .sysforge-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-field input[type="number"],
+#sysforge-modal .sysforge-field select {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+
+#sysforge-modal .sysforge-field-hint {
+  font-size: 0.75rem;
+  opacity: 0.55;
+}
+
+#sysforge-modal .sysforge-field-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+#sysforge-modal .sysforge-settings-actions {
+  display: flex;
+  gap: 8px;
+}
+
+#sysforge-modal .sysforge-settings-error {
+  margin: 0;
+  color: #c44;
+  font-size: 0.85rem;
+}
+
+#sysforge-modal .sysforge-backup-panel {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color, #333);
+  max-width: 36rem;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#sysforge-modal .sysforge-backup-heading {
+  margin: 0;
+  font-size: 1rem;
+}
+
+#sysforge-modal .sysforge-backup-sub {
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+#sysforge-modal .sysforge-backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+#sysforge-modal .sysforge-backup-inline {
+  margin: 0;
+}
+
+#sysforge-modal .sysforge-file-btn {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  margin: 0;
+}
+
+#sysforge-modal .sysforge-backup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#sysforge-modal .sysforge-backup-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+}
+
+#sysforge-modal .sysforge-backup-item-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.85rem;
+}
+
+#sysforge-modal .sysforge-backup-item-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+#sysforge-modal .sysforge-backup-empty {
+  opacity: 0.6;
+  font-size: 0.85rem;
+}
+
+#sysforge-modal .sysforge-backup-result {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+#sysforge-modal .sysforge-backup-result-error {
+  color: #c44;
+}
+
+#sysforge-modal .sysforge-backup-schedule {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 20rem;
+}
+
+#sysforge-modal .sysforge-field input[type="text"],
+#sysforge-modal .sysforge-field input[type="tel"],
+#sysforge-modal .sysforge-field input[type="email"],
+#sysforge-modal .sysforge-field input[type="search"],
+#sysforge-modal .sysforge-field textarea,
+#sysforge-modal .sysforge-clients-q {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#sysforge-modal .sysforge-clients-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+#sysforge-modal .sysforge-clients-search-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 12rem;
+}
+
+#sysforge-modal .sysforge-clients-suggest {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  background: var(--bg-elevated, #1a1a1a);
+  max-height: 220px;
+  overflow: auto;
+}
+
+#sysforge-modal .sysforge-clients-suggest li {
+  padding: 8px 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-clients-suggest li:hover,
+#sysforge-modal .sysforge-clients-suggest li.is-active {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+#sysforge-modal .sysforge-parts-form {
+  position: relative;
+}
+
+#sysforge-modal .sysforge-parts-suggest {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  background: var(--bg-elevated, #1a1a1a);
+  max-height: 180px;
+  overflow: auto;
+}
+
+#sysforge-modal .sysforge-parts-suggest li button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-parts-suggest li button:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+#sysforge-modal .sysforge-suggest-sub {
+  font-size: 0.75rem;
+  opacity: 0.65;
+}
+
+#sysforge-modal .sysforge-suggest-add {
+  font-weight: 600;
+  border-top: 1px solid var(--border-color, #333);
+}
+
+#sysforge-modal .sysforge-clients-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-clients-table th,
+#sysforge-modal .sysforge-clients-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+#sysforge-modal .sysforge-clients-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 28rem;
+}
+
+#sysforge-modal .sysforge-clients-form h4 {
+  margin: 0;
+}
+
+#sysforge-modal .sysforge-clients-error {
+  margin: 0 0 8px;
+  color: #c44;
+  font-size: 0.85rem;
+}
+
+#sysforge-modal .sysforge-clients-dup {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, #c80 40%, var(--border-color, #333));
+  border-radius: 6px;
+  background: color-mix(in srgb, #c80 8%, transparent);
+}
+
+#sysforge-modal .sysforge-clients-dup-msg {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-clients-dup-list {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#sysforge-modal .sysforge-clients-empty {
+  margin: 0;
+  opacity: 0.7;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-parts-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+
+#sysforge-modal .sysforge-parts-search {
+  flex: 1;
+  min-width: 12rem;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+
+#sysforge-modal .sysforge-parts-layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+#sysforge-modal .sysforge-parts-list-wrap {
+  flex: 1;
+  min-width: 16rem;
+  overflow: auto;
+}
+
+#sysforge-modal .sysforge-parts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-parts-table th,
+#sysforge-modal .sysforge-parts-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color, #333);
+  vertical-align: top;
+  word-break: break-word;
+}
+
+#sysforge-modal .sysforge-parts-form {
+  flex: 0 1 20rem;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 24rem;
+}
+
+#sysforge-modal .sysforge-parts-form textarea,
+#sysforge-modal .sysforge-parts-form input[type="text"],
+#sysforge-modal .sysforge-parts-form input[type="number"] {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#sysforge-modal .sysforge-parts-error {
+  margin: 0 0 8px;
+  color: #c44;
+  font-size: 0.85rem;
+}
+
+#sysforge-modal .sysforge-parts-empty {
+  margin: 8px 0;
+  opacity: 0.6;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 0.7rem;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 3px;
+  opacity: 0.85;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+#sysforge-modal .sysforge-parts-badge-note {
+  margin: 0;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+#sysforge-modal .sysforge-merge-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+#sysforge-modal .sysforge-merge-group {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+#sysforge-modal .sysforge-merge-group header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+
+#sysforge-modal .sysforge-merge-members {
+  margin: 0 0 10px;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+}
+
+#sysforge-modal .sysforge-merge-members li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+/* Drafts list + calculator autosave shell */
+#sysforge-modal .sysforge-drafts-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+#sysforge-modal .sysforge-drafts-q,
+#sysforge-modal .sysforge-drafts-client {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  min-width: 12rem;
+}
+
+#sysforge-modal .sysforge-drafts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#sysforge-modal .sysforge-draft-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+}
+
+#sysforge-modal .sysforge-draft-main {
+  flex: 1;
+  min-width: 0;
+}
+
+#sysforge-modal .sysforge-draft-title {
+  font-weight: 600;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+#sysforge-modal .sysforge-draft-badge {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+
+#sysforge-modal .sysforge-draft-badge-pin {
+  opacity: 1;
+  border-color: var(--accent-color, #6a9);
+}
+
+#sysforge-modal .sysforge-retention-panel {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color, #333);
+}
+
+#sysforge-modal .sysforge-draft-meta {
+  font-size: 0.8rem;
+  opacity: 0.7;
+  margin-top: 4px;
+}
+
+#sysforge-modal .sysforge-draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#sysforge-modal .sysforge-drafts-error {
+  margin: 0 0 8px;
+  color: #c44;
+  font-size: 0.85rem;
+}
+
+#sysforge-modal .sysforge-drafts-empty {
+  margin: 0;
+  opacity: 0.7;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-calc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+#sysforge-modal .sysforge-calc-state {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+#sysforge-modal .sysforge-calc-client-row,
+#sysforge-modal .sysforge-calc-quick {
+  margin-bottom: 12px;
+  position: relative;
+}
+
+#sysforge-modal .sysforge-calc-client-wrap {
+  position: relative;
+  display: block;
+}
+
+#sysforge-modal .sysforge-calc-lines-wrap {
+  margin-bottom: 12px;
+  overflow: auto;
+}
+
+#sysforge-modal .sysforge-calc-lines {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-calc-lines th,
+#sysforge-modal .sysforge-calc-lines td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border-color, #333);
+  text-align: left;
+}
+
+#sysforge-modal .sysforge-calc-lines input,
+#sysforge-modal .sysforge-calc-lines select {
+  width: 100%;
+  min-width: 3rem;
+  padding: 4px 6px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  box-sizing: border-box;
+}
+
+#sysforge-modal .sysforge-calc-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+#sysforge-modal .sysforge-calc-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-calc-final {
+  grid-column: 1 / -1;
+}
+
+#sysforge-modal .sysforge-viewer-actions {
+  margin-bottom: 12px;
+}
+
+#sysforge-modal .sysforge-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+#sysforge-modal .sysforge-viewer-toolbar-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+#sysforge-modal .sysforge-viewer-toast {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+  color: var(--accent, #4a9);
+}
+
+#sysforge-modal .sysforge-email-dialog {
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 28rem;
+}
+
+#sysforge-modal .sysforge-email-dialog[hidden] {
+  display: none;
+}
+
+#sysforge-modal .sysforge-email-dialog h4 {
+  margin: 0;
+}
+
+#sysforge-modal .sysforge-email-dialog label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
+#sysforge-modal .sysforge-email-dialog input,
+#sysforge-modal .sysforge-email-dialog textarea {
+  font: inherit;
+  padding: 6px 8px;
+}
+
+#sysforge-modal .sysforge-email-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+#sysforge-modal .sysforge-viewer-toolbar .sysforge-view-heading {
+  flex: 1;
+  margin: 0;
+}
+
+#sysforge-modal .sysforge-viewer-meta {
+  margin: 0 0 12px;
+  font-size: 0.9rem;
+  opacity: 0.85;
+}
+
+#sysforge-modal .sysforge-viewer-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin-bottom: 12px;
+}
+
+#sysforge-modal .sysforge-viewer-table th,
+#sysforge-modal .sysforge-viewer-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color, #333);
+  text-align: left;
+}
+
+#sysforge-modal .sysforge-viewer-table .sysforge-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+#sysforge-modal .sysforge-viewer-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+#sysforge-modal .sysforge-viewer-totals dt {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  margin: 0;
+}
+
+#sysforge-modal .sysforge-viewer-totals dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+#sysforge-modal .sysforge-viewer-total {
+  grid-column: 1 / -1;
+  font-weight: 600;
+}
+
+#sysforge-modal .sysforge-viewer-subtitle {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+
+#sysforge-modal .sysforge-viewer-table tr.sysforge-price-mismatch {
+  background: color-mix(in srgb, #c45c26 12%, transparent);
+}
+
+#sysforge-modal .sysforge-price-mismatch-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 3px;
+  background: #c45c26;
+  color: #fff;
+  vertical-align: middle;
+}
+
+#sysforge-modal .sysforge-price-mismatch-note {
+  display: block;
+  font-size: 0.75rem;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+
+#sysforge-modal .sysforge-viewer-payments {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color, #333);
+}
+
+#sysforge-modal .sysforge-payments-heading {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+
+#sysforge-modal .sysforge-payments-balance {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-payments-warn {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+  color: #c45c26;
+}
+
+#sysforge-modal .sysforge-payments-table tr.sysforge-payment-voided td {
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+#sysforge-modal .sysforge-payment-void-reason {
+  text-decoration: none;
+  font-size: 0.75rem;
+  opacity: 0.9;
+}
+
+#sysforge-modal .sysforge-payments-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  margin-top: 8px;
+}
+
+#sysforge-modal .sysforge-payments-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+}
+
+#sysforge-modal .sysforge-payments-form input,
+#sysforge-modal .sysforge-payments-form select {
+  font: inherit;
+  padding: 6px 8px;
+  min-width: 6rem;
+}
+
+#sysforge-modal .sysforge-client-merge-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+#sysforge-modal .sysforge-client-merge-card {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  padding: 10px;
+}
+
+#sysforge-modal .sysforge-client-merge-card h4 {
+  margin: 0 0 6px;
+}
+
+#sysforge-modal .sysforge-client-merge-card.sysforge-merge-survivor {
+  border-color: var(--accent, #4a9);
+}
+
+#sysforge-modal .sysforge-outstanding-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#sysforge-modal .sysforge-outstanding-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+#sysforge-modal .sysforge-sales-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+#sysforge-modal .sysforge-sales-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
+#sysforge-modal .sysforge-sales-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px 16px;
+  margin: 0 0 16px;
+}
+
+#sysforge-modal .sysforge-sales-summary > div {
+  margin: 0;
+}
+
+#sysforge-modal .sysforge-sales-summary dt {
+  font-size: 0.75rem;
+  opacity: 0.75;
+  margin: 0;
+}
+
+#sysforge-modal .sysforge-sales-summary dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+}
+
+#sysforge-modal .sysforge-client-dash-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+#sysforge-modal .sysforge-client-dash-toolbar .sysforge-view-heading {
+  flex: 1;
+  margin: 0;
+}
+
+#sysforge-modal .sysforge-invoice-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Classic four-column Client Dashboard */
+#sysforge-modal .sysforge-classic {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 100%;
+}
+
+#sysforge-modal .sysforge-classic-search-wrap {
+  position: relative;
+  max-width: 420px;
+}
+
+#sysforge-modal .sysforge-classic-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.95rem;
+}
+
+#sysforge-modal .sysforge-classic-overlay {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 40;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  background: var(--bg-color, #1a1a1a);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-sizing: border-box;
+}
+
+#sysforge-modal .sysforge-classic-overlay-label,
+#sysforge-modal .sysforge-classic-overlay-empty {
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  opacity: 0.65;
+}
+
+#sysforge-modal .sysforge-classic-overlay-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+#sysforge-modal .sysforge-classic-overlay-item:hover,
+#sysforge-modal .sysforge-classic-overlay-item.is-active {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+#sysforge-modal .sysforge-classic-overlay-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-classic-overlay-meta {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+#sysforge-modal .sysforge-classic-grid {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 200px 280px;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+
+#sysforge-modal .sysforge-classic-col {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  padding: 10px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#sysforge-modal .sysforge-classic-col h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+#sysforge-modal .sysforge-classic-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+#sysforge-modal .sysforge-classic-col-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+#sysforge-modal .sysforge-classic-invoice-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#sysforge-modal .sysforge-classic-inv-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 10px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  color: inherit;
+  cursor: pointer;
+}
+
+#sysforge-modal .sysforge-classic-inv-card:hover,
+#sysforge-modal .sysforge-classic-inv-card.is-selected {
+  border-color: color-mix(in srgb, currentColor 40%, transparent);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+#sysforge-modal .sysforge-classic-inv-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+#sysforge-modal .sysforge-classic-inv-status,
+#sysforge-modal .sysforge-classic-inv-date {
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+
+#sysforge-modal .sysforge-classic-inv-total {
+  font-variant-numeric: tabular-nums;
+}
+
+#sysforge-modal .sysforge-classic-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+
+#sysforge-modal .sysforge-classic-preview-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#sysforge-modal .sysforge-classic-preview-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+#sysforge-modal .sysforge-classic-preview-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+#sysforge-modal .sysforge-classic-preview-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+  margin: 0;
+}
+
+#sysforge-modal .sysforge-classic-preview-meta dt {
+  font-size: 0.75rem;
+  opacity: 0.65;
+  margin: 0 0 2px;
+}
+
+#sysforge-modal .sysforge-classic-preview-meta dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+#sysforge-modal .sysforge-classic-preview-items {
+  margin-top: 8px;
+}
+
+#sysforge-modal .sysforge-classic-client-name {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+#sysforge-modal .sysforge-classic-client-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+}
+
+#sysforge-modal .sysforge-classic-client-fields dt {
+  font-size: 0.75rem;
+  opacity: 0.65;
+  margin: 0 0 2px;
+}
+
+#sysforge-modal .sysforge-classic-client-fields dd {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+#sysforge-modal .sysforge-classic-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#sysforge-modal .sysforge-classic-edit-form .sysforge-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+}
+
+#sysforge-modal .sysforge-classic-edit-form input,
+#sysforge-modal .sysforge-classic-edit-form textarea {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#sysforge-modal .sysforge-classic-edit-actions {
+  display: flex;
+  gap: 8px;
+}
+
+#sysforge-modal .sysforge-classic-footer-link {
+  margin: 0;
+}
+
+@media (max-width: 960px) {
+  #sysforge-modal .sysforge-classic-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  #sysforge-modal .sysforge-classic-grid {
+    grid-template-columns: 1fr;
+  }
+
+  #sysforge-modal .sysforge-classic-search-wrap {
+    max-width: none;
+  }
+}
+
+.sysforge-draft-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10050;
+}
+
+.sysforge-draft-dialog {
+  width: min(360px, 92vw);
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #333);
+  background: var(--bg-color, #1a1a1a);
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sysforge-draft-dialog h4 {
+  margin: 0;
+}
+
+.sysforge-draft-dialog .sysforge-field input {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Business Diagnostics — read-only summary strip */
+.sysforge-diagnostics-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.sysforge-diagnostics-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px 16px;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+}
+
+.sysforge-diagnostics-summary > div {
+  margin: 0;
+}
+
+.sysforge-diagnostics-summary dt {
+  margin: 0;
+  font-size: 0.75rem;
+  opacity: 0.65;
+  font-weight: 500;
+}
+
+.sysforge-diagnostics-summary dd {
+  margin: 2px 0 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.sysforge-diagnostics-error {
+  color: var(--danger, #c44);
+  margin: 0 0 10px;
+  font-size: 0.9rem;
+}
+
+.sysforge-diagnostics-message {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.sysforge-diagnostics-note {
+  margin: 16px 0 0;
+  font-size: 0.8rem;
+  opacity: 0.6;
+  line-height: 1.4;
+}
+
+#sysforge-modal .sysforge-footer {
+  padding: 6px 12px;
+  border-top: 1px solid var(--border-color, #333);
+  font-size: 0.75rem;
+  opacity: 0.55;
+}
+
+/* Projects hub + four-column detail + wizard */
+.sysforge-hub-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.sysforge-hub-section {
+  margin-bottom: 18px;
+}
+.sysforge-hub-section h4 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+.sysforge-hub-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sysforge-hub-list li {
+  margin: 0 0 4px;
+}
+.sysforge-hub-list button {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, #333);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.sysforge-hub-status {
+  opacity: 0.7;
+  font-size: 0.85rem;
+}
+.sysforge-project-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.sysforge-project-picker {
+  flex: 1;
+  min-width: 200px;
+}
+.sysforge-project-picker-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  max-height: 140px;
+  overflow: auto;
+}
+.sysforge-project-picker-list button {
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.sysforge-project-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.sysforge-display-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  opacity: 0.85;
+}
+.sysforge-note-block {
+  margin-bottom: 0.75rem;
+}
+.sysforge-note-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.25rem;
+}
+.sysforge-note-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-right: 0.25rem;
+}
+.sysforge-md-btn {
+  padding: 0.15rem 0.45rem;
+  min-width: 1.75rem;
+  font-size: 0.8rem;
+}
+.sysforge-note-preview {
+  margin-top: 0.35rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  min-height: 2rem;
+  background: rgba(0, 0, 0, 0.02);
+}
+.sysforge-note-preview code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+.sysforge-stock-out {
+  background: #b42318;
+  color: #fff;
+}
+.sysforge-stock-low {
+  background: #b54708;
+  color: #fff;
+}
+.sysforge-stock-ok {
+  background: #027a48;
+  color: #fff;
+}
+.sysforge-stock-untracked {
+  background: #667085;
+  color: #fff;
+}
+.sysforge-project-columns {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.sysforge-project-col {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  padding: 10px;
+  min-height: 200px;
+}
+.sysforge-project-col h4 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+.sysforge-screw-map-slot {
+  border: 1px solid var(--border-color, #555);
+  padding: 10px;
+  margin-bottom: 12px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+.sysforge-companion-panel {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-color, #555);
+}
+.sysforge-companion-panel h6 {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+}
+.sysforge-companion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.sysforge-companion-pair-ui {
+  margin-top: 8px;
+  text-align: center;
+}
+.sysforge-companion-pair-ui img {
+  display: block;
+  margin: 0 auto 8px;
+  background: #fff;
+  padding: 8px;
+  border-radius: 4px;
+}
+.sysforge-companion-code {
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
+  margin: 4px 0;
+}
+.sysforge-companion-inbox {
+  margin-top: 12px;
+}
+.sysforge-companion-settings {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color, #333);
+}
+.sysforge-device-readonly dt {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+.sysforge-device-readonly dd {
+  margin: 0 0 8px;
+}
+.sysforge-classic-project-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, #333);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.sysforge-wizard-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+.sysforge-wizard {
+  background: var(--bg-elevated, #1e1e1e);
+  color: inherit;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 6px;
+  padding: 16px;
+  width: min(440px, 92vw);
+  max-height: 90vh;
+  overflow: auto;
+}
+.sysforge-wizard-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+.sysforge-wizard-list button {
+  width: 100%;
+  text-align: left;
+  padding: 8px;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+.sysforge-wizard-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.sysforge-wizard-check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 4px 0;
+}
+.sysforge-calc-devices {
+  margin: 12px 0;
+}
+.sysforge-calc-device-add {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.sysforge-calc-device-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 960px) {
+  .sysforge-project-columns {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .sysforge-project-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #sysforge-modal .sysforge-card,
+  #sysforge-modal .sysforge-nav-btn {
+    transition: none;
+  }
+}

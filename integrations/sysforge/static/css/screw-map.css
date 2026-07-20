@@ -1,0 +1,297 @@
+/* Screw map workspace (ScrewMapView port) */
+
+.sysforge-sm-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 520px;
+}
+
+.sysforge-sm-thumbs {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 8px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+}
+
+.sysforge-sm-thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 84px;
+  padding: 4px;
+  border: 1px solid var(--border-color, #555);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.sysforge-sm-thumb.is-selected {
+  border-width: 3px;
+  border-color: var(--accent, #3b82f6);
+}
+
+.sysforge-sm-thumb img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  display: block;
+}
+
+.sysforge-sm-thumb span {
+  font-size: 0.7rem;
+}
+
+.sysforge-sm-main {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 12px;
+  min-height: 380px;
+}
+
+.sysforge-sm-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sysforge-sm-title-row h4 {
+  margin: 0;
+}
+
+.sysforge-sm-locked {
+  color: #b45309;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.sysforge-sm-canvas-host {
+  position: relative;
+  width: 100%;
+  height: 360px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  background: #111;
+  overflow: hidden;
+}
+
+.sysforge-sm-place-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
+
+.sysforge-sm-place-mode .btn-secondary.is-active {
+  outline: 2px solid var(--accent, #3b82f6);
+}
+
+.sysforge-sm-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.sysforge-sm-zoom-bar {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 4px;
+  z-index: 2;
+}
+
+.sysforge-sm-zoom-bar .btn-secondary {
+  min-width: 2rem;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+}
+
+.sysforge-sm-canvas-img {
+  position: absolute;
+  display: block;
+  user-select: none;
+  pointer-events: none;
+}
+
+.sysforge-sm-canvas-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.sysforge-sm-canvas-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+  opacity: 0.8;
+  font-size: 0.9rem;
+}
+
+.sysforge-sm-marker-dot {
+  fill: #2563eb;
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.sysforge-sm-marker.is-selected .sysforge-sm-marker-dot {
+  fill: #f59e0b;
+}
+
+.sysforge-sm-note-dot {
+  fill: #7c3aed;
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.sysforge-sm-note-marker.is-selected .sysforge-sm-note-dot {
+  fill: #f59e0b;
+}
+
+.sysforge-sm-marker-num {
+  fill: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.sysforge-sm-notes-heading {
+  margin-top: 14px;
+}
+
+.sysforge-sm-side {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  padding: 10px;
+  overflow: auto;
+}
+
+.sysforge-sm-side h5 {
+  margin: 0 0 8px;
+}
+
+.sysforge-sm-list-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 6px 4px;
+}
+
+.sysforge-sm-list-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.sysforge-sm-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sysforge-sm-save-status {
+  min-height: 1.2em;
+  font-size: 0.8rem;
+  opacity: 0.85;
+  margin: 8px 0;
+}
+
+.sysforge-sm-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.sysforge-sm-add-photo {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.sysforge-sm-add-photo.is-disabled,
+.sysforge-sm-add-photo:has(input:disabled) {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Four-column preview slot */
+.sysforge-screw-map-slot {
+  border: 1px solid var(--border-color, #555);
+  padding: 10px;
+  margin-bottom: 12px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.sysforge-screw-map-slot h5 {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+}
+
+.sysforge-screw-map-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sysforge-screw-map-preview .sysforge-sm-preview-meta {
+  opacity: 0.8;
+  font-size: 0.8rem;
+}
+
+.sysforge-sm-library-reuse,
+.sysforge-sm-library-publish {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color, #444);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sysforge-sm-library-reuse h6,
+.sysforge-sm-library-publish h6 {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.sysforge-sm-lookup {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color, #444);
+}
+
+.sysforge-sm-lookup-status {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  margin: 6px 0;
+}
+
+.sysforge-sm-lookup-deltas {
+  display: block;
+  font-size: 0.72rem;
+  opacity: 0.75;
+  margin-top: 2px;
+}
+
+@media (max-width: 900px) {
+  .sysforge-sm-main {
+    grid-template-columns: 1fr;
+  }
+}
