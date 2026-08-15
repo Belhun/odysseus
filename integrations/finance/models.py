@@ -18,6 +18,23 @@ class TimestampMixin:
     updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive, nullable=False)
 
 
+ACCOUNT_PURPOSES = ("operating", "trip", "processor")
+ACCOUNT_RAILS = ("paypal", "venmo", "google")
+TX_STATUSES = ("pending", "cleared", "reconciled", "void")
+TX_SOURCES = ("import", "manual")
+MOVEMENT_CLASSES = ("spend", "income", "transfer", "pass_through", "reimbursement")
+PLANNED_KINDS = (
+    "rent",
+    "utilities",
+    "insurance",
+    "telecom",
+    "reimbursement_swap",
+    "savings_funding",
+    "other",
+)
+RECURRING_STATUSES = ("active", "automatic", "dismissed")
+
+
 class FinanceAccount(TimestampMixin, FinanceBase):
     __tablename__ = "finance_accounts"
 
@@ -26,11 +43,17 @@ class FinanceAccount(TimestampMixin, FinanceBase):
     name = Column(String, nullable=False)
     institution = Column(String, default="")
     account_type = Column(String, nullable=False, default="checking")
+    purpose = Column(String, nullable=False, default="operating")
+    rail = Column(String, nullable=True)
     currency = Column(String, default="USD")
     mask_last4 = Column(String, nullable=True)
     opening_balance_cents = Column(Integer, default=0)
     opening_balance_date = Column(Date, nullable=True)
     credit_limit_cents = Column(Integer, nullable=True)
+    posted_pin_cents = Column(Integer, nullable=True)
+    posted_pin_as_of = Column(Date, nullable=True)
+    available_cents = Column(Integer, nullable=True)
+    available_as_of = Column(Date, nullable=True)
     is_closed = Column(Boolean, default=False)
     display_order = Column(Integer, default=0)
 
@@ -82,6 +105,8 @@ class FinanceTransaction(TimestampMixin, FinanceBase):
     __table_args__ = (
         Index("ix_finance_tx_account_dedup", "account_id", "dedup_hash", unique=True),
         Index("ix_finance_tx_owner_date", "owner", "date"),
+        Index("ix_finance_tx_owner_class_date", "owner", "movement_class", "date"),
+        Index("ix_finance_tx_owner_group", "owner", "movement_group_id"),
     )
 
     id = Column(String, primary_key=True, index=True)
@@ -97,7 +122,10 @@ class FinanceTransaction(TimestampMixin, FinanceBase):
     dedup_hash = Column(String, nullable=False)
     category_id = Column(String, ForeignKey("finance_categories.id"), nullable=True, index=True)
     status = Column(String, default="cleared")
+    source = Column(String, default="import")
     bank_category = Column(String, nullable=True)
+    movement_class = Column(String, nullable=True)
+    movement_group_id = Column(String, nullable=True)
 
     account = relationship("FinanceAccount", back_populates="transactions")
 
@@ -145,6 +173,8 @@ class FinanceRecurringSeries(TimestampMixin, FinanceBase):
     median_amount_cents = Column(Integer, nullable=False)
     next_due_date = Column(Date, nullable=True)
     status = Column(String, default="active")
+    category_id = Column(String, ForeignKey("finance_categories.id"), nullable=True)
+    movement_class = Column(String, nullable=True)
 
 
 class FinanceTransactionSplit(TimestampMixin, FinanceBase):
@@ -156,3 +186,66 @@ class FinanceTransactionSplit(TimestampMixin, FinanceBase):
     category_id = Column(String, ForeignKey("finance_categories.id"), nullable=True)
     amount_cents = Column(Integer, nullable=False)
     memo = Column(String, default="")
+
+
+class FinanceMutationLog(TimestampMixin, FinanceBase):
+    __tablename__ = "finance_mutation_log"
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    actor = Column(String, nullable=False, default="user")
+    action = Column(String, nullable=False)
+    entity_type = Column(String, nullable=False)
+    entity_id = Column(String, nullable=False, index=True)
+    before_json = Column(Text, nullable=True)
+    after_json = Column(Text, nullable=True)
+
+
+class FinanceCsvMapping(TimestampMixin, FinanceBase):
+    __tablename__ = "finance_csv_mappings"
+    __table_args__ = (
+        Index("ix_finance_csv_map_owner_fp", "owner", "fingerprint", unique=True),
+    )
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    fingerprint = Column(String, nullable=False)
+    mapping = Column(JSON, nullable=False)
+    options = Column(JSON, nullable=True)
+
+
+class FinanceMonthSettings(TimestampMixin, FinanceBase):
+    __tablename__ = "finance_month_settings"
+    __table_args__ = (
+        Index("ix_finance_month_settings_owner_month", "owner", "month", unique=True),
+    )
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    month = Column(String, nullable=False)
+    income_target_cents = Column(Integer, nullable=False, default=0)
+
+
+class FinancePlannedObligation(TimestampMixin, FinanceBase):
+    __tablename__ = "finance_planned_obligations"
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    kind = Column(String, nullable=False)
+    amount_cents = Column(Integer, nullable=False)
+    cadence = Column(String, nullable=False, default="monthly")
+    starts_on = Column(String, nullable=True)
+    include_in_job_overlay = Column(Boolean, default=True)
+    is_funding = Column(Boolean, default=False)
+    notes = Column(String, default="")
+
+
+class FinanceJobScenario(TimestampMixin, FinanceBase):
+    __tablename__ = "finance_job_scenarios"
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, unique=True, index=True)
+    take_home_cents = Column(Integer, nullable=False, default=0)
+    label = Column(String, nullable=False, default="Hypothetical job")

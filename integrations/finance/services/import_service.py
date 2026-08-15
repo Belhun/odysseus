@@ -186,6 +186,7 @@ def commit_import_preview(
             dedup_hash=dedup_hash,
             bank_category=row.get("bank_category"),
             status="cleared",
+            source="import",
         )
         nested = db.begin_nested()
         try:
@@ -213,15 +214,4 @@ def commit_import_preview(
     }
 
 
-def account_balance_cents(db: Session, account: FinanceAccount) -> int:
-    total = (
-        db.query(FinanceTransaction)
-        .filter(
-            FinanceTransaction.account_id == account.id,
-            FinanceTransaction.owner == account.owner,
-        )
-        .with_entities(FinanceTransaction.amount_cents)
-        .all()
-    )
-    tx_sum = sum(r[0] for r in total)
-    return int(account.opening_balance_cents or 0) + tx_sum
+from integrations.finance.services.balances import posted_cents as account_balance_cents
