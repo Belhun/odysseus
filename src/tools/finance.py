@@ -1238,6 +1238,123 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
 
 
+        if action in {
+            "create_transaction", "update_transaction", "void_transaction",
+            "unvoid_transaction", "delete_transaction", "classify_transaction",
+            "link_transactions", "pin_account",
+        }:
+            from src.confirmation_gates import consume_confirmation, require_confirmed_action
+            from integrations.finance.services.accounts import pin_account_balances
+            from integrations.finance.services.movements import classify_transaction, link_movements
+            from integrations.finance.services.transactions import (
+                ImportedTransactionError,
+                create_manual_transaction,
+                delete_manual_transaction,
+                patch_ledger_transaction,
+                unvoid_transaction,
+                void_transaction,
+            )
+
+            gate_err = require_confirmed_action(
+                session_id=session_id,
+                owner=user,
+                domain="finance",
+                tool_name="manage_finance",
+                action=action,
+                tool_args=args,
+                confirmation_token=args.get("confirmation_token"),
+            )
+            if gate_err:
+                return {"error": gate_err, "exit_code": 1}
+
+            try:
+                if action == "create_transaction":
+                    tx = create_manual_transaction(
+                        db,
+                        user,
+                        account_id=str(args.get("account_id") or ""),
+                        date_raw=str(args.get("date") or ""),
+                        amount_cents=int(args.get("amount_cents")),
+                        payee=str(args.get("payee") or ""),
+                        memo=str(args.get("memo") or ""),
+                        category_id=args.get("category_id"),
+                        status=str(args.get("status") or "cleared"),
+                        movement_class=args.get("movement_class"),
+                        actor="agent",
+                    )
+                    msg = f"Recorded {tx.payee or 'transaction'} for {_fmt_cents(tx.amount_cents)} on {tx.date}."
+                elif action == "update_transaction":
+                    tx_ref = _resolve_transaction(db, user, str(args.get("transaction_id") or ""))
+                    if not tx_ref:
+                        return {"error": "Transaction not found", "exit_code": 1}
+                    tx = patch_ledger_transaction(
+                        db,
+                        user,
+                        tx_ref.id,
+                        amount_cents=args.get("amount_cents"),
+                        date_raw=args.get("date"),
+                        account_id=args.get("account_id"),
+                        payee=args.get("payee"),
+                        memo=args.get("memo"),
+                        category_id=args.get("category_id"),
+                        status=args.get("status"),
+                        movement_class=args.get("movement_class"),
+                        actor="agent",
+                    )
+                    msg = f"Updated transaction {tx.id[:8]}."
+                elif action == "void_transaction":
+                    tx_ref = _resolve_transaction(db, user, str(args.get("transaction_id") or ""))
+                    if not tx_ref:
+                        return {"error": "Transaction not found", "exit_code": 1}
+                    tx = void_transaction(db, user, tx_ref.id, actor="agent")
+                    msg = f"Voided transaction {tx.id[:8]}."
+                elif action == "unvoid_transaction":
+                    tx_ref = _resolve_transaction(db, user, str(args.get("transaction_id") or ""))
+                    if not tx_ref:
+                        return {"error": "Transaction not found", "exit_code": 1}
+                    tx = unvoid_transaction(db, user, tx_ref.id, actor="agent")
+                    msg = f"Unvoided transaction {tx.id[:8]}."
+                elif action == "delete_transaction":
+                    tx_ref = _resolve_transaction(db, user, str(args.get("transaction_id") or ""))
+                    if not tx_ref:
+                        return {"error": "Transaction not found", "exit_code": 1}
+                    delete_manual_transaction(db, user, tx_ref.id, actor="agent")
+                    msg = f"Deleted transaction {tx_ref.id[:8]}."
+                elif action == "classify_transaction":
+                    tx_ref = _resolve_transaction(db, user, str(args.get("transaction_id") or ""))
+                    if not tx_ref:
+                        return {"error": "Transaction not found", "exit_code": 1}
+                    tx = classify_transaction(db, user, tx_ref.id, str(args.get("movement_class") or ""))
+                    msg = f"Classed transaction {tx.id[:8]} as {tx.movement_class}."
+                elif action == "link_transactions":
+                    group = link_movements(db, user, list(args.get("tx_ids") or []))
+                    msg = f"Linked {len(args.get('tx_ids') or [])} transactions."
+                    _ = group
+                else:
+                    account_id = str(args.get("account_id") or "")
+                    pin_account_balances(
+                        db,
+                        user,
+                        account_id,
+                        posted_pin_cents=args.get("posted_pin_cents"),
+                        posted_pin_as_of=args.get("posted_pin_as_of"),
+                        available_cents=args.get("available_cents"),
+                        available_as_of=args.get("available_as_of"),
+                        clear_posted_pin=bool(args.get("clear_posted_pin")),
+                        clear_available=bool(args.get("clear_available")),
+                        actor="agent",
+                    )
+                    msg = "Updated account pins."
+            except ImportedTransactionError as exc:
+                return {"error": str(exc), "exit_code": 1}
+            except ValueError as exc:
+                return {"error": str(exc), "exit_code": 1}
+
+            token = str(args.get("confirmation_token") or "").strip()
+            if token and session_id:
+                consume_confirmation(token=token, session_id=session_id, owner=user)
+            return {"response": msg, "exit_code": 0}
+
         return {
 
             "error": (
@@ -1248,7 +1365,11 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
                 "suggest_categories, list_recurring, create_category, create_categories, "
 
-                "list_import_batches, categorize_transaction, set_budget, create_rule."
+                "list_import_batches, categorize_transaction, set_budget, create_rule, "
+
+                "create_transaction, update_transaction, void_transaction, delete_transaction, "
+
+                "classify_transaction, link_transactions, pin_account."
 
             ),
 

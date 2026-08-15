@@ -632,3 +632,67 @@ async def test_manage_finance_create_rule_auto_applies_existing(finance_tool_env
         assert refreshed.category_id == "cat-rule"
     finally:
         db.close()
+
+
+FINANCE_READ_ACTIONS = {
+    "list_accounts",
+    "list_transactions",
+    "spending_report",
+    "budget_status",
+    "trends",
+    "net_worth",
+    "list_categories",
+    "list_rules",
+    "suggest_categories",
+    "list_recurring",
+    "list_import_batches",
+}
+
+
+def _manage_finance_enum():
+    from src.tool_schemas import FUNCTION_TOOL_SCHEMAS
+
+    for spec in FUNCTION_TOOL_SCHEMAS:
+        fn = spec.get("function") or {}
+        if fn.get("name") == "manage_finance":
+            return set(fn["parameters"]["properties"]["action"]["enum"])
+    raise AssertionError("manage_finance schema not found")
+
+
+@pytest.mark.area_security
+def test_every_manage_finance_write_action_is_gated():
+    from integrations.finance.confirmation_gate import register_finance_confirmation_gate
+    from src.confirmation_gates import get_tool_gate
+
+    register_finance_confirmation_gate()
+    gate = get_tool_gate("finance", "manage_finance")
+    assert gate is not None
+    writes = _manage_finance_enum() - FINANCE_READ_ACTIONS
+    missing = sorted(writes - set(gate.actions))
+    assert missing == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_security
+async def test_auto_approve_does_not_bypass_hard_gated_delete(finance_tool_env, monkeypatch):
+    owner = finance_tool_env["owner"]
+    monkeypatch.setattr(
+        "src.confirmation_gates.core.auto_approve_finance_enabled",
+        lambda user: user == owner,
+    )
+    result = await do_manage_finance(
+        json.dumps({"action": "delete_transaction", "transaction_id": "tx-missing"}),
+        owner=owner,
+        session_id="sess-hard",
+    )
+    assert result.get("exit_code") == 1
+    assert "confirmation" in (result.get("error") or "").lower()
+
+
+@pytest.mark.area_security
+def test_update_transaction_confirmation_requires_amount_and_date():
+    from integrations.finance.confirmation_gate import _validate_update_transaction
+
+    err = _validate_update_transaction({"transaction_id": "tx-1"}, {"transaction_id": "tx-1"})
+    assert err
+    assert "amount_cents" in err or "date" in err

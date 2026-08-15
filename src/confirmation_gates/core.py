@@ -42,6 +42,7 @@ class ToolGateRegistration:
     description: str = ""
     default_approve_labels: list[str] = field(default_factory=lambda: list(DEFAULT_APPROVE_LABELS))
     ttl_seconds: int = 600
+    hard_gated_actions: set[str] = field(default_factory=set)
 
 
 _REGISTRY: dict[tuple[str, str], ToolGateRegistration] = {}
@@ -271,7 +272,8 @@ def require_confirmed_action(
     if not gate or action not in gate.actions:
         return None
 
-    if domain.strip().lower() == "finance" and auto_approve_finance_enabled(owner):
+    hard_gated = {a.strip() for a in (gate.hard_gated_actions or set())}
+    if action not in hard_gated and domain.strip().lower() == "finance" and auto_approve_finance_enabled(owner):
         return None
 
     token = (confirmation_token or "").strip()
