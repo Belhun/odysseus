@@ -1,11 +1,11 @@
-"""Finance reporting helpers."""
+"""Finance reporting helpers — one cashflow engine for spend, budget, and overlay."""
 
 from __future__ import annotations
 
 from calendar import monthrange
 from datetime import date
+from typing import Optional
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from integrations.finance.models import (
@@ -15,8 +15,15 @@ from integrations.finance.models import (
     FinanceTransaction,
     FinanceTransactionSplit,
 )
+from integrations.finance.services.balances import is_posted_row, posted_cents
 from integrations.finance.services.categories import format_category_path
-from integrations.finance.services.import_service import account_balance_cents
+from integrations.finance.services.movements import (
+    effective_movement_class,
+    is_reimbursement_in,
+    is_true_income,
+    is_true_spend,
+    unclassified_counts,
+)
 
 
 def month_key(d: date) -> str:
@@ -29,6 +36,15 @@ def month_bounds(month: str) -> tuple[date, date]:
     return date(year, mon, 1), date(year, mon, last)
 
 
+def previous_complete_month(today: date | None = None) -> str:
+    today = today or date.today()
+    y, m = today.year, today.month - 1
+    if m == 0:
+        m = 12
+        y -= 1
+    return f"{y:04d}-{m:02d}"
+
+
 def _split_parent_ids(db: Session, owner: str) -> set[str]:
     rows = (
         db.query(FinanceTransactionSplit.transaction_id)
@@ -39,58 +55,168 @@ def _split_parent_ids(db: Session, owner: str) -> set[str]:
     return {r[0] for r in rows}
 
 
-def _category_totals_for_month(db: Session, owner: str, start: date, end: date) -> dict[str | None, tuple[int, int]]:
-    """Return category_id -> (total_cents, tx_count) for spending in range."""
+def _month_transactions(
+    db: Session,
+    owner: str,
+    start: date,
+    end: date,
+    account_id: Optional[str] = None,
+) -> list[FinanceTransaction]:
+    q = db.query(FinanceTransaction).filter(
+        FinanceTransaction.owner == owner,
+        FinanceTransaction.date >= start,
+        FinanceTransaction.date <= end,
+    )
+    if account_id:
+        q = q.filter(FinanceTransaction.account_id.startswith(str(account_id).strip()))
+    return q.all()
+
+
+def month_cashflow(
+    db: Session,
+    owner: str,
+    month: str,
+    account_id: Optional[str] = None,
+    include_transfers: bool = False,
+) -> dict:
+    start, end = month_bounds(month)
+    txs = _month_transactions(db, owner, start, end, account_id=account_id)
+    posted = [tx for tx in txs if is_posted_row(tx)]
+    counts = unclassified_counts(db, owner, posted)
+
+    if include_transfers:
+        income = sum(tx.amount_cents for tx in posted if tx.amount_cents > 0)
+        spending = abs(sum(tx.amount_cents for tx in posted if tx.amount_cents < 0))
+        return {
+            "month": month,
+            "income_cents": income,
+            "spending_cents": spending,
+            "gross_spend_cents": spending,
+            "reimbursement_in_cents": 0,
+            "reimbursement_out_cents": 0,
+            "personal_spend_cents": spending,
+            "net_spend_cents": spending,
+            "excluded_cents": 0,
+            "unclassified_count": counts["unclassified_count"],
+            "unclassified_outflow_cents": counts["unclassified_outflow_cents"],
+            "incomplete": counts["unclassified_count"] > 0,
+            "include_transfers": True,
+        }
+
+    income = sum(tx.amount_cents for tx in posted if is_true_income(tx))
+    gross_spend = sum(abs(tx.amount_cents) for tx in posted if is_true_spend(tx))
+    reimb_in = sum(tx.amount_cents for tx in posted if is_reimbursement_in(tx))
+    reimb_out = sum(
+        abs(tx.amount_cents)
+        for tx in posted
+        if tx.movement_class == "reimbursement" and tx.amount_cents < 0
+    )
+    excluded = sum(
+        abs(tx.amount_cents)
+        for tx in posted
+        if tx.movement_class in ("transfer", "pass_through")
+    ) + reimb_out
+    personal = gross_spend - reimb_in
+    return {
+        "month": month,
+        "income_cents": income,
+        "spending_cents": gross_spend,
+        "gross_spend_cents": gross_spend,
+        "reimbursement_in_cents": reimb_in,
+        "reimbursement_out_cents": reimb_out,
+        "personal_spend_cents": personal,
+        "net_spend_cents": personal,
+        "excluded_cents": excluded,
+        "unclassified_count": counts["unclassified_count"],
+        "unclassified_outflow_cents": counts["unclassified_outflow_cents"],
+        "incomplete": counts["unclassified_count"] > 0,
+        "include_transfers": False,
+    }
+
+
+def true_spend_in_category(
+    db: Session,
+    owner: str,
+    month: str,
+    category_name: str,
+    account_id: Optional[str] = None,
+) -> int:
+    start, end = month_bounds(month)
+    cat = (
+        db.query(FinanceCategory)
+        .filter(
+            FinanceCategory.owner == owner,
+            FinanceCategory.name == category_name,
+            FinanceCategory.parent_id.is_(None),
+        )
+        .first()
+    )
+    if not cat:
+        return 0
+    txs = _month_transactions(db, owner, start, end, account_id=account_id)
+    return sum(abs(tx.amount_cents) for tx in txs if is_true_spend(tx) and tx.category_id == cat.id)
+
+
+def spending_by_category(
+    db: Session,
+    owner: str,
+    month: str,
+    account_id: Optional[str] = None,
+    include_transfers: bool = False,
+    include_zero_limits: bool = True,
+) -> list[dict]:
+    start, end = month_bounds(month)
     split_parents = _split_parent_ids(db, owner)
-    totals: dict[str | None, tuple[int, int]] = {}
+    txs = _month_transactions(db, owner, start, end, account_id=account_id)
+    parents = {tx.id: tx for tx in txs}
+    totals: dict[str | None, list[int]] = {}
+
+    def _add(category_id: str | None, cents: int, count: int = 1) -> None:
+        prev = totals.get(category_id, [0, 0])
+        totals[category_id] = [prev[0] + cents, prev[1] + count]
 
     split_rows = (
-        db.query(
-            FinanceTransactionSplit.category_id,
-            func.sum(FinanceTransactionSplit.amount_cents).label("total"),
-            func.count(FinanceTransactionSplit.id).label("count"),
-        )
-        .join(
-            FinanceTransaction,
-            FinanceTransaction.id == FinanceTransactionSplit.transaction_id,
-        )
-        .filter(
-            FinanceTransactionSplit.owner == owner,
-            FinanceTransaction.date >= start,
-            FinanceTransaction.date <= end,
-            FinanceTransactionSplit.amount_cents < 0,
-        )
-        .group_by(FinanceTransactionSplit.category_id)
+        db.query(FinanceTransactionSplit)
+        .filter(FinanceTransactionSplit.owner == owner)
         .all()
     )
-    for category_id, total, count in split_rows:
-        totals[category_id] = (int(total or 0), int(count or 0))
+    for split in split_rows:
+        parent = parents.get(split.transaction_id)
+        if parent is None:
+            parent = (
+                db.query(FinanceTransaction)
+                .filter(FinanceTransaction.id == split.transaction_id)
+                .first()
+            )
+        if parent is None or parent.owner != owner:
+            continue
+        if parent.date < start or parent.date > end:
+            continue
+        if account_id and not parent.account_id.startswith(str(account_id).strip()):
+            continue
+        if not is_posted_row(parent):
+            continue
+        if include_transfers:
+            if split.amount_cents < 0:
+                _add(split.category_id, abs(split.amount_cents))
+            continue
+        if is_true_spend(parent) and split.amount_cents < 0:
+            _add(split.category_id, abs(split.amount_cents))
 
-    tx_q = (
-        db.query(
-            FinanceTransaction.category_id,
-            func.sum(FinanceTransaction.amount_cents).label("total"),
-            func.count(FinanceTransaction.id).label("count"),
-        )
-        .filter(
-            FinanceTransaction.owner == owner,
-            FinanceTransaction.date >= start,
-            FinanceTransaction.date <= end,
-            FinanceTransaction.amount_cents < 0,
-        )
-    )
-    if split_parents:
-        tx_q = tx_q.filter(~FinanceTransaction.id.in_(split_parents))
-    for category_id, total, count in tx_q.group_by(FinanceTransaction.category_id).all():
-        prev = totals.get(category_id, (0, 0))
-        totals[category_id] = (prev[0] + int(total or 0), prev[1] + int(count or 0))
+    for tx in txs:
+        if tx.id in split_parents:
+            continue
+        if not is_posted_row(tx):
+            continue
+        if include_transfers:
+            if tx.amount_cents < 0:
+                _add(tx.category_id, abs(tx.amount_cents))
+            continue
+        if is_true_spend(tx):
+            _add(tx.category_id, abs(tx.amount_cents))
+        elif is_reimbursement_in(tx) and tx.category_id:
+            _add(tx.category_id, -tx.amount_cents, count=0)
 
-    return totals
-
-
-def spending_by_category(db: Session, owner: str, month: str) -> list[dict]:
-    start, end = month_bounds(month)
-    totals = _category_totals_for_month(db, owner, start, end)
     cats = {
         c.id: c
         for c in db.query(FinanceCategory).filter(FinanceCategory.owner == owner).all()
@@ -103,12 +229,16 @@ def spending_by_category(db: Session, owner: str, month: str) -> list[dict]:
         ).all()
     }
     out = []
+    seen = set()
     for category_id, (total, count) in totals.items():
         cat = cats.get(category_id) if category_id else None
-        spent = abs(int(total or 0))
+        spent = int(total or 0)
         budget = budgets.get(category_id) if category_id else None
         limit_cents = int(budget.limit_cents) if budget else None
         remaining = (limit_cents - spent) if limit_cents is not None else None
+        if spent == 0 and limit_cents is None:
+            continue
+        seen.add(category_id)
         out.append({
             "category_id": category_id,
             "category_name": format_category_path(cat, cats) if cat else "Uncategorized",
@@ -119,42 +249,48 @@ def spending_by_category(db: Session, owner: str, month: str) -> list[dict]:
             "limit_cents": limit_cents,
             "remaining_cents": remaining,
         })
+    if include_zero_limits:
+        for category_id, budget in budgets.items():
+            if category_id in seen:
+                continue
+            cat = cats.get(category_id)
+            if not cat:
+                continue
+            limit_cents = int(budget.limit_cents)
+            out.append({
+                "category_id": category_id,
+                "category_name": format_category_path(cat, cats),
+                "parent_id": cat.parent_id,
+                "color": cat.color,
+                "spent_cents": 0,
+                "transaction_count": 0,
+                "limit_cents": limit_cents,
+                "remaining_cents": limit_cents,
+            })
     out.sort(key=lambda r: r["spent_cents"], reverse=True)
     return out
 
 
-def monthly_trends(db: Session, owner: str, months: int = 6) -> list[dict]:
+def monthly_trends(
+    db: Session,
+    owner: str,
+    months: int = 6,
+    include_transfers: bool = False,
+    account_id: Optional[str] = None,
+) -> list[dict]:
     today = date.today()
     results = []
     y, m = today.year, today.month
     for _ in range(months):
         mk = f"{y:04d}-{m:02d}"
-        start, end = month_bounds(mk)
-        income = (
-            db.query(func.coalesce(func.sum(FinanceTransaction.amount_cents), 0))
-            .filter(
-                FinanceTransaction.owner == owner,
-                FinanceTransaction.date >= start,
-                FinanceTransaction.date <= end,
-                FinanceTransaction.amount_cents > 0,
-            )
-            .scalar()
+        cf = month_cashflow(
+            db,
+            owner,
+            mk,
+            account_id=account_id,
+            include_transfers=include_transfers,
         )
-        spending = (
-            db.query(func.coalesce(func.sum(FinanceTransaction.amount_cents), 0))
-            .filter(
-                FinanceTransaction.owner == owner,
-                FinanceTransaction.date >= start,
-                FinanceTransaction.date <= end,
-                FinanceTransaction.amount_cents < 0,
-            )
-            .scalar()
-        )
-        results.append({
-            "month": mk,
-            "income_cents": int(income or 0),
-            "spending_cents": abs(int(spending or 0)),
-        })
+        results.append(cf)
         m -= 1
         if m == 0:
             m = 12
@@ -163,8 +299,29 @@ def monthly_trends(db: Session, owner: str, months: int = 6) -> list[dict]:
     return results
 
 
+def spend_by_account(db: Session, owner: str, month: str) -> list[dict]:
+    accounts = (
+        db.query(FinanceAccount)
+        .filter(FinanceAccount.owner == owner, FinanceAccount.is_closed == False)  # noqa: E712
+        .order_by(FinanceAccount.display_order, FinanceAccount.name)
+        .all()
+    )
+    rows = []
+    for acct in accounts:
+        cf = month_cashflow(db, owner, month, account_id=acct.id)
+        rows.append({
+            "account_id": acct.id,
+            "name": acct.name,
+            "purpose": acct.purpose or "operating",
+            "personal_spend_cents": cf["personal_spend_cents"],
+            "income_cents": cf["income_cents"],
+            "unclassified_count": cf["unclassified_count"],
+        })
+    return rows
+
+
 def net_worth(db: Session, owner: str) -> dict:
-    """Sum open account balances; split assets vs liabilities."""
+    """Sum open account posted balances; split assets vs liabilities."""
     accounts = (
         db.query(FinanceAccount)
         .filter(FinanceAccount.owner == owner, FinanceAccount.is_closed == False)  # noqa: E712
@@ -174,7 +331,7 @@ def net_worth(db: Session, owner: str) -> dict:
     liabilities_cents = 0
     account_rows = []
     for acct in accounts:
-        bal = account_balance_cents(db, acct)
+        bal = posted_cents(db, acct)
         if acct.account_type in ("credit_card", "loan"):
             liability = abs(bal) if bal < 0 else bal
             liabilities_cents += liability
@@ -182,7 +339,9 @@ def net_worth(db: Session, owner: str) -> dict:
                 "id": acct.id,
                 "name": acct.name,
                 "account_type": acct.account_type,
+                "purpose": acct.purpose or "operating",
                 "balance_cents": bal,
+                "posted_cents": bal,
                 "bucket": "liability",
             })
         else:
@@ -191,7 +350,9 @@ def net_worth(db: Session, owner: str) -> dict:
                 "id": acct.id,
                 "name": acct.name,
                 "account_type": acct.account_type,
+                "purpose": acct.purpose or "operating",
                 "balance_cents": bal,
+                "posted_cents": bal,
                 "bucket": "asset",
             })
     return {

@@ -143,6 +143,9 @@ def ensure_default_categories(db: Session, owner: str) -> None:
     if added:
         db.commit()
     deduplicate_categories(db, owner)
+    from integrations.finance.services.movements import maybe_backfill_movements
+
+    maybe_backfill_movements(db, owner)
 
 
 def apply_rules_to_transactions(db: Session, owner: str, transactions: list[FinanceTransaction]) -> int:

@@ -207,10 +207,16 @@ def commit_import_preview(
     db.delete(preview)
     db.commit()
 
+    from integrations.finance.services.movements import detect_movements
+
+    movements = detect_movements(db, owner, auto_link=True)
     return {
         "batch_id": batch.id,
         "imported_count": len(imported),
         "duplicate_count": duplicate_count,
+        "movements_auto_linked": len(movements.get("auto_linked") or []),
+        "movements_suggestions": len(movements.get("suggestions") or []),
+        "unmatched_funding": len(movements.get("unmatched_funding") or []),
     }
 
 
