@@ -739,6 +739,8 @@ async function _renderImport() {
     _panelSwap(panel, '<p>Create an account first, then import a CSV or QFX export from your bank.</p>');
     return;
   }
+  const mappings = await _api('/import/mappings').catch(() => ({ mappings: [] }));
+  const saved = mappings.mappings || [];
   _panelSwap(panel, `
     <p style="opacity:0.85;margin-top:0;">Upload a CSV or QFX/OFX export from Wells Fargo, Navy Federal, or another bank. Data stays on this server.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
@@ -748,6 +750,10 @@ async function _renderImport() {
         <option value="csv_wells_fargo">Wells Fargo CSV</option>
         <option value="csv_navy_federal">Navy Federal CSV</option>
         <option value="csv_generic">Generic CSV</option>
+      </select>
+      <select id="finance-import-mapping">
+        <option value="">Saved mapping…</option>
+        ${saved.map((m) => `<option value="${m.id}">${_escHtml(m.name)}</option>`).join('')}
       </select>
       <button type="button" id="finance-import-preview-btn" class="btn-primary">Preview import</button>
     </div>
@@ -771,6 +777,12 @@ async function _runImportPreview() {
   fd.append('account_id', _activeAccountId);
   const preset = _el('finance-import-preset')?.value || '';
   if (preset) fd.append('preset', preset);
+  const mappingId = _el('finance-import-mapping')?.value || '';
+  if (mappingId) fd.append('mapping_id', mappingId);
+  if (_preview?.pending_mapping) {
+    fd.append('mapping', JSON.stringify(_preview.pending_mapping));
+    fd.append('preset', 'csv_generic');
+  }
   try {
     _preview = await fetch(`${API}/import/preview`, { method: 'POST', body: fd, credentials: 'same-origin' })
       .then(async (r) => {
@@ -778,13 +790,19 @@ async function _runImportPreview() {
         if (!r.ok) throw new Error(d.detail || 'Preview failed');
         return d;
       });
+    if (_preview.needs_mapping) {
+      if (status) status.textContent = 'This file needs a column mapping before counts are trustworthy.';
+      _renderMappingForm(_preview, previewEl);
+      return;
+    }
     if (status) status.textContent = `${_preview.new_count} new, ${_preview.duplicate_count} duplicates (${_preview.format})`;
     const rows = (_preview.rows || []).slice(0, 100).map((r) =>
-      `<tr style="${r.status === 'duplicate' ? 'opacity:0.5' : ''}">
+      `<tr style="${r.status === 'duplicate' ? 'opacity:0.5' : ''}${r.status === 'possible_manual_duplicate' ? ';outline:1px solid var(--warn,#f1c40f)' : ''}">
         <td>${r.date}</td><td>${_escHtml(r.payee)}</td><td style="text-align:right;">${_fmtMoney(r.amount_cents)}</td><td>${_escHtml(r.status)}</td>
       </tr>`
     ).join('');
     previewEl.innerHTML = `
+      ${_preview.warning ? `<p style="color:var(--warn,#f1c40f);">${_escHtml(_preview.warning)}</p>` : ''}
       <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
         <thead><tr><th>Date</th><th>Payee</th><th>Amount</th><th>Status</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -798,6 +816,53 @@ async function _runImportPreview() {
   }
 }
 
+function _renderMappingForm(preview, previewEl) {
+  const cols = preview.columns || [];
+  const suggested = preview.suggested_mapping || {};
+  const fields = [
+    ['date', 'Date'],
+    ['amount', 'Amount'],
+    ['debit', 'Debit'],
+    ['credit', 'Credit'],
+    ['payee', 'Payee'],
+    ['memo', 'Memo'],
+    ['fitid', 'FITID (optional)'],
+    ['check_number', 'Check #'],
+    ['bank_category', 'Bank category'],
+  ];
+  const colOpts = (selected) =>
+    `<option value="">—</option>${cols.map((c) =>
+      `<option value="${_escHtml(c)}" ${c === selected ? 'selected' : ''}>${_escHtml(c)}</option>`
+    ).join('')}`;
+  previewEl.innerHTML = `
+    <p>Map columns, then preview again. Counts stay hidden until mapping is set.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;">
+      ${fields.map(([key, label]) =>
+        `<label>${label}<select data-map-field="${key}">${colOpts(suggested[key] || '')}</select></label>`
+      ).join('')}
+    </div>
+    <label style="display:block;margin-top:8px;">Save as
+      <input id="finance-map-name" type="text" placeholder="PayPal export" />
+    </label>
+    <button type="button" id="finance-map-apply" class="btn-primary" style="margin-top:8px;">Apply mapping and preview</button>`;
+  _el('finance-map-apply')?.addEventListener('click', async () => {
+    const mapping = {};
+    previewEl.querySelectorAll('[data-map-field]').forEach((sel) => {
+      if (sel.value) mapping[sel.dataset.mapField] = sel.value;
+    });
+    const name = _el('finance-map-name')?.value?.trim();
+    if (name && preview.fingerprint) {
+      await _api('/import/mappings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, fingerprint: preview.fingerprint, mapping }),
+      });
+    }
+    _preview = { pending_mapping: mapping };
+    _runImportPreview();
+  });
+}
+
 async function _commitImport() {
   if (!_preview?.preview_id) return;
   const status = _el('finance-import-status');
@@ -807,7 +872,10 @@ async function _commitImport() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ preview_id: _preview.preview_id, skip_duplicates: true }),
     });
-    if (status) status.textContent = `Imported ${result.imported_count} transactions (${result.duplicate_count} skipped as duplicates).`;
+    if (status) {
+      status.textContent = `Imported ${result.imported_count} transactions (${result.duplicate_count} skipped as duplicates).`;
+      if (result.warning) status.textContent += ` ${result.warning}`;
+    }
     _preview = null;
     await _loadAccounts();
     _activeTab = 'transactions';

@@ -73,7 +73,7 @@ def test_parse_ofx_garbage_raises_value_error():
 @pytest.mark.skipif(not (PRIVATE_DIR / "wells_fargo_Checking_e719.csv").exists(), reason="private fixture missing")
 def test_parse_real_wells_fargo_export():
     content = (PRIVATE_DIR / "wells_fargo_Checking_e719.csv").read_bytes()
-    fmt, rows, errors = parse_upload("wells_fargo.csv", content)
+    fmt, rows, errors, _extra = parse_upload("wells_fargo.csv", content)
     assert fmt == "csv_wells_fargo"
     assert len(rows) > 100
     assert errors == []
@@ -83,7 +83,7 @@ def test_parse_real_wells_fargo_export():
 @pytest.mark.skipif(not (PRIVATE_DIR / "Navy_fed_Main_bussness_transactions_167a.csv").exists(), reason="private fixture missing")
 def test_parse_real_navy_federal_export():
     content = (PRIVATE_DIR / "Navy_fed_Main_bussness_transactions_167a.csv").read_bytes()
-    fmt, rows, errors = parse_upload("nfcu.csv", content)
+    fmt, rows, errors, _extra = parse_upload("nfcu.csv", content)
     assert fmt == "csv_navy_federal"
     assert len(rows) > 10
     assert errors == []

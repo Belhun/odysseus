@@ -63,6 +63,8 @@ def _parse_decimal_amount(raw: str) -> int:
     cleaned = (raw or "").strip().replace("$", "").replace(",", "")
     if not cleaned:
         raise ValueError("empty amount")
+    if cleaned.startswith("(") and cleaned.endswith(")"):
+        cleaned = "-" + cleaned[1:-1].strip()
     try:
         cents = int((Decimal(cleaned) * 100).quantize(Decimal("1")))
     except (InvalidOperation, ValueError) as exc:
@@ -70,11 +72,14 @@ def _parse_decimal_amount(raw: str) -> int:
     return cents
 
 
-def _parse_date(raw: str) -> date:
+def _parse_date(raw: str, date_format: str | None = None) -> date:
     text = (raw or "").strip().strip('"')
     if not text:
         raise ValueError("empty date")
-    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y", "%Y/%m/%d"):
+    formats = ["%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y", "%Y/%m/%d", "%m/%d/%y"]
+    if date_format:
+        formats = [date_format, *formats]
+    for fmt in formats:
         try:
             return datetime.strptime(text, fmt).date()
         except ValueError:
@@ -185,56 +190,46 @@ def parse_navy_federal_csv(content: str) -> ParseResult:
     return ParseResult(transactions=out, errors=errors)
 
 
-def parse_generic_csv(content: str, mapping: dict[str, str] | None = None) -> ParseResult:
+def _mapped_value(row: dict[str, str], mapping: dict[str, str], field: str, fallbacks: tuple[str, ...] = ()) -> str:
+    key = mapping.get(field)
+    if key and row.get(key):
+        return row[key]
+    header_lower = _header_map(row)
+    for fb in fallbacks:
+        col = header_lower.get(fb)
+        if col and row.get(col):
+            return row[col]
+    return ""
+
+
+def parse_generic_csv(
+    content: str,
+    mapping: dict[str, str] | None = None,
+    options: dict | None = None,
+) -> ParseResult:
     rows = _read_csv_dicts(content)
     if not rows:
         return ParseResult(transactions=[], errors=[])
     mapping = mapping or {}
-    header_lower = _header_map(rows[0])
+    options = options or {}
+    skip_rows = int(options.get("skip_rows") or 0)
+    reverse_sign = bool(options.get("reverse_sign"))
+    date_format = options.get("date_format") or None
 
     out: list[ParsedTransaction] = []
     errors: list[RowParseError] = []
     for i, row in enumerate(rows, start=1):
-        date_raw = ""
-        for key in (mapping.get("date"),):
-            if key and key in row and row[key]:
-                date_raw = row[key]
-                break
-        if not date_raw:
-            for fb in ("date", "posting date", "transaction date"):
-                key = header_lower.get(fb)
-                if key and row.get(key):
-                    date_raw = row[key]
-                    break
-
-        amount_raw = ""
-        debit_raw = ""
-        credit_raw = ""
-        amt_key = mapping.get("amount")
-        if amt_key and amt_key in row:
-            amount_raw = row[amt_key]
-        else:
-            key = header_lower.get("amount")
-            if key:
-                amount_raw = row.get(key, "")
-
-        deb_key = mapping.get("debit") or header_lower.get("debit")
-        if deb_key and deb_key in row:
-            debit_raw = row[deb_key]
-        cred_key = mapping.get("credit") or header_lower.get("credit")
-        if cred_key and cred_key in row:
-            credit_raw = row[cred_key]
-
-        payee = ""
-        pay_key = mapping.get("payee")
-        if pay_key and pay_key in row:
-            payee = row[pay_key]
-        if not payee:
-            for fb in ("description", "payee", "memo", "name"):
-                key = header_lower.get(fb)
-                if key and row.get(key):
-                    payee = row[key]
-                    break
+        if i <= skip_rows:
+            continue
+        date_raw = _mapped_value(row, mapping, "date", ("date", "posting date", "transaction date"))
+        amount_raw = _mapped_value(row, mapping, "amount", ("amount",))
+        debit_raw = _mapped_value(row, mapping, "debit", ("debit", "withdrawal"))
+        credit_raw = _mapped_value(row, mapping, "credit", ("credit", "deposit"))
+        payee = _mapped_value(row, mapping, "payee", ("description", "payee", "memo", "name"))
+        memo = _mapped_value(row, mapping, "memo", ("memo", "notes"))
+        check_number = _mapped_value(row, mapping, "check_number", ("check number", "check #")) or None
+        fitid = _mapped_value(row, mapping, "fitid") or None
+        bank_category = _mapped_value(row, mapping, "bank_category", ("category",)) or None
 
         if not date_raw and not amount_raw and not debit_raw and not credit_raw:
             continue
@@ -243,14 +238,19 @@ def parse_generic_csv(content: str, mapping: dict[str, str] | None = None) -> Pa
             if amount_raw:
                 cents = _parse_decimal_amount(amount_raw)
             else:
-                debit = _parse_decimal_amount(debit_raw) if debit_raw else 0
-                credit = _parse_decimal_amount(credit_raw) if credit_raw else 0
+                debit = abs(_parse_decimal_amount(debit_raw)) if debit_raw else 0
+                credit = abs(_parse_decimal_amount(credit_raw)) if credit_raw else 0
                 cents = credit - debit
-
+            if reverse_sign:
+                cents = -cents
             tx = ParsedTransaction(
-                date=_parse_date(date_raw),
+                date=_parse_date(date_raw, date_format),
                 amount_cents=cents,
                 payee=payee,
+                memo=memo,
+                check_number=check_number,
+                fitid=fitid,
+                bank_category=bank_category,
                 raw=dict(row),
             )
             tx.finalize()
@@ -260,13 +260,18 @@ def parse_generic_csv(content: str, mapping: dict[str, str] | None = None) -> Pa
     return ParseResult(transactions=out, errors=errors)
 
 
-def parse_csv(content: str, preset: str | None = None, mapping: dict[str, str] | None = None) -> ParseResult:
+def parse_csv(
+    content: str,
+    preset: str | None = None,
+    mapping: dict[str, str] | None = None,
+    options: dict | None = None,
+) -> ParseResult:
     preset = preset or detect_csv_format(content)
     if preset == "csv_wells_fargo":
         return parse_wells_fargo_csv(content)
     if preset == "csv_navy_federal":
         return parse_navy_federal_csv(content)
-    return parse_generic_csv(content, mapping)
+    return parse_generic_csv(content, mapping, options)
 
 
 def parse_ofx_qfx(content: bytes | str) -> list[ParsedTransaction]:
@@ -338,13 +343,25 @@ def parse_upload(
     filename: str,
     content: bytes,
     preset: str | None = None,
-) -> tuple[str, list[ParsedTransaction], list[RowParseError]]:
+    mapping: dict[str, str] | None = None,
+    options: dict | None = None,
+) -> tuple[str, list[ParsedTransaction], list[RowParseError], dict[str, Any]]:
     if not content:
         raise ValueError("Upload file is empty")
     fmt = detect_file_format(filename, content)
+    extra: dict[str, Any] = {"needs_mapping": False, "columns": [], "suggested_mapping": {}}
     if fmt == "ofx":
-        return "ofx", parse_ofx_qfx(content), []
+        return "ofx", parse_ofx_qfx(content), [], extra
     text = content.decode("utf-8", errors="replace")
     csv_preset = preset or fmt
-    result = parse_csv(text, csv_preset)
-    return csv_preset, result.transactions, result.errors
+    rows = _read_csv_dicts(text) if csv_preset != "ofx" else []
+    headers = list(rows[0].keys()) if rows else []
+    extra["columns"] = headers
+    from integrations.finance.services.mappings import headers_are_obvious, suggest_mapping
+
+    extra["suggested_mapping"] = suggest_mapping(headers)
+    if csv_preset == "csv_generic" and not mapping and not headers_are_obvious(headers):
+        extra["needs_mapping"] = True
+        return csv_preset, [], [], extra
+    result = parse_csv(text, csv_preset, mapping=mapping, options=options)
+    return csv_preset, result.transactions, result.errors, extra
