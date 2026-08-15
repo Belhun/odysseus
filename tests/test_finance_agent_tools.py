@@ -646,6 +646,14 @@ FINANCE_READ_ACTIONS = {
     "suggest_categories",
     "list_recurring",
     "list_import_batches",
+    "list_planned",
+    "job_scenario",
+}
+
+FINANCE_PAPER_WRITES = {
+    "create_planned",
+    "delete_planned",
+    "set_job_take_home",
 }
 
 
@@ -672,7 +680,7 @@ def test_every_manage_finance_write_action_is_gated():
     register_finance_confirmation_gate()
     gate = get_tool_gate("finance", "manage_finance")
     assert gate is not None
-    writes = _manage_finance_enum() - FINANCE_READ_ACTIONS
+    writes = _manage_finance_enum() - FINANCE_READ_ACTIONS - FINANCE_PAPER_WRITES
     missing = sorted(writes - set(gate.actions))
     assert missing == []
 

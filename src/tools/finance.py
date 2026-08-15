@@ -418,13 +418,23 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
             ensure_default_categories(db, user)
 
+            from integrations.finance.services.reports import month_cashflow
+
+            cf = month_cashflow(db, user, month)
+
             rows = spending_by_category(db, user, month)
 
             if not rows:
 
                 return {"response": f"No spending recorded for {month}.", "exit_code": 0}
 
-            lines = [f"Spending for {month}:"]
+            title = (
+                f"True spend for {month}:"
+                if not cf.get("unclassified_count")
+                else f"Spend for {month} ({cf['unclassified_count']} rows counted by sign):"
+            )
+
+            lines = [title]
 
             for row in rows:
 
@@ -620,31 +630,102 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
             series = list_recurring_series(db, user)
 
-            active = [s for s in series if s.get("status") == "active"]
+            if not series:
 
-            if not active:
+                return {"response": "No recurring series detected yet. Detected means inferred, not a posted bill.", "exit_code": 0}
 
-                return {"response": "No recurring bills detected yet.", "exit_code": 0}
+            lines = ["Recurring series (Detected = inferred; Automatic = labeled; not posted bills):"]
 
-            total_monthly = sum(s.get("monthly_normalized_cents") or 0 for s in active)
+            for item in series:
 
-            lines = [
-
-                f"Recurring bills ({len(active)} active, ~{_fmt_cents(-total_monthly)}/month normalized):",
-
-            ]
-
-            for item in active:
+                label = {"automatic": "Automatic", "dismissed": "Dismissed"}.get(item.get("status"), "Detected")
 
                 lines.append(
 
                     f"- {item['display_payee']}: {_fmt_cents(item['median_amount_cents'])} "
 
-                    f"({item['cadence']}), next ~{item.get('next_due_date') or '?'} [{item['id'][:8]}]"
+                    f"({item['cadence']}) {label}, next ~{item.get('next_due_date') or '?'} [{item['id'][:8]}]"
 
                 )
 
             return {"response": "\n".join(lines), "exit_code": 0}
+
+        if action == "list_planned":
+            from integrations.finance.services.planned import list_planned_for_owner, planned_dict
+            rows = [planned_dict(p) for p in list_planned_for_owner(db, user)]
+            if not rows:
+                return {"response": "No planned obligations. These never write ledger rows.", "exit_code": 0}
+            lines = ["Planned — not posted spend:"]
+            for row in rows:
+                kind = "funding" if row["is_funding"] else "need"
+                lines.append(f"- {row['name']} ({row['kind']}, {kind}): {_fmt_cents(row['amount_cents'])}")
+            return {"response": "\n".join(lines), "exit_code": 0}
+
+        if action == "job_scenario":
+            from integrations.finance.services.planned import job_overlay
+            overlay = job_overlay(db, user)
+            surplus = overlay["surplus_cents"]
+            surplus_txt = "withheld" if surplus is None else _fmt_cents(surplus)
+            return {
+                "response": (
+                    f"{overlay['label']} for {overlay['observed_month']}. "
+                    f"Survival need {_fmt_cents(overlay['survival_need_cents'])}. Surplus {surplus_txt}. "
+                    f"Unclassified {overlay['unclassified_count']} rows."
+                ),
+                "exit_code": 0,
+            }
+
+        if action == "create_planned":
+            from integrations.finance.services.planned import create_planned_for_owner, planned_dict
+            row = create_planned_for_owner(
+                db,
+                user,
+                name=str(args.get("name") or "Planned"),
+                kind=str(args.get("kind") or "other"),
+                amount_cents=int(args.get("amount_cents") or 0),
+                is_funding=bool(args.get("is_funding")),
+                notes=str(args.get("notes") or ""),
+            )
+            return {"response": f"Added planned {planned_dict(row)['name']} (not posted).", "exit_code": 0}
+
+        if action == "delete_planned":
+            from integrations.finance.services.planned import delete_planned_for_owner
+            delete_planned_for_owner(db, user, str(args.get("planned_id") or args.get("id") or ""))
+            return {"response": "Removed planned obligation.", "exit_code": 0}
+
+        if action == "set_job_take_home":
+            from integrations.finance.services.planned import upsert_job_scenario
+            row = upsert_job_scenario(
+                db,
+                user,
+                take_home_cents=int(args.get("take_home_cents") or 0),
+                label=str(args.get("label") or "Hypothetical job"),
+            )
+            return {"response": f"Hypothetical take-home set to {_fmt_cents(row.take_home_cents)}.", "exit_code": 0}
+
+        if action == "mark_recurring_automatic":
+            from integrations.finance.services.recurring import patch_recurring_series
+            from src.confirmation_gates import require_confirmed_action
+            gate_err = require_confirmed_action(
+                session_id=session_id,
+                owner=user,
+                domain="finance",
+                tool_name="manage_finance",
+                action=action,
+                tool_args=args,
+                confirmation_token=args.get("confirmation_token"),
+            )
+            if gate_err:
+                return {"error": gate_err, "exit_code": 1}
+            row = patch_recurring_series(
+                db,
+                user,
+                str(args.get("series_id") or args.get("id") or ""),
+                status="automatic",
+                category_id=args.get("category_id"),
+                movement_class=args.get("movement_class"),
+            )
+            return {"response": f"Marked {row.display_payee} automatic.", "exit_code": 0}
 
 
 
@@ -1363,13 +1444,13 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
                 "spending_report, budget_status, trends, net_worth, list_categories, list_rules, "
 
-                "suggest_categories, list_recurring, create_category, create_categories, "
+                "suggest_categories, list_recurring, list_planned, job_scenario, create_planned, "
 
                 "list_import_batches, categorize_transaction, set_budget, create_rule, "
 
                 "create_transaction, update_transaction, void_transaction, delete_transaction, "
 
-                "classify_transaction, link_transactions, pin_account."
+                "classify_transaction, link_transactions, pin_account, mark_recurring_automatic."
 
             ),
 

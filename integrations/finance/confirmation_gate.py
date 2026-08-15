@@ -361,6 +361,16 @@ def _validate_link_transactions(payload: dict[str, Any], tool_args: dict[str, An
     return None
 
 
+def _validate_mark_recurring_automatic(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
+    expected = str(payload.get("series_id") or payload.get("id") or "").strip()
+    actual = str(tool_args.get("series_id") or tool_args.get("id") or "").strip()
+    if expected and actual and not _id_prefix_matches(expected, actual):
+        return "Confirmed series_id does not match tool call"
+    if not expected:
+        return "series_id is required on the confirmation payload"
+    return None
+
+
 def _validate_pin_account(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
     expected = str(payload.get("account_id") or "").strip()
     actual = str(tool_args.get("account_id") or "").strip()
@@ -420,6 +430,8 @@ def register_finance_confirmation_gate() -> None:
                 "link_transactions": _validate_link_transactions,
 
                 "pin_account": _validate_pin_account,
+
+                "mark_recurring_automatic": _validate_mark_recurring_automatic,
 
             },
 

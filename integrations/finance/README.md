@@ -8,12 +8,21 @@ Finance ships as an **optional Odysseus plugin** (same pattern as the planned Sy
 2. Click **Install** on **Banking & Budgeting** (admin only)
 3. Reload the page (no server restart required)
 
+## Books vs labels
+
+- **Posted** is derived: opening posted + non-void, non-pending rows on or after the opening date. It is not a pin.
+- **Available** is a snapshot you type. Import, void, and batch delete never change pins.
+- **Class** (`spend`, `income`, `transfer`, `reimbursement`) is the report filter. Category is a label. `Transfers (label only)` does not hide a row from spend; set class to Transfer.
+- Unclassified rows still count by sign. Reports say "true spend" only when the month is fully classified.
+- Planned rent and the hypothetical job overlay never write ledger rows. Overlay surplus is withheld when unclassified outflows or thin coverage would print a confident wrong number.
+
 ## AI assistant
 
 The agent uses the `manage_finance` tool to read accounts, spending by category, budgets, trends, and transactions. Ask things like "how much did I spend on groceries this month?" or "show my Amazon transactions."
 
 - Bank CSV/OFX import is UI-only: say "open finance" or use Settings → Integrations after install
 - The agent cannot import files directly; use the Finance panel Import tab
+- Prefer transfer / pass-through / reimbursement when a row is unclear. Do not import mom's accounts. Chip-in is Support spend.
 
 ## Data location
 
