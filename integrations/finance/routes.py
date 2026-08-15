@@ -41,6 +41,12 @@ from integrations.finance.services.import_service import (
     commit_import_preview,
     rollback_import_batch,
 )
+from integrations.finance.services.mappings import (
+    list_mappings_for_owner,
+    mapping_dict,
+    parse_json_object,
+    save_mapping_for_owner,
+)
 from integrations.finance.services.reports import validate_month
 from integrations.finance.services.recurring import list_recurring_series, patch_recurring_series
 from integrations.finance.services.movements import (
@@ -182,6 +188,13 @@ class TransactionPatch(BaseModel):
 class ImportCommitBody(BaseModel):
     preview_id: str
     skip_duplicates: bool = True
+
+
+class MappingSaveBody(BaseModel):
+    name: str
+    fingerprint: str
+    mapping: dict[str, str]
+    options: Optional[dict] = None
 
 
 class SplitEntry(BaseModel):
@@ -741,15 +754,49 @@ def setup_finance_routes() -> APIRouter:
         finally:
             db.close()
 
+    @router.get("/import/mappings")
+    def list_import_mappings(request: Request):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            return {"mappings": [mapping_dict(m) for m in list_mappings_for_owner(db, user)]}
+        finally:
+            db.close()
+
+    @router.post("/import/mappings")
+    def save_import_mapping(request: Request, body: MappingSaveBody):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            row = save_mapping_for_owner(
+                db,
+                user,
+                name=body.name,
+                fingerprint=body.fingerprint,
+                mapping=body.mapping,
+                options=body.options,
+            )
+            return mapping_dict(row)
+        finally:
+            db.close()
+
     @router.post("/import/preview")
     async def import_preview(
         request: Request,
         file: UploadFile = File(...),
         account_id: str = Form(...),
         preset: str = Form(""),
+        mapping: str = Form(""),
+        options: str = Form(""),
+        mapping_id: str = Form(""),
     ):
         user = require_user(request)
         content = await read_upload_limited(file, FINANCE_IMPORT_MAX_BYTES, "Finance import")
+        try:
+            mapping_obj = parse_json_object(mapping or None)
+            options_obj = parse_json_object(options or None)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
         def _run_preview():
             db = get_session_factory()()
@@ -761,6 +808,9 @@ def setup_finance_routes() -> APIRouter:
                     file.filename or "import.csv",
                     content,
                     preset=preset or None,
+                    mapping=mapping_obj or None,
+                    options=options_obj or None,
+                    mapping_id=mapping_id or None,
                 )
             finally:
                 db.close()

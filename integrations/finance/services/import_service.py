@@ -82,6 +82,11 @@ def _tx_to_preview_dict(tx: ParsedTransaction, status: str) -> dict[str, Any]:
     }
 
 
+PROCESSOR_WARNING = (
+    "Processor CSV imported unpaired. Unpaired class is valid; classify funding legs when the counterpart book exists."
+)
+
+
 def build_import_preview(
     db: Session,
     owner: str,
@@ -89,6 +94,9 @@ def build_import_preview(
     filename: str,
     content: bytes,
     preset: str | None = None,
+    mapping: dict | None = None,
+    options: dict | None = None,
+    mapping_id: str | None = None,
 ) -> dict[str, Any]:
     account = (
         db.query(FinanceAccount)
@@ -99,7 +107,44 @@ def build_import_preview(
         raise ValueError("Account not found")
 
     cleanup_stale_previews(db, owner)
-    fmt, parsed, parse_errors = parse_upload(filename, content, preset)
+    from integrations.finance.services.mappings import (
+        fingerprint_headers,
+        get_mapping_by_fingerprint,
+        get_mapping_by_id,
+    )
+    from integrations.finance.services.parsers import _read_csv_dicts, detect_file_format
+
+    if mapping_id and not mapping:
+        saved = get_mapping_by_id(db, owner, mapping_id)
+        if saved:
+            mapping = saved.mapping
+            options = options or saved.options
+    if not mapping:
+        fmt_guess = detect_file_format(filename, content)
+        if fmt_guess != "ofx":
+            try:
+                headers = list(_read_csv_dicts(content.decode("utf-8", errors="replace"))[0].keys())
+            except (ValueError, IndexError):
+                headers = []
+            saved = get_mapping_by_fingerprint(db, owner, fingerprint_headers(headers)) if headers else None
+            if saved:
+                mapping = saved.mapping
+                options = options or saved.options
+    fmt, parsed, parse_errors, extra = parse_upload(
+        filename, content, preset, mapping=mapping, options=options
+    )
+    if extra.get("needs_mapping"):
+        return {
+            "needs_mapping": True,
+            "format": fmt,
+            "columns": extra.get("columns") or [],
+            "suggested_mapping": extra.get("suggested_mapping") or {},
+            "fingerprint": fingerprint_headers(extra.get("columns") or []),
+            "preview_id": None,
+            "new_count": 0,
+            "duplicate_count": 0,
+            "rows": [],
+        }
     existing = _existing_dedup_keys(db, account_id, owner)
     manual_matches = _existing_manual_match_hashes(db, account_id, owner)
 
@@ -138,6 +183,9 @@ def build_import_preview(
     ))
     db.commit()
 
+    warning = None
+    if (account.purpose or "") == "processor":
+        warning = PROCESSOR_WARNING
     return {
         "preview_id": preview_id,
         "format": fmt,
@@ -148,6 +196,8 @@ def build_import_preview(
         "error_count": len(parse_errors),
         "errors": [{"row": e.row, "message": e.message} for e in parse_errors],
         "rows": rows,
+        "needs_mapping": False,
+        "warning": warning,
     }
 
 
@@ -234,6 +284,12 @@ def commit_import_preview(
     from integrations.finance.services.movements import detect_movements
 
     movements = detect_movements(db, owner, auto_link=True)
+    account = (
+        db.query(FinanceAccount)
+        .filter(FinanceAccount.id == account_id, FinanceAccount.owner == owner)
+        .first()
+    )
+    warning = PROCESSOR_WARNING if account and (account.purpose or "") == "processor" else None
     return {
         "batch_id": batch.id,
         "imported_count": len(imported),
@@ -241,6 +297,7 @@ def commit_import_preview(
         "movements_auto_linked": len(movements.get("auto_linked") or []),
         "movements_suggestions": len(movements.get("suggestions") or []),
         "unmatched_funding": len(movements.get("unmatched_funding") or []),
+        "warning": warning,
     }
 
 
