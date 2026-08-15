@@ -33,6 +33,7 @@ let _txUncategorized = false;
 let _selectedTxIds = new Set();
 let _showAccountForm = false;
 let _editingAccountId = null;
+let _includeBusiness = true;
 const TX_PAGE_SIZE = 50;
 const CLASS_OPTIONS = [
   { value: '', label: '—' },
@@ -1046,7 +1047,7 @@ async function _renderPanel() {
 async function _renderPlannedAndJob(panel, month) {
   const [planned, job] = await Promise.all([
     _api('/planned'),
-    _api(`/job-scenario?month=${month}`),
+    _api(`/job-scenario?month=${month}&include_business=${_includeBusiness ? 'true' : 'false'}`),
   ]);
   const plannedRows = (planned.planned || []).map((p) =>
     `<tr><td>${_escHtml(p.name)}</td><td>${p.kind}</td><td style="text-align:right;">${_fmtMoney(p.amount_cents)}</td><td>${p.is_funding ? 'funding' : 'need'}</td><td><button type="button" class="btn-secondary" data-del-planned="${p.id}">Remove</button></td></tr>`
@@ -1078,6 +1079,7 @@ async function _renderPlannedAndJob(panel, month) {
     <p>Observed ${job.observed_month}. Survival need ${_fmtMoney(job.survival_need_cents)}. Surplus ${surplus}.</p>
     <p>With savings target ${_fmtMoney(job.needed_cents)}; surplus ${job.surplus_with_savings_cents == null ? 'withheld' : _fmtMoney(job.surplus_with_savings_cents)}.</p>
     <p>Trip spend excluded ${_fmtMoney(job.trip_spend_excluded_cents)}. Navy Fed business ${_fmtMoney(job.business_spend_cents)}. ${_escHtml(job.business_income_note || '')}</p>
+    <label><input type="checkbox" id="fin-job-business" ${_includeBusiness ? 'checked' : ''} /> Include Navy Fed business spend in the floor</label>
     <p>Unclassified ${job.unclassified_count} rows / ${_fmtMoney(job.unclassified_outflow_cents)}.</p>
     <p>Excluded chip-in:</p>
     <ul>${chipRows || '<li>None</li>'}</ul>
@@ -1103,6 +1105,10 @@ async function _renderPlannedAndJob(panel, month) {
         is_funding: !!_el('fin-plan-fund')?.checked,
       }),
     });
+    _renderBudget();
+  });
+  _el('fin-job-business')?.addEventListener('change', (e) => {
+    _includeBusiness = !!e.target.checked;
     _renderBudget();
   });
   _el('fin-job-save')?.addEventListener('click', async () => {
