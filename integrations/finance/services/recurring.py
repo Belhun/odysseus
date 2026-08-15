@@ -9,8 +9,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from integrations.finance.models import FinanceRecurringSeries, FinanceTransaction
+from integrations.finance.models import RECURRING_STATUSES, FinanceRecurringSeries, FinanceTransaction
+from integrations.finance.services.movements import FUNDING_PAYEE_TOKENS, effective_movement_class
 from integrations.finance.services.parsers import _normalize_payee
+from integrations.finance.services.transactions import validate_movement_class
 
 CADENCE_BUCKETS = (
     ("weekly", 5, 9),
@@ -65,6 +67,11 @@ def refresh_recurring_series(db: Session, owner: str) -> int:
     upserted = 0
     for normalized, group in by_payee.items():
         if len(group) < 3:
+            continue
+        if any(token in normalized for token in FUNDING_PAYEE_TOKENS):
+            continue
+        spendish = sum(1 for tx in group if effective_movement_class(tx) == "spend")
+        if spendish < (len(group) + 1) // 2:
             continue
         dates = sorted(tx.date for tx in group)
         gaps = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]
@@ -139,8 +146,18 @@ def list_recurring_series(db: Session, owner: str, *, refresh: bool = True) -> l
             "monthly_normalized_cents": monthly_cents,
             "next_due_date": row.next_due_date.isoformat() if row.next_due_date else None,
             "status": row.status,
+            "category_id": row.category_id,
+            "movement_class": row.movement_class,
+            "skip_reason": _skip_reason(row),
         })
     return out
+
+
+def _skip_reason(row: FinanceRecurringSeries) -> str | None:
+    payee = (row.normalized_payee or "").upper()
+    if any(token in payee for token in FUNDING_PAYEE_TOKENS):
+        return "Funding tokens cannot be marked automatic."
+    return None
 
 
 def patch_recurring_series(
@@ -149,6 +166,8 @@ def patch_recurring_series(
     series_id: str,
     *,
     status: str | None = None,
+    category_id: str | None = None,
+    movement_class: str | None = None,
 ) -> FinanceRecurringSeries:
     row = (
         db.query(FinanceRecurringSeries)
@@ -158,8 +177,20 @@ def patch_recurring_series(
     if not row:
         raise ValueError("Recurring series not found")
     if status is not None:
-        if status not in ("active", "dismissed"):
-            raise ValueError("status must be active or dismissed")
+        if status not in RECURRING_STATUSES:
+            raise ValueError(f"status must be one of: {', '.join(RECURRING_STATUSES)}")
+        if status == "automatic":
+            reason = _skip_reason(row)
+            if reason:
+                raise ValueError(reason)
+            if not category_id and not row.category_id:
+                raise ValueError("automatic recurring needs a category")
+            if not movement_class and not row.movement_class:
+                raise ValueError("automatic recurring needs a movement class")
         row.status = status
+    if category_id is not None:
+        row.category_id = category_id or None
+    if movement_class is not None:
+        row.movement_class = validate_movement_class(movement_class)
     db.commit()
     return row

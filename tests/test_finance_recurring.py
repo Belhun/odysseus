@@ -6,8 +6,9 @@ from datetime import date, timedelta
 import pytest
 import integrations.finance.database as finance_db
 from integrations.finance.install import run_install
-from integrations.finance.models import FinanceAccount, FinanceRecurringSeries, FinanceTransaction
-from integrations.finance.services.recurring import list_recurring_series, refresh_recurring_series
+from integrations.finance.models import FinanceAccount, FinanceCategory, FinanceRecurringSeries, FinanceTransaction
+from integrations.finance.services.categories import ensure_default_categories
+from integrations.finance.services.recurring import list_recurring_series, patch_recurring_series, refresh_recurring_series
 from integrations.finance.uninstall import run_uninstall
 
 
@@ -96,5 +97,39 @@ def test_list_recurring_series_monthly_normalized(finance_db_env):
         assert len(rows) == 1
         assert rows[0]["monthly_normalized_cents"] > 0
         assert rows[0]["cadence"] == "monthly"
+    finally:
+        db.close()
+
+
+@pytest.mark.area_routes
+def test_mark_automatic_refuses_funding_tokens_allows_netflix(finance_db_env):
+    owner = finance_db_env["owner"]
+    db = finance_db_env["session_factory"]()
+    try:
+        ensure_default_categories(db, owner)
+        sub = db.query(FinanceCategory).filter(
+            FinanceCategory.owner == owner, FinanceCategory.name == "Subscriptions"
+        ).one()
+        _add_recurring_transactions(db, owner, "NETFLIX", date(2026, 2, 1), [-1600, -1600, -1600], 30)
+        rows = list_recurring_series(db, owner)
+        netflix = next(r for r in rows if r["display_payee"] == "NETFLIX")
+        patched = patch_recurring_series(
+            db, owner, netflix["id"], status="automatic", category_id=sub.id, movement_class="spend"
+        )
+        assert patched.status == "automatic"
+        zelle = FinanceRecurringSeries(
+            id=str(uuid.uuid4()),
+            owner=owner,
+            normalized_payee="ZELLE TO JANE",
+            display_payee="ZELLE TO JANE",
+            cadence="monthly",
+            interval_days=30,
+            median_amount_cents=-15000,
+            status="active",
+        )
+        db.add(zelle)
+        db.commit()
+        with pytest.raises(ValueError, match="Funding"):
+            patch_recurring_series(db, owner, zelle.id, status="automatic", category_id="x", movement_class="spend")
     finally:
         db.close()

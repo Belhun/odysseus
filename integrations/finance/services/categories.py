@@ -162,6 +162,35 @@ def ensure_default_categories(db: Session, owner: str) -> None:
         added = True
     if added:
         db.commit()
+    support = (
+        db.query(FinanceCategory)
+        .filter(
+            FinanceCategory.owner == owner,
+            FinanceCategory.name == "Support",
+            FinanceCategory.parent_id.is_(None),
+        )
+        .first()
+    )
+    if support:
+        has_chip = (
+            db.query(FinanceCategory)
+            .filter(
+                FinanceCategory.owner == owner,
+                FinanceCategory.parent_id == support.id,
+                FinanceCategory.name == "Mom chip-in",
+            )
+            .first()
+        )
+        if not has_chip:
+            db.add(FinanceCategory(
+                id=str(uuid.uuid4()),
+                owner=owner,
+                name="Mom chip-in",
+                parent_id=support.id,
+                is_income=False,
+                color=support.color,
+            ))
+            db.commit()
     deduplicate_categories(db, owner)
     from integrations.finance.services.movements import maybe_backfill_movements
 

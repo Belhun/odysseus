@@ -106,6 +106,7 @@ function _getModal() {
         <button type="button" class="finance-tab-btn" data-tab="transactions">Transactions</button>
         <button type="button" class="finance-tab-btn" data-tab="import">Import</button>
         <button type="button" class="finance-tab-btn" data-tab="budget">Budget</button>
+        <button type="button" class="finance-tab-btn" data-tab="recurring">Recurring</button>
         <button type="button" class="finance-tab-btn" data-tab="reports">Reports</button>
       </div>
       <div id="finance-panel" style="flex:1;overflow:auto;padding:12px;"></div>
@@ -889,7 +890,7 @@ async function _renderBudget() {
   const panel = _el('finance-panel');
   if (!panel) return;
   const seq = _panelLoading(panel);
-  const month = new Date().toISOString().slice(0, 7);
+  const month = _el('finance-budget-month')?.value || new Date().toISOString().slice(0, 7);
   const data = await _api(`/budgets?month=${month}`);
   if (seq !== _renderSeq) return;
   const rows = (data.categories || []).map((c) => `
@@ -902,7 +903,15 @@ async function _renderBudget() {
     </tr>`).join('');
   _panelSwap(panel, `
     <h3 style="margin-top:0;">Budget — ${data.month}</h3>
-    <p style="opacity:0.8;font-size:0.85rem;">${_escHtml(_classifiedStat(data))} Set monthly limits (whole dollars). Category rows are gross; reimbursements offset below the table.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+      <input id="finance-budget-month" type="month" value="${data.month}" />
+      <button type="button" id="finance-budget-reload" class="btn-secondary">Load month</button>
+      <button type="button" id="finance-budget-copy" class="btn-secondary">Copy previous month</button>
+      <label>Income target $
+        <input id="finance-income-target" type="number" step="1" value="${data.income_target_cents != null ? (data.income_target_cents / 100).toFixed(0) : ''}" style="width:90px;" />
+      </label>
+    </div>
+    <p style="opacity:0.8;font-size:0.85rem;">${_escHtml(_classifiedStat(data))} Category rows are gross; reimbursements offset below the table. Planned lines are not posted spend.</p>
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr><th>Category</th><th style="text-align:right;">Spent</th><th style="text-align:right;">Limit</th><th style="text-align:right;">Remaining</th><th>Set limit</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="5">No spending this month yet.</td></tr>'}</tbody>
@@ -923,8 +932,28 @@ async function _renderBudget() {
         }),
       });
     }
+    const target = parseFloat(_el('finance-income-target')?.value);
+    if (!Number.isNaN(target)) {
+      await _api('/budgets/income-target', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ month: data.month, income_target_cents: Math.round(target * 100) }),
+      });
+    }
     _renderBudget();
   });
+  _el('finance-budget-reload')?.addEventListener('click', _renderBudget);
+  _el('finance-budget-copy')?.addEventListener('click', async () => {
+    const [y, m] = data.month.split('-').map(Number);
+    const prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+    await _api('/budgets/copy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from_month: prev, to_month: data.month }),
+    });
+    _renderBudget();
+  });
+  await _renderPlannedAndJob(panel, data.month);
 }
 
 function _spendTitle(cf) {
@@ -947,10 +976,11 @@ async function _renderReports() {
   if (!panel) return;
   const seq = _panelLoading(panel);
   const month = new Date().toISOString().slice(0, 7);
-  const [spending, trends, worth] = await Promise.all([
+  const [spending, trends, worth, byAcct] = await Promise.all([
     _api(`/reports/spending?month=${month}`),
     _api('/reports/trends?months=6'),
     _api('/reports/net-worth'),
+    _api(`/reports/spend-by-account?month=${month}`),
   ]);
   if (seq !== _renderSeq) return;
   const catRows = (spending.categories || []).map((c) =>
@@ -986,6 +1016,13 @@ async function _renderReports() {
       <tbody>${reimbRows || '<tr><td colspan="3">None this month</td></tr>'}</tbody>
     </table>
     <p>${funding.length} funding legs with no matching bill, ${_fmtMoney(fundingCents)} total; merchant spend may be missing.</p>
+    <h3>Spend by account</h3>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+      <thead><tr><th>Account</th><th>Purpose</th><th style="text-align:right;">Spend</th></tr></thead>
+      <tbody>${(byAcct.accounts || []).map((a) =>
+        `<tr><td>${_escHtml(a.name)}</td><td>${_escHtml(a.purpose)}</td><td style="text-align:right;">${_fmtMoney(a.personal_spend_cents)}</td></tr>`
+      ).join('') || '<tr><td colspan="3">No data</td></tr>'}</tbody>
+    </table>
     <h3>Net worth</h3>
     <p>Assets ${_fmtMoney(worth.assets_cents)} · Liabilities ${_fmtMoney(worth.liabilities_cents)} · Net ${_fmtMoney(worth.net_worth_cents)}</p>
     <h3>6-month trends</h3>
@@ -1002,7 +1039,135 @@ async function _renderPanel() {
   if (_activeTab === 'transactions') await _renderTransactions();
   else if (_activeTab === 'import') await _renderImport();
   else if (_activeTab === 'budget') await _renderBudget();
+  else if (_activeTab === 'recurring') await _renderRecurring();
   else if (_activeTab === 'reports') await _renderReports();
+}
+
+async function _renderPlannedAndJob(panel, month) {
+  const [planned, job] = await Promise.all([
+    _api('/planned'),
+    _api(`/job-scenario?month=${month}`),
+  ]);
+  const plannedRows = (planned.planned || []).map((p) =>
+    `<tr><td>${_escHtml(p.name)}</td><td>${p.kind}</td><td style="text-align:right;">${_fmtMoney(p.amount_cents)}</td><td>${p.is_funding ? 'funding' : 'need'}</td><td><button type="button" class="btn-secondary" data-del-planned="${p.id}">Remove</button></td></tr>`
+  ).join('');
+  const surplus = job.surplus_cents == null
+    ? (job.partial_data ? 'partial data — surplus withheld' : 'surplus withheld (unclassified outflows)')
+    : _fmtMoney(job.surplus_cents);
+  const chipRows = (job.chip_in_rows || []).map((r) =>
+    `<li>${r.date} ${_escHtml(r.payee)} ${_fmtMoney(r.amount_cents)}</li>`
+  ).join('');
+  const block = document.createElement('div');
+  block.innerHTML = `
+    <h3>Planned — not posted spend</h3>
+    <p style="font-size:0.8rem;opacity:0.8;">Monthly amount (annual bill divided by 12). starts_on is a note only.</p>
+    <table style="width:100%;border-collapse:collapse;">
+      <thead><tr><th>Name</th><th>Kind</th><th style="text-align:right;">Monthly</th><th></th><th></th></tr></thead>
+      <tbody>${plannedRows || '<tr><td colspan="5">No planned lines</td></tr>'}</tbody>
+    </table>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">
+      <input id="fin-plan-name" placeholder="Rent" />
+      <select id="fin-plan-kind">${['rent','utilities','insurance','telecom','reimbursement_swap','savings_funding','other'].map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
+      <input id="fin-plan-amt" type="number" step="1" placeholder="$" style="width:80px;" />
+      <label><input type="checkbox" id="fin-plan-fund" /> Savings funding</label>
+      <button type="button" id="fin-plan-add" class="btn-secondary">Add planned</button>
+    </div>
+    <h3>Hypothetical job</h3>
+    <p>${_escHtml(job.label || 'Hypothetical job scenario — not income on the books')}</p>
+    ${job.rent_support_warning ? '<p>Warning: a rent line and another line mentioning rent or support are both included.</p>' : ''}
+    <p>Observed ${job.observed_month}. Survival need ${_fmtMoney(job.survival_need_cents)}. Surplus ${surplus}.</p>
+    <p>With savings target ${_fmtMoney(job.needed_cents)}; surplus ${job.surplus_with_savings_cents == null ? 'withheld' : _fmtMoney(job.surplus_with_savings_cents)}.</p>
+    <p>Trip spend excluded ${_fmtMoney(job.trip_spend_excluded_cents)}. Navy Fed business ${_fmtMoney(job.business_spend_cents)}. ${_escHtml(job.business_income_note || '')}</p>
+    <p>Unclassified ${job.unclassified_count} rows / ${_fmtMoney(job.unclassified_outflow_cents)}.</p>
+    <p>Excluded chip-in:</p>
+    <ul>${chipRows || '<li>None</li>'}</ul>
+    <label>Take-home $<input id="fin-job-takehome" type="number" step="1" value="${job.take_home_cents ? (job.take_home_cents / 100).toFixed(0) : ''}" style="width:100px;" /></label>
+    <button type="button" id="fin-job-save" class="btn-primary">Save hypothetical take-home</button>`;
+  panel.appendChild(block);
+  block.querySelectorAll('[data-del-planned]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await _api(`/planned/${btn.dataset.delPlanned}`, { method: 'DELETE' });
+      _renderBudget();
+    });
+  });
+  _el('fin-plan-add')?.addEventListener('click', async () => {
+    const dollars = parseFloat(_el('fin-plan-amt')?.value);
+    if (Number.isNaN(dollars)) return;
+    await _api('/planned', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: _el('fin-plan-name')?.value || 'Planned',
+        kind: _el('fin-plan-kind')?.value || 'other',
+        amount_cents: Math.round(dollars * 100),
+        is_funding: !!_el('fin-plan-fund')?.checked,
+      }),
+    });
+    _renderBudget();
+  });
+  _el('fin-job-save')?.addEventListener('click', async () => {
+    const dollars = parseFloat(_el('fin-job-takehome')?.value);
+    if (Number.isNaN(dollars)) return;
+    await _api('/job-scenario', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ take_home_cents: Math.round(dollars * 100), label: 'Hypothetical job' }),
+    });
+    _renderBudget();
+  });
+}
+
+async function _renderRecurring() {
+  const panel = _el('finance-panel');
+  if (!panel) return;
+  const seq = _panelLoading(panel);
+  const data = await _api('/recurring');
+  if (seq !== _renderSeq) return;
+  const rows = (data.series || []).map((s) => `
+    <tr>
+      <td>${_escHtml(s.display_payee)}</td>
+      <td>${s.cadence}</td>
+      <td style="text-align:right;">${_fmtMoney(s.median_amount_cents)}</td>
+      <td>${s.status === 'automatic' ? 'Automatic' : (s.status === 'dismissed' ? 'Dismissed' : 'Detected')}</td>
+      <td>${s.skip_reason ? _escHtml(s.skip_reason) : ''}</td>
+      <td>
+        <button type="button" class="btn-secondary" data-rec-auto="${s.id}" ${s.skip_reason ? 'disabled' : ''}>Mark automatic</button>
+        <button type="button" class="btn-secondary" data-rec-dismiss="${s.id}">Dismiss</button>
+      </td>
+    </tr>`).join('');
+  _panelSwap(panel, `
+    <h3 style="margin-top:0;">Recurring</h3>
+    <p style="font-size:0.85rem;opacity:0.8;">Detected means the series was inferred. Automatic is a label, not a bill poster.</p>
+    <table style="width:100%;border-collapse:collapse;">
+      <thead><tr><th>Payee</th><th>Cadence</th><th style="text-align:right;">Median</th><th>Status</th><th></th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6">No recurring series yet.</td></tr>'}</tbody>
+    </table>`);
+  panel.querySelectorAll('[data-rec-auto]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const spend = CLASS_OPTIONS.find((o) => o.value === 'spend');
+      const cat = _categories.find((c) => !c.parent_id && c.name === 'Subscriptions') || _categories[0];
+      try {
+        await _api(`/recurring/${btn.dataset.recAuto}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'automatic', category_id: cat?.id, movement_class: spend?.value || 'spend' }),
+        });
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+      _renderRecurring();
+    });
+  });
+  panel.querySelectorAll('[data-rec-dismiss]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await _api(`/recurring/${btn.dataset.recDismiss}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'dismissed' }),
+      });
+      _renderRecurring();
+    });
+  });
 }
 
 export function isFinanceOpen() {
