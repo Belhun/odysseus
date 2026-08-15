@@ -2,10 +2,9 @@
 
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 from starlette.testclient import TestClient
+from tests.conftest import make_finance_test_engine
 
 import integrations.finance.database as finance_db
 import integrations.finance.routes as finance_routes
@@ -21,11 +20,7 @@ def finance_client(monkeypatch, tmp_path):
     monkeypatch.setattr(finance_db, "finance_db_path", lambda: db_path)
     monkeypatch.setattr("integrations.finance.routes.is_plugin_active", lambda _pid: True)
 
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-        poolclass=NullPool,
-    )
+    engine = make_finance_test_engine(db_path)
     FinanceBase.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     monkeypatch.setattr(finance_routes, "get_session_factory", lambda: session_factory)
@@ -206,3 +201,31 @@ def test_patch_manual_amount_and_mutation_log(finance_client):
         assert "patch" in actions
     finally:
         db.close()
+
+
+@pytest.mark.area_routes
+def test_manual_row_then_matching_import_is_flagged_not_skipped(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "Cash", "account_type": "checking"}).json()
+    finance_client.post("/api/finance/transactions", json={
+        "account_id": acct["id"],
+        "date": "2026-08-01",
+        "amount_cents": -4000,
+        "payee": "GROCERY",
+    })
+    csv_body = '"DATE","DESCRIPTION","AMOUNT","CHECK #","STATUS"\n"08/01/2026","GROCERY","-40.00","","Posted"\n'
+    preview = finance_client.post(
+        "/api/finance/import/preview",
+        data={"account_id": acct["id"], "preset": "csv_wells_fargo"},
+        files={"file": ("manual.csv", csv_body.encode("utf-8"), "text/csv")},
+    )
+    assert preview.status_code == 200
+    body = preview.json()
+    statuses = {row["status"] for row in body["rows"]}
+    assert "possible_manual_duplicate" in statuses
+    assert body["new_count"] >= 1
+
+
+@pytest.mark.area_routes
+def test_invalid_month_returns_400(finance_client):
+    res = finance_client.get("/api/finance/reports/cashflow", params={"month": "2026-13"})
+    assert res.status_code == 400

@@ -90,8 +90,11 @@ def account_dict(db: Session, account: FinanceAccount) -> dict[str, Any]:
         "balance_cents": snap["balance_cents"],
         "posted_pin_cents": snap["posted_pin_cents"],
         "posted_pin_as_of": snap["posted_pin_as_of"],
+        "posted_pin_delta_cents": snap["posted_pin_delta_cents"],
         "available_cents": snap["available_cents"],
         "available_as_of": snap["available_as_of"],
+        "available_age_days": snap["available_age_days"],
+        "posted_pin_age_days": snap["posted_pin_age_days"],
         "created_at": account.created_at.isoformat() if account.created_at else None,
     }
 
@@ -201,6 +204,8 @@ def patch_account_for_owner(
     posted_pin_as_of: Optional[str] = None,
     available_cents: Optional[int] = None,
     available_as_of: Optional[str] = None,
+    clear_posted_pin: bool = False,
+    clear_available: bool = False,
     actor: str = "user",
 ) -> FinanceAccount:
     account = _get_owned_account(db, owner, account_id)
@@ -209,7 +214,7 @@ def patch_account_for_owner(
     pin_touched = any(
         v is not None
         for v in (posted_pin_cents, posted_pin_as_of, available_cents, available_as_of)
-    )
+    ) or clear_posted_pin or clear_available
     before_pins = None
     if pin_touched:
         before_pins = {
@@ -241,14 +246,22 @@ def patch_account_for_owner(
         account.opening_balance_date = parse_optional_date(opening_balance_date)
     if credit_limit_cents is not None:
         account.credit_limit_cents = credit_limit_cents
-    if posted_pin_cents is not None:
-        account.posted_pin_cents = posted_pin_cents
-    if posted_pin_as_of is not None:
-        account.posted_pin_as_of = parse_optional_date(posted_pin_as_of)
-    if available_cents is not None:
-        account.available_cents = available_cents
-    if available_as_of is not None:
-        account.available_as_of = parse_optional_date(available_as_of)
+    if clear_posted_pin:
+        account.posted_pin_cents = None
+        account.posted_pin_as_of = None
+    else:
+        if posted_pin_cents is not None:
+            account.posted_pin_cents = posted_pin_cents
+        if posted_pin_as_of is not None:
+            account.posted_pin_as_of = parse_optional_date(posted_pin_as_of)
+    if clear_available:
+        account.available_cents = None
+        account.available_as_of = None
+    else:
+        if available_cents is not None:
+            account.available_cents = available_cents
+        if available_as_of is not None:
+            account.available_as_of = parse_optional_date(available_as_of)
     if pin_touched:
         log_mutation(
             db,
@@ -278,12 +291,14 @@ def pin_account_balances(
     posted_pin_as_of: Optional[str] = None,
     available_cents: Optional[int] = None,
     available_as_of: Optional[str] = None,
+    clear_posted_pin: bool = False,
+    clear_available: bool = False,
     actor: str = "user",
 ) -> FinanceAccount:
     if all(
         v is None
         for v in (posted_pin_cents, posted_pin_as_of, available_cents, available_as_of)
-    ):
+    ) and not clear_posted_pin and not clear_available:
         raise ValueError("At least one pin field is required")
     return patch_account_for_owner(
         db,
@@ -293,6 +308,8 @@ def pin_account_balances(
         posted_pin_as_of=posted_pin_as_of,
         available_cents=available_cents,
         available_as_of=available_as_of,
+        clear_posted_pin=clear_posted_pin,
+        clear_available=clear_available,
         actor=actor,
     )
 

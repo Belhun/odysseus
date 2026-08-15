@@ -18,6 +18,7 @@ from integrations.finance.models import (
 )
 from integrations.finance.services.categories import apply_rules_to_transactions
 from integrations.finance.services.parsers import ParsedTransaction, parse_upload
+from integrations.finance.services.transactions import movement_match_hash
 
 
 PREVIEW_TTL_HOURS = 2
@@ -53,6 +54,20 @@ def _existing_dedup_keys(db: Session, account_id: str, owner: str) -> set[str]:
     return keys
 
 
+def _existing_manual_match_hashes(db: Session, account_id: str, owner: str) -> set[str]:
+    rows = (
+        db.query(FinanceTransaction.match_hash)
+        .filter(
+            FinanceTransaction.account_id == account_id,
+            FinanceTransaction.owner == owner,
+            FinanceTransaction.source == "manual",
+            FinanceTransaction.match_hash.isnot(None),
+        )
+        .all()
+    )
+    return {row[0] for row in rows if row[0]}
+
+
 def _tx_to_preview_dict(tx: ParsedTransaction, status: str) -> dict[str, Any]:
     return {
         "date": tx.date.isoformat(),
@@ -86,10 +101,14 @@ def build_import_preview(
     cleanup_stale_previews(db, owner)
     fmt, parsed, parse_errors = parse_upload(filename, content, preset)
     existing = _existing_dedup_keys(db, account_id, owner)
+    manual_matches = _existing_manual_match_hashes(db, account_id, owner)
 
     rows: list[dict[str, Any]] = []
     duplicate_count = 0
+    possible_manual_duplicate_count = 0
     for tx in parsed:
+        # finalize(account_id) is a no-op when the parser already set dedup_hash.
+        # That is load-bearing: the same NFCU file can be imported into two accounts.
         tx.finalize(account_id)
         status = "new"
         if tx.fitid and f"fitid:{tx.fitid}" in existing:
@@ -99,6 +118,10 @@ def build_import_preview(
             status = "duplicate"
             duplicate_count += 1
         else:
+            match = movement_match_hash(account_id, tx.date, tx.amount_cents, tx.payee)
+            if match in manual_matches:
+                status = "possible_manual_duplicate"
+                possible_manual_duplicate_count += 1
             existing.add(tx.dedup_hash)
             if tx.fitid:
                 existing.add(f"fitid:{tx.fitid}")
@@ -121,6 +144,7 @@ def build_import_preview(
         "row_count": len(rows),
         "new_count": len(rows) - duplicate_count,
         "duplicate_count": duplicate_count,
+        "possible_manual_duplicate_count": possible_manual_duplicate_count,
         "error_count": len(parse_errors),
         "errors": [{"row": e.row, "message": e.message} for e in parse_errors],
         "rows": rows,
@@ -220,4 +244,37 @@ def commit_import_preview(
     }
 
 
-from integrations.finance.services.balances import posted_cents as account_balance_cents
+def rollback_import_batch(db: Session, owner: str, batch_id: str) -> int:
+    from integrations.finance.services.movements import cleanup_orphaned_movement_groups
+    from integrations.finance.services.transactions import delete_splits_for_transactions
+
+    batch = (
+        db.query(FinanceImportBatch)
+        .filter(FinanceImportBatch.id == batch_id, FinanceImportBatch.owner == owner)
+        .first()
+    )
+    if not batch:
+        raise ValueError("Import batch not found")
+    txs = (
+        db.query(FinanceTransaction)
+        .filter(
+            FinanceTransaction.import_batch_id == batch_id,
+            FinanceTransaction.owner == owner,
+        )
+        .all()
+    )
+    group_ids = {tx.movement_group_id for tx in txs if tx.movement_group_id}
+    tx_ids = [tx.id for tx in txs]
+    delete_splits_for_transactions(db, owner, tx_ids)
+    deleted = (
+        db.query(FinanceTransaction)
+        .filter(
+            FinanceTransaction.import_batch_id == batch_id,
+            FinanceTransaction.owner == owner,
+        )
+        .delete(synchronize_session=False)
+    )
+    cleanup_orphaned_movement_groups(db, owner, group_ids)
+    db.delete(batch)
+    db.commit()
+    return int(deleted)

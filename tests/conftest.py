@@ -61,6 +61,22 @@ if "src.database" not in sys.modules:
 # collection, which breaks session import in subsequent tests).
 import core.models  # noqa: E402
 
+
+def make_finance_test_engine(db_path):
+    """File-backed finance engine with production SQLite pragmas (foreign_keys=ON)."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import NullPool
+
+    from integrations.finance.database import attach_sqlite_pragmas
+
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=NullPool,
+    )
+    attach_sqlite_pragmas(engine)
+    return engine
+
 def pytest_configure(config):
     """Register the dynamic taxonomy ``sub_*`` markers before collection.
 

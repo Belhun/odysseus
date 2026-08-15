@@ -258,8 +258,6 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
     )
 
-    from integrations.finance.services.import_service import account_balance_cents
-
     from integrations.finance.services.recurring import list_recurring_series
 
     from integrations.finance.services.reports import month_bounds, month_key, monthly_trends, net_worth, spending_by_category
@@ -278,9 +276,9 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
         if action == "list_accounts":
 
-            q = db.query(FinanceAccount).filter(FinanceAccount.owner == user)
+            from integrations.finance.services.accounts import account_dict, list_accounts_for_owner
 
-            accounts = q.order_by(FinanceAccount.display_order, FinanceAccount.name).all()
+            accounts = list_accounts_for_owner(db, user, include_closed=False)
 
             if not accounts:
 
@@ -290,15 +288,23 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
             for acct in accounts:
 
-                bal = account_balance_cents(db, acct)
+                snap = account_dict(db, acct)
+
+                bal = snap["posted_cents"]
 
                 mask = f" ••{acct.mask_last4}" if acct.mask_last4 else ""
 
                 inst = f" ({acct.institution})" if acct.institution else ""
 
+                purpose = snap.get("purpose") or "operating"
+
+                pin = snap.get("posted_pin_delta_cents")
+
+                pin_bit = f" pin Δ {_fmt_cents(pin)}" if pin is not None else ""
+
                 lines.append(
 
-                    f"- [{acct.id[:8]}] {acct.name}{mask}{inst} — {_fmt_cents(bal)} ({acct.account_type})"
+                    f"- [{acct.id[:8]}] {acct.name}{mask}{inst} — {_fmt_cents(bal)} ({acct.account_type}, {purpose}){pin_bit}"
 
                 )
 
@@ -1170,7 +1176,9 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
             create_rule_for_owner(
 
-                db, user, pattern=pattern, category_id=cat.id, priority=priority
+                db, user, pattern=pattern, category_id=cat.id, priority=priority,
+
+                apply_existing=False,
 
             )
 

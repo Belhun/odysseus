@@ -169,14 +169,19 @@ def apply_rules_to_transactions(db: Session, owner: str, transactions: list[Fina
                 continue
             try:
                 if re.search(pattern, payee, re.IGNORECASE):
-                    if rule.category_id in categories:
+                    if rule.category_id and rule.category_id in categories and not tx.category_id:
                         tx.category_id = rule.category_id
                         categorized += 1
+                    if getattr(rule, "movement_class", None) and not tx.movement_class:
+                        tx.movement_class = rule.movement_class
                     break
             except re.error:
                 if pattern.upper() in payee:
-                    tx.category_id = rule.category_id
-                    categorized += 1
+                    if rule.category_id and not tx.category_id:
+                        tx.category_id = rule.category_id
+                        categorized += 1
+                    if getattr(rule, "movement_class", None) and not tx.movement_class:
+                        tx.movement_class = rule.movement_class
                     break
     return categorized
 
@@ -257,27 +262,41 @@ def create_rule_for_owner(
     owner: str,
     *,
     pattern: str,
-    category_id: str,
+    category_id: str | None = None,
+    movement_class: str | None = None,
     priority: int = 100,
+    apply_existing: bool = True,
 ) -> FinanceCategorizationRule:
     clean_pattern = pattern.strip()
     if not clean_pattern:
         raise ValueError("Rule pattern is required")
-    cat = (
-        db.query(FinanceCategory)
-        .filter(FinanceCategory.id == category_id, FinanceCategory.owner == owner)
-        .first()
-    )
-    if not cat:
-        raise ValueError("Category not found")
+    if not category_id and not movement_class:
+        raise ValueError("category_id or movement_class is required")
+    if category_id:
+        cat = (
+            db.query(FinanceCategory)
+            .filter(FinanceCategory.id == category_id, FinanceCategory.owner == owner)
+            .first()
+        )
+        if not cat:
+            raise ValueError("Category not found")
     rule = FinanceCategorizationRule(
         id=str(uuid.uuid4()),
         owner=owner,
         pattern=clean_pattern,
         category_id=category_id,
+        movement_class=movement_class,
         priority=int(priority),
     )
     db.add(rule)
+    db.flush()
+    if apply_existing:
+        existing = (
+            db.query(FinanceTransaction)
+            .filter(FinanceTransaction.owner == owner)
+            .all()
+        )
+        apply_rules_to_transactions(db, owner, existing)
     db.commit()
     return rule
 

@@ -24,15 +24,15 @@ FUNDING_PAYEE_TOKENS = (
     "VENMO CASH OUT",
     "ONLINE TRANSFER",
     "INST XFER",
+    "ZELLE",
 )
-ZELLE_TOKEN = "ZELLE"
+P2P_INFLOW_TOKENS = ("ZELLE", "VENMO", "CASH APP", "CASHAPP")
 PROCESSOR_PURPOSES = ("processor",)
 
 
 def load_finance_settings() -> dict[str, Any]:
     defaults = {
         "transfer_day_gap": 3,
-        "mom_payee_tokens": ["MOM", "MOTHER"],
         "movement_backfill_v1_owners": [],
     }
     path = finance_config_path()
@@ -75,7 +75,16 @@ def is_true_spend(tx: FinanceTransaction) -> bool:
 
 
 def is_true_income(tx: FinanceTransaction) -> bool:
-    return is_posted_row(tx) and effective_movement_class(tx) == MOVEMENT_INCOME and tx.amount_cents > 0
+    if not is_posted_row(tx) or (tx.amount_cents or 0) <= 0:
+        return False
+    if tx.movement_class == MOVEMENT_INCOME:
+        return True
+    if tx.movement_class:
+        return False
+    # Fail-open income, except funding-token inflows with no peer (H1).
+    if payee_looks_like_funding(tx.payee or ""):
+        return False
+    return True
 
 
 def is_reimbursement_in(tx: FinanceTransaction) -> bool:
@@ -99,20 +108,76 @@ def _payee_upper(tx: FinanceTransaction) -> str:
     return (tx.payee or "").upper()
 
 
-def _mom_tokens(settings: dict[str, Any] | None = None) -> list[str]:
-    settings = settings or load_finance_settings()
-    tokens = settings.get("mom_payee_tokens") or ["MOM", "MOTHER"]
-    return [str(t).upper() for t in tokens if t]
-
-
-def payee_looks_like_mom(payee: str, settings: dict[str, Any] | None = None) -> bool:
-    text = (payee or "").upper()
-    return any(tok in text for tok in _mom_tokens(settings))
-
-
 def payee_looks_like_funding(payee: str) -> bool:
     text = (payee or "").upper()
     return any(tok in text for tok in FUNDING_PAYEE_TOKENS)
+
+
+def payee_looks_like_p2p(payee: str) -> bool:
+    text = (payee or "").upper()
+    if "CASHOUT" in text or "CASH OUT" in text or "INST XFER" in text:
+        return False
+    return any(tok in text for tok in P2P_INFLOW_TOKENS)
+
+
+def _funding_counterpart_accounts(
+    tx: FinanceTransaction,
+    accounts: dict[str, FinanceAccount],
+) -> list[FinanceAccount]:
+    payee = _payee_upper(tx)
+    matches: list[FinanceAccount] = []
+    for acct in accounts.values():
+        if acct.id == tx.account_id:
+            continue
+        name = (acct.name or "").upper()
+        rail = (acct.rail or "").lower()
+        if "VENMO" in payee and (rail == "venmo" or "VENMO" in name):
+            matches.append(acct)
+        elif "PAYPAL" in payee and (rail == "paypal" or "PAYPAL" in name):
+            matches.append(acct)
+        elif "GOOGLE" in payee and (rail == "google" or "GOOGLE" in name):
+            matches.append(acct)
+        elif (
+            ("ONLINE TRANSFER" in payee or "INST XFER" in payee)
+            and "PAYPAL" not in payee
+            and "VENMO" not in payee
+            and (acct.purpose or "operating") in ("operating", "trip")
+        ):
+            matches.append(acct)
+    return matches
+
+
+def _account_has_rows_in_window(
+    db: Session,
+    owner: str,
+    account_ids: list[str],
+    center: date,
+    gap: int,
+) -> bool:
+    if not account_ids:
+        return False
+    start = center - timedelta(days=gap)
+    end = center + timedelta(days=gap)
+    row = (
+        db.query(FinanceTransaction.id)
+        .filter(
+            FinanceTransaction.owner == owner,
+            FinanceTransaction.account_id.in_(account_ids),
+            FinanceTransaction.date >= start,
+            FinanceTransaction.date <= end,
+        )
+        .first()
+    )
+    return row is not None
+
+
+def _class_for_funding_row(tx: FinanceTransaction, accounts: dict[str, FinanceAccount]) -> str:
+    acct = accounts.get(tx.account_id)
+    if acct and acct.purpose == "processor":
+        return "pass_through"
+    if any(a.purpose == "processor" for a in accounts.values()):
+        return "pass_through"
+    return "transfer"
 
 
 def _accounts_by_id(db: Session, owner: str) -> dict[str, FinanceAccount]:
@@ -190,10 +255,14 @@ def link_movements(
     if len(account_ids) < 2:
         raise ValueError("Linked movements must span at least two accounts")
 
+    paired = {tx.movement_class for tx in txs if tx.movement_class in ("transfer", "pass_through")}
+    shared = paired.pop() if len(paired) == 1 else None
     for tx in txs:
         tx.movement_group_id = group_id
         if tx.movement_class is None:
-            tx.movement_class = _infer_class_for_link(txs, tx, accounts)
+            tx.movement_class = shared or _infer_class_for_link(txs, tx, accounts)
+        elif shared and tx.movement_class in ("transfer", "pass_through"):
+            tx.movement_class = shared
     db.commit()
     return group_id
 
@@ -237,33 +306,70 @@ def _date_delta_days(a: date, b: date) -> int:
     return abs((a - b).days)
 
 
+def _unique_opposite_peer(
+    tx: FinanceTransaction,
+    pool: list[FinanceTransaction],
+    gap: int,
+) -> Optional[FinanceTransaction]:
+    peers = [
+        other
+        for other in pool
+        if other.id != tx.id
+        and other.account_id != tx.account_id
+        and other.amount_cents == -tx.amount_cents
+        and _date_delta_days(other.date, tx.date) <= gap
+    ]
+    return peers[0] if len(peers) == 1 else None
+
+
+def _assign_paired_class(
+    tx: FinanceTransaction,
+    movement_class: str,
+    pool: list[FinanceTransaction],
+    gap: int,
+) -> None:
+    tx.movement_class = movement_class
+    if movement_class not in ("transfer", "pass_through"):
+        return
+    peer = _unique_opposite_peer(tx, pool, gap)
+    if peer is not None and peer.movement_class in (None, movement_class):
+        peer.movement_class = movement_class
+
+
 def apply_payee_heuristics(db: Session, owner: str) -> int:
-    """Set class without a group for high-confidence unmatched funding and mom inflows."""
+    """Class funding-token rows only when a counterpart book has rows in-window.
+
+    Inflows without a counterpart stay income so house-sitting / Venmo cashout
+    does not vanish. Outflows may still be transfer/pass_through.
+    Never guess a mom/person name.
+    """
     settings = load_finance_settings()
+    gap = int(settings.get("transfer_day_gap") or 3)
     accounts = _accounts_by_id(db, owner)
-    has_processor = any(a.purpose == "processor" for a in accounts.values())
-    txs = (
-        db.query(FinanceTransaction)
-        .filter(
-            FinanceTransaction.owner == owner,
-            FinanceTransaction.movement_class.is_(None),
-        )
-        .all()
-    )
+    pool = db.query(FinanceTransaction).filter(FinanceTransaction.owner == owner).all()
+    txs = [tx for tx in pool if tx.movement_class is None]
     changed = 0
     for tx in txs:
-        payee = _payee_upper(tx)
-        if tx.amount_cents > 0 and ZELLE_TOKEN in payee and payee_looks_like_mom(payee, settings):
-            tx.movement_class = "reimbursement"
+        if not payee_looks_like_funding(tx.payee or ""):
+            continue
+        counterparts = _funding_counterpart_accounts(tx, accounts)
+        has_peer = _account_has_rows_in_window(
+            db, owner, [a.id for a in counterparts], tx.date, gap
+        )
+        if tx.amount_cents > 0:
+            if has_peer:
+                _assign_paired_class(tx, _class_for_funding_row(tx, accounts), pool, gap)
+            else:
+                # Sign rule: unmatched funding inflow stays income and is reviewed.
+                tx.movement_class = MOVEMENT_INCOME
             changed += 1
             continue
-        if payee_looks_like_funding(payee):
-            acct = accounts.get(tx.account_id)
-            if (acct and acct.purpose == "processor") or has_processor:
-                tx.movement_class = "pass_through"
-            else:
-                tx.movement_class = "transfer"
-            changed += 1
+        # Zelle outflows to people are spend (chip-in). Other funding tokens
+        # may still class as transfer without a book peer.
+        if "ZELLE" in _payee_upper(tx) and not has_peer:
+            continue
+        _assign_paired_class(tx, _class_for_funding_row(tx, accounts), pool, gap)
+        changed += 1
     if changed:
         db.commit()
     return changed
@@ -297,25 +403,28 @@ def detect_movements(
     suggestions: list[dict[str, Any]] = []
     auto: list[dict[str, Any]] = []
 
-    for tx in unmatched:
-        if tx.id in used:
-            continue
-        peers = [
+    def _peers(tx: FinanceTransaction, window: int) -> list[FinanceTransaction]:
+        return [
             other
             for other in unmatched
             if other.id != tx.id
             and other.id not in used
             and other.account_id != tx.account_id
             and other.amount_cents == -tx.amount_cents
-            and _date_delta_days(other.date, tx.date) <= gap
+            and _date_delta_days(other.date, tx.date) <= window
         ]
+
+    candidates = {tx.id: _peers(tx, gap) for tx in unmatched}
+
+    for tx in unmatched:
+        if tx.id in used:
+            continue
+        peers = candidates.get(tx.id) or []
         if not peers:
             continue
-        unique_high = [
-            p for p in peers if _date_delta_days(p.date, tx.date) <= 1
-        ]
-        if len(unique_high) == 1 and len(peers) == 1:
-            peer = unique_high[0]
+        tight = [p for p in peers if _date_delta_days(p.date, tx.date) <= 1]
+        if len(tight) == 1 and len(peers) == 1:
+            peer = tight[0]
             reverse = [
                 other
                 for other in unmatched
@@ -325,53 +434,54 @@ def detect_movements(
                 and other.amount_cents == -peer.amount_cents
                 and _date_delta_days(other.date, peer.date) <= 1
             ]
-            if len(reverse) != 1:
-                suggestions.append({
-                    "tx_id": tx.id,
-                    "peer_ids": [p.id for p in peers],
-                    "confidence": "ambiguous",
-                })
+            if len(reverse) == 1 and reverse[0].id == tx.id:
+                payload = {
+                    "tx_ids": [tx.id, peer.id],
+                    "amount_cents": abs(tx.amount_cents),
+                    "date_delta_days": _date_delta_days(tx.date, peer.date),
+                    "confidence": "unique",
+                }
+                if auto_link:
+                    group_id = link_movements(db, owner, [tx.id, peer.id])
+                    payload["movement_group_id"] = group_id
+                    auto.append(payload)
+                else:
+                    suggestions.append(payload)
+                used.add(tx.id)
+                used.add(peer.id)
                 continue
-            payload = {
-                "tx_ids": [tx.id, peer.id],
-                "amount_cents": abs(tx.amount_cents),
-                "date_delta_days": _date_delta_days(tx.date, peer.date),
-                "confidence": "unique",
-            }
-            if auto_link:
-                group_id = link_movements(db, owner, [tx.id, peer.id])
-                payload["movement_group_id"] = group_id
-                auto.append(payload)
-            else:
-                suggestions.append(payload)
-            used.add(tx.id)
-            used.add(peer.id)
-        else:
-            suggestions.append({
-                "tx_id": tx.id,
-                "peer_ids": [p.id for p in peers],
-                "confidence": "ambiguous",
-            })
+        suggestions.append({
+            "tx_id": tx.id,
+            "peer_ids": [p.id for p in peers],
+            "confidence": "ambiguous",
+        })
+
+    # Keep one suggestion per ambiguous cluster: drop a row that is only
+    # listed as someone else's peer (the shared +500 in two-vs-one).
+    singleton_ids = {
+        s["tx_id"]
+        for s in suggestions
+        if s.get("confidence") == "ambiguous" and len(s.get("peer_ids") or []) == 1
+    }
+    suggestions = [
+        s for s in suggestions
+        if s.get("confidence") == "unique"
+        or len(s.get("peer_ids") or []) == 1
+        or s.get("tx_id") not in {
+            pid for other in suggestions for pid in (other.get("peer_ids") or [])
+            if other.get("tx_id") in singleton_ids
+        }
+    ]
 
     heuristic_count = apply_payee_heuristics(db, owner)
-    unmatched_funding = [
-        {
-            "tx_id": tx.id,
-            "payee": tx.payee,
-            "movement_class": tx.movement_class,
-        }
-        for tx in db.query(FinanceTransaction).filter(
-            FinanceTransaction.owner == owner,
-            FinanceTransaction.movement_group_id.is_(None),
-            FinanceTransaction.movement_class.in_(("transfer", "pass_through")),
-        ).all()
-        if payee_looks_like_funding(tx.payee or "")
-    ]
+    queues = review_queues(db, owner)
 
     return {
         "suggestions": suggestions,
         "auto_linked": auto,
-        "unmatched_funding": unmatched_funding,
+        "unmatched_funding": queues["unmatched_funding"],
+        "unmatched_inflow": queues["unmatched_inflow"],
+        "p2p_inflows": queues["p2p_inflows"],
         "heuristics_applied": heuristic_count,
         "day_gap": gap,
         "unmatched_count": len(by_id) - len(used),
@@ -422,6 +532,32 @@ def movement_candidates(
     return out
 
 
+def cleanup_orphaned_movement_groups(
+    db: Session,
+    owner: str,
+    group_ids: set[str] | list[str],
+) -> int:
+    """Clear group id and transfer class when a group has fewer than two members."""
+    cleared = 0
+    for group_id in {g for g in group_ids if g}:
+        members = (
+            db.query(FinanceTransaction)
+            .filter(
+                FinanceTransaction.owner == owner,
+                FinanceTransaction.movement_group_id == group_id,
+            )
+            .all()
+        )
+        if len(members) >= 2:
+            continue
+        for tx in members:
+            tx.movement_group_id = None
+            if tx.movement_class in ("transfer", "pass_through"):
+                tx.movement_class = None
+            cleared += 1
+    return cleared
+
+
 def maybe_backfill_movements(db: Session, owner: str) -> None:
     has_null = (
         db.query(FinanceTransaction.id)
@@ -435,6 +571,69 @@ def maybe_backfill_movements(db: Session, owner: str) -> None:
         return
     apply_payee_heuristics(db, owner)
     detect_movements(db, owner, auto_link=True)
+
+
+def _tx_review_dict(tx: FinanceTransaction) -> dict[str, Any]:
+    return {
+        "tx_id": tx.id,
+        "date": tx.date.isoformat() if tx.date else None,
+        "payee": tx.payee,
+        "memo": tx.memo or "",
+        "amount_cents": tx.amount_cents,
+        "account_id": tx.account_id,
+        "movement_class": tx.movement_class,
+        "movement_group_id": tx.movement_group_id,
+        "category_id": tx.category_id,
+    }
+
+
+def review_queues(
+    db: Session,
+    owner: str,
+    txs: list[FinanceTransaction] | None = None,
+) -> dict[str, Any]:
+    rows = txs
+    if rows is None:
+        rows = (
+            db.query(FinanceTransaction)
+            .filter(FinanceTransaction.owner == owner)
+            .all()
+        )
+    posted = [tx for tx in rows if is_posted_row(tx)]
+    unmatched_funding = [
+        _tx_review_dict(tx)
+        for tx in posted
+        if tx.amount_cents < 0
+        and not tx.movement_group_id
+        and (
+            tx.movement_class in ("transfer", "pass_through")
+            or (tx.movement_class is None and payee_looks_like_funding(tx.payee or ""))
+        )
+        and payee_looks_like_funding(tx.payee or "")
+    ]
+    unmatched_inflow = [
+        _tx_review_dict(tx)
+        for tx in posted
+        if tx.amount_cents > 0
+        and not tx.movement_group_id
+        and payee_looks_like_funding(tx.payee or "")
+        and tx.movement_class in (None, MOVEMENT_INCOME)
+    ]
+    p2p_inflows = [
+        _tx_review_dict(tx)
+        for tx in posted
+        if tx.amount_cents > 0
+        and payee_looks_like_p2p(tx.payee or "")
+        and tx.movement_class not in ("reimbursement", "transfer", "pass_through")
+    ]
+    return {
+        "unmatched_funding": unmatched_funding,
+        "unmatched_funding_cents": sum(abs(r["amount_cents"]) for r in unmatched_funding),
+        "unmatched_inflow": unmatched_inflow,
+        "unmatched_inflow_cents": sum(r["amount_cents"] for r in unmatched_inflow),
+        "p2p_inflows": p2p_inflows,
+        "p2p_inflow_cents": sum(r["amount_cents"] for r in p2p_inflows),
+    }
 
 
 def unclassified_counts(db: Session, owner: str, txs: list[FinanceTransaction] | None = None) -> dict[str, int]:

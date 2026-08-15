@@ -5,10 +5,9 @@ from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 from starlette.testclient import TestClient
+from tests.conftest import make_finance_test_engine
 
 import integrations.finance.database as finance_db
 import integrations.finance.routes as finance_routes
@@ -28,11 +27,7 @@ def finance_client(monkeypatch, tmp_path):
     monkeypatch.setattr(finance_db, "finance_db_path", lambda: db_path)
     monkeypatch.setattr("integrations.finance.routes.is_plugin_active", lambda _pid: True)
 
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-        poolclass=NullPool,
-    )
+    engine = make_finance_test_engine(db_path)
     FinanceBase.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     monkeypatch.setattr(finance_routes, "get_session_factory", lambda: session_factory)
@@ -275,11 +270,7 @@ def test_finance_dedup_unique_index_migration(monkeypatch, tmp_path):
     db_path = tmp_path / "dedup.db"
     monkeypatch.setattr(finance_db, "finance_db_path", lambda: db_path)
 
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-        poolclass=NullPool,
-    )
+    engine = make_finance_test_engine(db_path)
     FinanceBase.metadata.create_all(engine)
     from sqlalchemy import text
     with engine.connect() as conn:

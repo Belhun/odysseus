@@ -4,10 +4,6 @@ import uuid
 from datetime import date
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
-
 import integrations.finance.database as finance_db
 from integrations.finance.install import run_install
 from integrations.finance.models import FinanceAccount, FinanceTransaction
@@ -38,14 +34,7 @@ def finance_db_env(monkeypatch, tmp_path):
     monkeypatch.setattr("src.settings.FEATURES_FILE", str(tmp_path / "features.json"))
     finance_db.reset_engine_cache()
     run_install()
-    db_path = plugins_root / "finance" / "finance.db"
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-        poolclass=NullPool,
-    )
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    yield {"owner": "alice", "session_factory": session_factory}
+    yield {"owner": "alice", "session_factory": finance_db.get_session_factory()}
     run_uninstall(remove_data=True)
     finance_db.reset_engine_cache()
 
@@ -230,18 +219,109 @@ def test_paypal_inst_xfer_unmatched_gets_class(finance_db_env):
 
 
 @pytest.mark.area_routes
-def test_zelle_from_mom_is_reimbursement_zelle_to_mom_chipin_is_not(finance_db_env):
+def test_zelle_from_mom_is_not_guessed_as_reimbursement(finance_db_env):
     owner = finance_db_env["owner"]
     db = finance_db_env["session_factory"]()
     try:
         wells = _acct(db, owner, "Wells")
-        inflow = _tx(db, owner, wells.id, 4000, "ZELLE FROM MOM T-MOBILE")
+        inflow = _tx(db, owner, wells.id, 4000, "ZELLE FROM JANE SMITH")
         chipin = _tx(db, owner, wells.id, -15000, "ZELLE TO MOM")
         apply_payee_heuristics(db, owner)
         db.refresh(inflow)
         db.refresh(chipin)
-        assert inflow.movement_class == "reimbursement"
+        assert inflow.movement_class != "reimbursement"
         assert chipin.movement_class is None
         assert effective_movement_class(chipin) == "spend"
+    finally:
+        db.close()
+
+
+@pytest.mark.area_routes
+def test_venmo_cashout_without_venmo_book_stays_income(finance_db_env):
+    owner = finance_db_env["owner"]
+    db = finance_db_env["session_factory"]()
+    try:
+        wells = _acct(db, owner, "Wells")
+        tx = _tx(db, owner, wells.id, 12000, "VENMO CASHOUT")
+        result = detect_movements(db, owner, auto_link=True)
+        db.refresh(tx)
+        assert tx.movement_class == "income"
+        assert result["unmatched_inflow"]
+    finally:
+        db.close()
+
+
+@pytest.mark.area_routes
+def test_one_sided_transfer_pairs_unique_opposite_peer(finance_db_env):
+    owner = finance_db_env["owner"]
+    db = finance_db_env["session_factory"]()
+    try:
+        wells = _acct(db, owner, "Wells")
+        trip = _acct(db, owner, "Trip", purpose="trip")
+        out_leg = _tx(db, owner, wells.id, -50000, "ONLINE TRANSFER")
+        in_leg = _tx(db, owner, trip.id, 50000, "WELLS FARGO")
+        apply_payee_heuristics(db, owner)
+        db.refresh(out_leg)
+        db.refresh(in_leg)
+        assert out_leg.movement_class == "transfer"
+        assert in_leg.movement_class == "transfer"
+    finally:
+        db.close()
+
+
+@pytest.mark.area_routes
+def test_two_outflows_one_inflow_produces_no_auto_link(finance_db_env):
+    owner = finance_db_env["owner"]
+    db = finance_db_env["session_factory"]()
+    try:
+        wells = _acct(db, owner, "Wells")
+        trip = _acct(db, owner, "Trip", purpose="trip")
+        other = _acct(db, owner, "Other")
+        _tx(db, owner, wells.id, -50000, "TO TRIP A")
+        _tx(db, owner, other.id, -50000, "TO TRIP B")
+        _tx(db, owner, trip.id, 50000, "FROM WELLS")
+        result = detect_movements(db, owner, auto_link=True)
+        assert result["auto_linked"] == []
+        assert len(result["suggestions"]) == 2
+        grouped = db.query(FinanceTransaction).filter(
+            FinanceTransaction.owner == owner,
+            FinanceTransaction.movement_group_id.isnot(None),
+        ).count()
+        assert grouped == 0
+    finally:
+        db.close()
+
+
+@pytest.mark.area_routes
+def test_rollback_batch_demotes_surviving_linked_peer(finance_db_env):
+    from integrations.finance.models import FinanceImportBatch
+    from integrations.finance.services.import_service import rollback_import_batch
+    from integrations.finance.services.reports import month_cashflow
+
+    owner = finance_db_env["owner"]
+    db = finance_db_env["session_factory"]()
+    try:
+        wells = _acct(db, owner, "Wells")
+        trip = _acct(db, owner, "Trip", purpose="trip")
+        batch = FinanceImportBatch(
+            id="batch-trip",
+            owner=owner,
+            account_id=trip.id,
+            filename="trip.csv",
+        )
+        db.add(batch)
+        db.commit()
+        wells_leg = _tx(db, owner, wells.id, -50000, "NAVY FEDERAL")
+        trip_leg = _tx(db, owner, trip.id, 50000, "WELLS")
+        trip_leg.import_batch_id = batch.id
+        db.commit()
+        link_movements(db, owner, [wells_leg.id, trip_leg.id])
+        rollback_import_batch(db, owner, batch.id)
+        db.refresh(wells_leg)
+        assert wells_leg.movement_group_id is None
+        assert wells_leg.movement_class is None
+        cf = month_cashflow(db, owner, "2026-06")
+        assert cf["net_spend_cents"] == 50000
+        assert cf["income_cents"] == 0
     finally:
         db.close()
