@@ -9,8 +9,10 @@ from sqlalchemy.pool import NullPool
 
 import integrations.finance.database as finance_db
 from integrations.finance.database import init_finance_db
+from integrations.finance.install import run_install
 from integrations.finance.models import FinanceAccount, FinanceCategory, FinanceTransaction
 from integrations.finance.services.categories import ensure_default_categories
+from src.plugins.registry import write_installed_record
 
 
 OLD_ACCOUNTS_SQL = """
@@ -167,3 +169,62 @@ def test_ensure_default_categories_seeds_support(migrated_old_db):
         assert support_count == 1
     finally:
         db.close()
+
+
+def _seed_v010_db(db_path):
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=NullPool,
+    )
+    with engine.connect() as conn:
+        conn.execute(text(OLD_ACCOUNTS_SQL))
+        conn.execute(text(OLD_TX_SQL))
+        conn.execute(
+            text(
+                "INSERT INTO finance_accounts "
+                "(id, owner, name, institution, account_type, currency, "
+                "opening_balance_cents, is_closed, display_order, created_at, updated_at) "
+                "VALUES ('acct-old', 'alice', 'Wells', '', 'checking', 'USD', "
+                "10000, 0, 0, '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+            )
+        )
+        conn.commit()
+    engine.dispose()
+
+
+@pytest.mark.area_routes
+def test_run_install_twice_migrates_existing_v010_db(monkeypatch, tmp_path):
+    """Already-installed plugins must pick up new columns on a second run_install()."""
+    plugins_root = tmp_path / "plugins"
+    db_path = plugins_root / "finance" / "finance.db"
+    db_path.parent.mkdir(parents=True)
+    monkeypatch.setattr("src.plugins.registry.PLUGINS_DATA_ROOT", plugins_root)
+    monkeypatch.setattr("src.plugins.registry.plugin_data_dir", lambda pid: plugins_root / pid)
+    monkeypatch.setattr(finance_db, "finance_db_path", lambda: db_path)
+    monkeypatch.setattr(finance_db, "finance_config_path", lambda: plugins_root / "finance" / "config.json")
+    monkeypatch.setattr("src.settings.FEATURES_FILE", str(tmp_path / "features.json"))
+    finance_db.reset_engine_cache()
+
+    _seed_v010_db(db_path)
+    write_installed_record("finance", "0.1.0")
+
+    first = run_install()
+    assert first["ok"] is True
+    assert first.get("already_installed") is True
+
+    finance_db.reset_engine_cache()
+    second = run_install()
+    assert second["ok"] is True
+    assert second.get("already_installed") is True
+
+    engine = finance_db.get_engine()
+    with engine.connect() as conn:
+        acct_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(finance_accounts)")).fetchall()}
+        tx_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(finance_transactions)")).fetchall()}
+    assert "purpose" in acct_cols
+    assert "posted_pin_cents" in acct_cols
+    assert "available_cents" in acct_cols
+    assert "movement_class" in tx_cols
+    assert "source" in tx_cols
+    finance_db.reset_engine_cache()
