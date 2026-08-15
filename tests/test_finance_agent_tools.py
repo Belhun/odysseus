@@ -650,13 +650,18 @@ FINANCE_READ_ACTIONS = {
 
 
 def _manage_finance_enum():
-    from src.tool_schemas import FUNCTION_TOOL_SCHEMAS
+    """Read the live schema enum without importing tool_schemas (circular with agent_tools)."""
+    import re
 
-    for spec in FUNCTION_TOOL_SCHEMAS:
-        fn = spec.get("function") or {}
-        if fn.get("name") == "manage_finance":
-            return set(fn["parameters"]["properties"]["action"]["enum"])
-    raise AssertionError("manage_finance schema not found")
+    text = (Path(__file__).resolve().parents[1] / "src" / "tool_schemas.py").read_text(encoding="utf-8")
+    block = re.search(
+        r'"name": "manage_finance".*?"enum": \[(.*?)\]',
+        text,
+        flags=re.S,
+    )
+    if not block:
+        raise AssertionError("manage_finance schema not found")
+    return set(re.findall(r'"([a-z_]+)"', block.group(1)))
 
 
 @pytest.mark.area_security

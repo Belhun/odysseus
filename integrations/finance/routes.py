@@ -44,6 +44,7 @@ from integrations.finance.services.import_service import (
 from integrations.finance.services.reports import validate_month
 from integrations.finance.services.recurring import list_recurring_series, patch_recurring_series
 from integrations.finance.services.movements import (
+    bulk_classify_transactions,
     classify_transaction,
     detect_movements,
     link_movements,
@@ -53,6 +54,7 @@ from integrations.finance.services.movements import (
 from integrations.finance.services.reports import (
     month_cashflow,
     month_key,
+    month_review,
     monthly_trends,
     net_worth,
     spend_by_account,
@@ -200,6 +202,13 @@ class RecurringPatch(BaseModel):
 
 class MovementClassifyBody(BaseModel):
     movement_class: str
+
+
+class BulkClassifyBody(BaseModel):
+    transaction_ids: list[str]
+    movement_class: Optional[str] = None
+    category_id: Optional[str] = None
+    apply_to_payee: bool = False
 
 
 class MovementLinkBody(BaseModel):
@@ -436,6 +445,7 @@ def setup_finance_routes() -> APIRouter:
                         "id": r.id,
                         "pattern": r.pattern,
                         "category_id": r.category_id,
+                        "movement_class": r.movement_class,
                         "priority": r.priority,
                     }
                     for r in rules
@@ -845,6 +855,7 @@ def setup_finance_routes() -> APIRouter:
                     "net_spend_cents",
                     "personal_spend_cents",
                     "unclassified_count",
+                    "unclassified_outflow_cents",
                     "incomplete",
                 )},
             }
@@ -892,6 +903,7 @@ def setup_finance_routes() -> APIRouter:
                     include_transfers=include_transfers,
                 ),
                 **cashflow,
+                **month_review(db, user, month, account_id=account_id),
             }
         finally:
             db.close()
@@ -1032,6 +1044,28 @@ def setup_finance_routes() -> APIRouter:
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
             return {"ok": True, "cleared": cleared}
+        finally:
+            db.close()
+
+    @router.post("/transactions/bulk")
+    def bulk_classify(request: Request, body: BulkClassifyBody):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            if body.category_id:
+                _require_owned_category(db, user, body.category_id)
+            try:
+                updated = bulk_classify_transactions(
+                    db,
+                    user,
+                    tx_ids=body.transaction_ids,
+                    movement_class=body.movement_class,
+                    category_id=body.category_id,
+                    apply_to_payee=body.apply_to_payee,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            return {"ok": True, "updated": updated}
         finally:
             db.close()
 

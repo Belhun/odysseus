@@ -11,6 +11,7 @@ from integrations.finance.services.categories import ensure_default_categories
 from integrations.finance.services.movements import link_movements
 from integrations.finance.services.reports import (
     month_cashflow,
+    month_review,
     monthly_trends,
     net_worth,
     spend_by_account,
@@ -346,3 +347,26 @@ def test_spend_by_account_includes_closed_and_sums(finance_db_env):
 def test_overlay_surplus_null_when_unclassified_outflows(finance_db_env):
     assert overlay_surplus_cents(50000, 0) == 50000
     assert overlay_surplus_cents(50000, 101) is None
+
+
+@pytest.mark.area_routes
+def test_reimbursement_list_and_unmatched_funding_on_month_review(finance_db_env):
+    owner = finance_db_env["owner"]
+    db = finance_db_env["session_factory"]()
+    try:
+        wells = _acct(db, owner, "Wells")
+        bill = _tx(db, owner, wells.id, -8000, "T-MOBILE", cls="reimbursement")
+        mom = _tx(db, owner, wells.id, 4000, "ZELLE FROM JANE", cls="reimbursement")
+        bill.movement_group_id = mom.movement_group_id = "g-tmobile"
+        _tx(db, owner, wells.id, -50000, "VENMO CASHOUT")
+        db.commit()
+        review = month_review(db, owner, "2026-06")
+        assert review["reimbursements"]
+        grouped = next(r for r in review["reimbursements"] if r["movement_group_id"] == "g-tmobile")
+        assert grouped["billed_cents"] == 8000
+        assert grouped["reimbursed_cents"] == 4000
+        assert grouped["you_bear_cents"] == 4000
+        assert review["unmatched_funding"]
+        assert review["unmatched_funding_cents"] == 50000
+    finally:
+        db.close()

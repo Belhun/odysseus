@@ -271,6 +271,10 @@ def patch_ledger_transaction(
         ledger_changed = True
     if movement_class is not None:
         tx.movement_class = validate_movement_class(movement_class)
+    if category_id is not None:
+        from integrations.finance.services.movements import maybe_class_from_transfers_category
+
+        maybe_class_from_transfers_category(db, owner, tx)
     if tx.source == "manual":
         tx.dedup_hash = _manual_dedup_hash(
             tx.account_id, tx.date, tx.amount_cents, tx.payee or "", tx.id
