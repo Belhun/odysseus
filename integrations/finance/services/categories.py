@@ -27,6 +27,7 @@ DEFAULT_CATEGORIES = [
     ("Shopping", False, "#9b59b6"),
     ("Subscriptions", False, "#3498db"),
     ("Travel", False, "#1abc9c"),
+    ("Support", False, "#16a085"),
     ("Insurance", False, "#34495e"),
     ("Utilities", False, "#7f8c8d"),
     ("Fees", False, "#c0392b"),

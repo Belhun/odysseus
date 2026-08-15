@@ -24,6 +24,7 @@ from integrations.finance.services.accounts import (
     delete_account_for_owner,
     list_accounts_for_owner,
     patch_account_for_owner,
+    pin_account_balances,
 )
 from integrations.finance.services.budgets import upsert_budget_for_owner
 from integrations.finance.services.categories import (
@@ -41,7 +42,16 @@ from integrations.finance.services.import_service import (
 )
 from integrations.finance.services.recurring import list_recurring_series, patch_recurring_series
 from integrations.finance.services.reports import month_key, monthly_trends, net_worth, spending_by_category
-from integrations.finance.services.transactions import apply_transaction_filters, set_transaction_splits
+from integrations.finance.services.transactions import (
+    ImportedTransactionError,
+    apply_transaction_filters,
+    create_manual_transaction,
+    delete_manual_transaction,
+    patch_ledger_transaction,
+    set_transaction_splits,
+    unvoid_transaction,
+    void_transaction,
+)
 from src.auth_helpers import require_user
 from src.plugins.registry import is_plugin_active
 from src.upload_limits import FINANCE_IMPORT_MAX_BYTES, read_upload_limited
@@ -56,23 +66,42 @@ class AccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     institution: str = ""
     account_type: str = "checking"
+    purpose: str = "operating"
+    rail: Optional[str] = None
     currency: str = "USD"
     mask_last4: Optional[str] = None
     opening_balance_cents: int = 0
     opening_balance_date: Optional[str] = None
     credit_limit_cents: Optional[int] = None
+    posted_pin_cents: Optional[int] = None
+    posted_pin_as_of: Optional[str] = None
+    available_cents: Optional[int] = None
+    available_as_of: Optional[str] = None
 
 
 class AccountPatch(BaseModel):
     name: Optional[str] = None
     institution: Optional[str] = None
     account_type: Optional[str] = None
+    purpose: Optional[str] = None
+    rail: Optional[str] = None
     mask_last4: Optional[str] = None
     opening_balance_cents: Optional[int] = None
     opening_balance_date: Optional[str] = None
     credit_limit_cents: Optional[int] = None
     is_closed: Optional[bool] = None
     display_order: Optional[int] = None
+    posted_pin_cents: Optional[int] = None
+    posted_pin_as_of: Optional[str] = None
+    available_cents: Optional[int] = None
+    available_as_of: Optional[str] = None
+
+
+class AccountPins(BaseModel):
+    posted_pin_cents: Optional[int] = None
+    posted_pin_as_of: Optional[str] = None
+    available_cents: Optional[int] = None
+    available_as_of: Optional[str] = None
 
 
 class CategoryCreate(BaseModel):
@@ -94,11 +123,26 @@ class BudgetSet(BaseModel):
     limit_cents: int = Field(ge=0)
 
 
+class TransactionCreate(BaseModel):
+    account_id: str
+    date: str
+    amount_cents: int
+    payee: str = ""
+    memo: str = ""
+    category_id: Optional[str] = None
+    status: str = "cleared"
+    movement_class: Optional[str] = None
+
+
 class TransactionPatch(BaseModel):
     category_id: Optional[str] = None
     payee: Optional[str] = None
     memo: Optional[str] = None
     status: Optional[str] = None
+    amount_cents: Optional[int] = None
+    date: Optional[str] = None
+    account_id: Optional[str] = None
+    movement_class: Optional[str] = None
 
 
 class ImportCommitBody(BaseModel):
@@ -143,8 +187,13 @@ def _transaction_dict(tx: FinanceTransaction, category_name: str | None = None) 
         "category_id": tx.category_id,
         "category_name": category_name,
         "status": tx.status,
+        "source": tx.source or "import",
+        "is_manual": (tx.source or "import") == "manual" and not tx.import_batch_id,
+        "is_linked": bool(tx.movement_group_id),
         "bank_category": tx.bank_category,
         "import_batch_id": tx.import_batch_id,
+        "movement_class": tx.movement_class,
+        "movement_group_id": tx.movement_group_id,
     }
 
 
@@ -182,11 +231,17 @@ def setup_finance_routes() -> APIRouter:
                     name=body.name,
                     institution=body.institution,
                     account_type=body.account_type,
+                    purpose=body.purpose,
+                    rail=body.rail,
                     currency=body.currency,
                     mask_last4=body.mask_last4,
                     opening_balance_cents=body.opening_balance_cents,
                     opening_balance_date=body.opening_balance_date,
                     credit_limit_cents=body.credit_limit_cents,
+                    posted_pin_cents=body.posted_pin_cents,
+                    posted_pin_as_of=body.posted_pin_as_of,
+                    available_cents=body.available_cents,
+                    available_as_of=body.available_as_of,
                 )
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
@@ -207,15 +262,23 @@ def setup_finance_routes() -> APIRouter:
                     name=body.name,
                     institution=body.institution,
                     account_type=body.account_type,
+                    purpose=body.purpose,
+                    rail=body.rail,
                     mask_last4=body.mask_last4,
                     opening_balance_cents=body.opening_balance_cents,
                     opening_balance_date=body.opening_balance_date,
                     credit_limit_cents=body.credit_limit_cents,
                     is_closed=body.is_closed,
                     display_order=body.display_order,
+                    posted_pin_cents=body.posted_pin_cents,
+                    posted_pin_as_of=body.posted_pin_as_of,
+                    available_cents=body.available_cents,
+                    available_as_of=body.available_as_of,
                 )
             except ValueError as exc:
-                raise HTTPException(404, str(exc)) from exc
+                message = str(exc)
+                code = 404 if "not found" in message.lower() else 400
+                raise HTTPException(code, message) from exc
             return account_dict(db, account)
         finally:
             db.close()
@@ -231,6 +294,29 @@ def setup_finance_routes() -> APIRouter:
                 code = 400 if "transactions" in str(exc) else 404
                 raise HTTPException(code, str(exc)) from exc
             return {"ok": True}
+        finally:
+            db.close()
+
+    @router.post("/accounts/{account_id}/pins")
+    def pin_account(request: Request, account_id: str, body: AccountPins):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                account = pin_account_balances(
+                    db,
+                    user,
+                    account_id,
+                    posted_pin_cents=body.posted_pin_cents,
+                    posted_pin_as_of=body.posted_pin_as_of,
+                    available_cents=body.available_cents,
+                    available_as_of=body.available_as_of,
+                )
+            except ValueError as exc:
+                message = str(exc)
+                code = 404 if "not found" in message.lower() else 400
+                raise HTTPException(code, message) from exc
+            return account_dict(db, account)
         finally:
             db.close()
 
@@ -344,6 +430,10 @@ def setup_finance_routes() -> APIRouter:
         min_amount_cents: Optional[int] = None,
         max_amount_cents: Optional[int] = None,
         uncategorized: bool = False,
+        movement_class: Optional[str] = None,
+        unclassified: bool = False,
+        include_void: bool = False,
+        status: Optional[str] = None,
         limit: int = Query(100, ge=1, le=500),
         offset: int = Query(0, ge=0),
     ):
@@ -362,6 +452,10 @@ def setup_finance_routes() -> APIRouter:
                 min_amount_cents=min_amount_cents,
                 max_amount_cents=max_amount_cents,
                 uncategorized=uncategorized,
+                movement_class=movement_class,
+                unclassified=unclassified,
+                include_void=include_void,
+                status=status,
             )
             total = q.count()
             txs = (
@@ -448,28 +542,98 @@ def setup_finance_routes() -> APIRouter:
         finally:
             db.close()
 
+    @router.post("/transactions")
+    def create_transaction(request: Request, body: TransactionCreate):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            _require_owned_category(db, user, body.category_id)
+            try:
+                tx = create_manual_transaction(
+                    db,
+                    user,
+                    account_id=body.account_id,
+                    date_raw=body.date,
+                    amount_cents=body.amount_cents,
+                    payee=body.payee,
+                    memo=body.memo,
+                    category_id=body.category_id,
+                    status=body.status,
+                    movement_class=body.movement_class,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            return _transaction_dict(tx)
+        finally:
+            db.close()
+
     @router.patch("/transactions/{tx_id}")
     def patch_transaction(request: Request, tx_id: str, body: TransactionPatch):
         user = require_user(request)
         db = get_session_factory()()
         try:
-            tx = db.query(FinanceTransaction).filter(
-                FinanceTransaction.id == tx_id, FinanceTransaction.owner == user
-            ).first()
-            if not tx:
-                raise HTTPException(404, "Transaction not found")
-            if body.category_id is not None:
-                if body.category_id:
-                    _require_owned_category(db, user, body.category_id)
-                tx.category_id = body.category_id or None
-            if body.payee is not None:
-                tx.payee = body.payee[:500]
-            if body.memo is not None:
-                tx.memo = body.memo[:1000]
-            if body.status is not None:
-                tx.status = body.status
-            db.commit()
+            if body.category_id:
+                _require_owned_category(db, user, body.category_id)
+            try:
+                tx = patch_ledger_transaction(
+                    db,
+                    user,
+                    tx_id,
+                    amount_cents=body.amount_cents,
+                    date_raw=body.date,
+                    account_id=body.account_id,
+                    payee=body.payee,
+                    memo=body.memo,
+                    category_id=body.category_id,
+                    status=body.status,
+                    movement_class=body.movement_class,
+                )
+            except ValueError as exc:
+                message = str(exc)
+                code = 404 if "not found" in message.lower() else 400
+                raise HTTPException(code, message) from exc
             return _transaction_dict(tx)
+        finally:
+            db.close()
+
+    @router.post("/transactions/{tx_id}/void")
+    def void_tx(request: Request, tx_id: str):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                tx = void_transaction(db, user, tx_id)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            return _transaction_dict(tx)
+        finally:
+            db.close()
+
+    @router.post("/transactions/{tx_id}/unvoid")
+    def unvoid_tx(request: Request, tx_id: str):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                tx = unvoid_transaction(db, user, tx_id)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            return _transaction_dict(tx)
+        finally:
+            db.close()
+
+    @router.delete("/transactions/{tx_id}")
+    def delete_transaction(request: Request, tx_id: str):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                delete_manual_transaction(db, user, tx_id)
+            except ImportedTransactionError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            return {"ok": True}
         finally:
             db.close()
 

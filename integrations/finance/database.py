@@ -105,11 +105,105 @@ def get_session_factory():
     return SessionLocal
 
 
+def _table_columns(conn, table: str) -> set[str]:
+    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+    return {str(r[1]) for r in rows}
+
+
+def _table_exists(conn, table: str) -> bool:
+    row = conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
+        {"name": table},
+    ).fetchone()
+    return bool(row)
+
+
+def _ensure_column(conn, table: str, column: str, ddl: str) -> None:
+    if not _table_exists(conn, table):
+        return
+    if column in _table_columns(conn, table):
+        return
+    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+
+def _ensure_index(conn, name: str, sql: str) -> None:
+    row = conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='index' AND name=:name"),
+        {"name": name},
+    ).fetchone()
+    if row:
+        return
+    conn.execute(text(sql))
+
+
+def _migrate_trustworthy_books_schema(engine) -> None:
+    """Add trustworthy-books columns/indexes to existing finance.db files."""
+    with engine.connect() as conn:
+        _ensure_column(conn, "finance_accounts", "purpose", "TEXT NOT NULL DEFAULT 'operating'")
+        _ensure_column(conn, "finance_accounts", "rail", "TEXT")
+        _ensure_column(conn, "finance_accounts", "posted_pin_cents", "INTEGER")
+        _ensure_column(conn, "finance_accounts", "posted_pin_as_of", "DATE")
+        _ensure_column(conn, "finance_accounts", "available_cents", "INTEGER")
+        _ensure_column(conn, "finance_accounts", "available_as_of", "DATE")
+
+        _ensure_column(conn, "finance_transactions", "source", "TEXT DEFAULT 'import'")
+        _ensure_column(conn, "finance_transactions", "movement_class", "TEXT")
+        _ensure_column(conn, "finance_transactions", "movement_group_id", "TEXT")
+
+        _ensure_column(conn, "finance_recurring_series", "category_id", "TEXT")
+        _ensure_column(conn, "finance_recurring_series", "movement_class", "TEXT")
+
+        if _table_exists(conn, "finance_transactions"):
+            conn.execute(
+                text(
+                    "UPDATE finance_transactions SET source = 'import' "
+                    "WHERE source IS NULL OR TRIM(source) = ''"
+                )
+            )
+            _ensure_index(
+                conn,
+                "ix_finance_tx_owner_class_date",
+                "CREATE INDEX ix_finance_tx_owner_class_date "
+                "ON finance_transactions (owner, movement_class, date)",
+            )
+            _ensure_index(
+                conn,
+                "ix_finance_tx_owner_group",
+                "CREATE INDEX ix_finance_tx_owner_group "
+                "ON finance_transactions (owner, movement_group_id)",
+            )
+
+        conn.commit()
+
+
+def _merge_default_config_keys() -> None:
+    path = finance_config_path()
+    if not path.is_file():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if not isinstance(data, dict):
+        return
+    changed = False
+    if "transfer_day_gap" not in data:
+        data["transfer_day_gap"] = 3
+        changed = True
+    if "mom_payee_tokens" not in data:
+        data["mom_payee_tokens"] = ["MOM", "MOTHER"]
+        changed = True
+    if changed:
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def init_finance_db() -> None:
     """Create plugin tables if missing."""
     engine = get_engine()
     FinanceBase.metadata.create_all(bind=engine)
     _migrate_unique_dedup_index(engine)
+    _migrate_trustworthy_books_schema(engine)
+    _merge_default_config_keys()
 
 
 def write_default_config() -> None:
@@ -118,7 +212,15 @@ def write_default_config() -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"currency": "USD", "default_import_preset": "auto"}, indent=2),
+        json.dumps(
+            {
+                "currency": "USD",
+                "default_import_preset": "auto",
+                "transfer_day_gap": 3,
+                "mom_payee_tokens": ["MOM", "MOTHER"],
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
