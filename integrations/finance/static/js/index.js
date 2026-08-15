@@ -1076,7 +1076,9 @@ async function _renderPlannedAndJob(panel, month) {
     <h3>Hypothetical job</h3>
     <p>${_escHtml(job.label || 'Hypothetical job scenario — not income on the books')}</p>
     ${job.rent_support_warning ? '<p>Warning: a rent line and another line mentioning rent or support are both included.</p>' : ''}
-    <p>Observed ${job.observed_month}. Survival need ${_fmtMoney(job.survival_need_cents)}. Surplus ${surplus}.</p>
+    <p>Observed ${job.observed_month}${(job.candidate_months || []).length ? ` (also ${(job.candidate_months || []).join(', ')})` : ''}. Survival need ${_fmtMoney(job.survival_need_cents)}. Surplus ${surplus}.</p>
+    <p>Largest spend rows:</p>
+    <ul>${(job.largest_rows || []).map((r) => `<li>${r.date || ''} ${_escHtml(r.payee || '')} ${_fmtMoney(r.amount_cents)}</li>`).join('') || '<li>None</li>'}</ul>
     <p>With savings target ${_fmtMoney(job.needed_cents)}; surplus ${job.surplus_with_savings_cents == null ? 'withheld' : _fmtMoney(job.surplus_with_savings_cents)}.</p>
     <p>Trip spend excluded ${_fmtMoney(job.trip_spend_excluded_cents)}. Navy Fed business ${_fmtMoney(job.business_spend_cents)}. ${_escHtml(job.business_income_note || '')}</p>
     <label><input type="checkbox" id="fin-job-business" ${_includeBusiness ? 'checked' : ''} /> Include Navy Fed business spend in the floor</label>
