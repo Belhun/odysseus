@@ -43,7 +43,7 @@ def test_ensure_default_categories_is_idempotent(finance_db_env):
         first_count = db.query(FinanceCategory).filter(FinanceCategory.owner == owner).count()
         ensure_default_categories(db, owner)
         second_count = db.query(FinanceCategory).filter(FinanceCategory.owner == owner).count()
-        assert first_count == second_count == 13
+        assert first_count == second_count == 14
     finally:
         db.close()
 

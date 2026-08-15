@@ -51,7 +51,7 @@ This file is the HOW for the whole trustworthy-books branch. Sibling slice plans
 | Conflict | Resolution |
 |---|---|
 | Null `movement_class` | **W4 fail-open (sign-based).** Null + amount &lt; 0 counts as spend. Null + amount &gt; 0 counts as income. Existing imports must not vanish. UI shows how many rows still need a class. Job overlay is labeled incomplete if any in-scope posted row is unclassified. Do **not** fail-closed omit unclassified from everyday reports. |
-| `reports.py` | W4 ships the movement-class filter and `net_spend`. W6 consumes/extends the same helper (copy-month, income target, planned, job, account filter). **One totals helper, not two engines.** |
+| `reports.py` | W4 ships the movement-class filter and `net_spend`. W6 consumes/extends the same helper (copy-month, income target, planned, job, account filter). **One totals helper, not two engines.** Category rows stay **GROSS** in the table; `spent_cents` may be signed-net when a reimbursement shares the category (H2). Presentation adds an explicit "less reimbursements" offset so the table reconciles to the headline. |
 | Processor CSV commit | W1 mapper ships. After W4 exists in this branch: **warn + allow** (unpaired class is valid). Do not hard-block. Ack is not required. |
 | W6 plan “unclassified skip true totals” | Overridden by fail-open above. Unclassified still count by sign. Surface `unclassified_count` / `unclassified_outflow_cents`. |
 | July 17 `transfer_pair_id` | Use `movement_class` + `movement_group_id`. Unpaired class is valid. |

@@ -26,7 +26,21 @@ from integrations.finance.services.accounts import (
     patch_account_for_owner,
     pin_account_balances,
 )
-from integrations.finance.services.budgets import upsert_budget_for_owner
+from integrations.finance.services.budgets import (
+    copy_budgets_for_owner,
+    get_income_target,
+    set_income_target,
+    upsert_budget_for_owner,
+)
+from integrations.finance.services.planned import (
+    create_planned_for_owner,
+    delete_planned_for_owner,
+    get_job_scenario,
+    job_overlay,
+    list_planned_for_owner,
+    planned_dict,
+    upsert_job_scenario,
+)
 from integrations.finance.services.categories import (
     create_category_for_owner,
     create_rule_for_owner,
@@ -211,6 +225,38 @@ class RecurringPatch(BaseModel):
     status: str
     category_id: Optional[str] = None
     movement_class: Optional[str] = None
+
+
+class BudgetCopyBody(BaseModel):
+    from_month: str
+    to_month: str
+
+    def model_post_init(self, __context) -> None:
+        object.__setattr__(self, "from_month", validate_month(self.from_month))
+        object.__setattr__(self, "to_month", validate_month(self.to_month))
+
+
+class IncomeTargetBody(BaseModel):
+    month: str
+    income_target_cents: int = Field(ge=0)
+
+    def model_post_init(self, __context) -> None:
+        object.__setattr__(self, "month", validate_month(self.month))
+
+
+class PlannedCreate(BaseModel):
+    name: str
+    kind: str
+    amount_cents: int
+    include_in_job_overlay: bool = True
+    is_funding: bool = False
+    notes: str = ""
+    starts_on: Optional[str] = None
+
+
+class JobScenarioBody(BaseModel):
+    take_home_cents: int = Field(ge=0)
+    label: str = "Hypothetical job"
 
 
 class MovementClassifyBody(BaseModel):
@@ -908,6 +954,7 @@ def setup_finance_routes() -> APIRouter:
                     "unclassified_outflow_cents",
                     "incomplete",
                 )},
+                "income_target_cents": get_income_target(db, user, month),
             }
         finally:
             db.close()
@@ -926,6 +973,101 @@ def setup_finance_routes() -> APIRouter:
                 limit_cents=body.limit_cents,
             )
             return {"ok": True}
+        finally:
+            db.close()
+
+    @router.post("/budgets/copy")
+    def copy_budgets(request: Request, body: BudgetCopyBody):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            return copy_budgets_for_owner(db, user, body.from_month, body.to_month)
+        finally:
+            db.close()
+
+    @router.put("/budgets/income-target")
+    def put_income_target(request: Request, body: IncomeTargetBody):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            row = set_income_target(db, user, body.month, body.income_target_cents)
+            return {"month": row.month, "income_target_cents": row.income_target_cents}
+        finally:
+            db.close()
+
+    @router.get("/planned")
+    def list_planned(request: Request):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            return {"planned": [planned_dict(p) for p in list_planned_for_owner(db, user)]}
+        finally:
+            db.close()
+
+    @router.post("/planned")
+    def create_planned(request: Request, body: PlannedCreate):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            row = create_planned_for_owner(
+                db,
+                user,
+                name=body.name,
+                kind=body.kind,
+                amount_cents=body.amount_cents,
+                include_in_job_overlay=body.include_in_job_overlay,
+                is_funding=body.is_funding,
+                notes=body.notes,
+                starts_on=body.starts_on,
+            )
+            return planned_dict(row)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        finally:
+            db.close()
+
+    @router.delete("/planned/{planned_id}")
+    def delete_planned(request: Request, planned_id: str):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                delete_planned_for_owner(db, user, planned_id)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            return {"ok": True}
+        finally:
+            db.close()
+
+    @router.get("/job-scenario")
+    def get_job(request: Request, include_business: bool = True, month: Optional[str] = None):
+        user = require_user(request)
+        month = _optional_month(month)
+        db = get_session_factory()()
+        try:
+            overlay = job_overlay(db, user, include_business=include_business, month=month)
+            scenario = get_job_scenario(db, user)
+            return {
+                "take_home_cents": scenario.take_home_cents if scenario else 0,
+                "label": scenario.label if scenario else overlay["label"],
+                **overlay,
+            }
+        finally:
+            db.close()
+
+    @router.put("/job-scenario")
+    def put_job(request: Request, body: JobScenarioBody):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            row = upsert_job_scenario(db, user, take_home_cents=body.take_home_cents, label=body.label)
+            overlay = job_overlay(db, user)
+            return {
+                "id": row.id,
+                "take_home_cents": row.take_home_cents,
+                "label": row.label,
+                **overlay,
+            }
         finally:
             db.close()
 
@@ -1027,7 +1169,14 @@ def setup_finance_routes() -> APIRouter:
         db = get_session_factory()()
         try:
             try:
-                row = patch_recurring_series(db, user, series_id, status=body.status)
+                row = patch_recurring_series(
+                    db,
+                    user,
+                    series_id,
+                    status=body.status,
+                    category_id=body.category_id,
+                    movement_class=body.movement_class,
+                )
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
             return {"id": row.id, "status": row.status}

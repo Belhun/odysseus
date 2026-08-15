@@ -131,3 +131,16 @@ def test_same_nfcu_file_into_two_accounts_does_not_mix(finance_client):
     txs_t = finance_client.get("/api/finance/transactions", params={"account_id": trip["id"]}).json()
     assert txs_b["total"] == 2
     assert txs_t["total"] == 2
+
+
+@pytest.mark.area_routes
+def test_csv_mapping_owner_isolation(finance_client, monkeypatch):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "PayPal", "purpose": "processor", "rail": "paypal"}).json()
+    finance_client.post("/api/finance/import/mappings", json={
+        "name": "Mine",
+        "fingerprint": "posted|amt",
+        "mapping": {"date": "Posted", "amount": "Amt"},
+    })
+    monkeypatch.setattr(finance_routes, "require_user", lambda request: "other-user")
+    listed = finance_client.get("/api/finance/import/mappings").json()["mappings"]
+    assert listed == []
