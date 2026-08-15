@@ -23,6 +23,7 @@ from integrations.finance.services.movements import (
     is_reimbursement_in,
     is_true_income,
     is_true_spend,
+    review_queues,
     unclassified_counts,
 )
 
@@ -190,9 +191,9 @@ def spending_by_category(
     parents = {tx.id: tx for tx in txs}
     totals: dict[str | None, list[int]] = {}
 
-    def _add(category_id: str | None, cents: int, count: int = 1) -> None:
-        prev = totals.get(category_id, [0, 0])
-        totals[category_id] = [prev[0] + cents, prev[1] + count]
+    def _add(category_id: str | None, cents: int, count: int = 1, *, gross: int = 0) -> None:
+        prev = totals.get(category_id, [0, 0, 0])
+        totals[category_id] = [prev[0] + cents, prev[1] + count, prev[2] + gross]
 
     split_rows = (
         db.query(FinanceTransactionSplit)
@@ -217,10 +218,10 @@ def spending_by_category(
             continue
         if include_transfers:
             if split.amount_cents < 0:
-                _add(split.category_id, abs(split.amount_cents))
+                _add(split.category_id, abs(split.amount_cents), gross=abs(split.amount_cents))
             continue
         if is_true_spend(parent) and split.amount_cents < 0:
-            _add(split.category_id, abs(split.amount_cents))
+            _add(split.category_id, abs(split.amount_cents), gross=abs(split.amount_cents))
 
     for tx in txs:
         if tx.id in split_parents:
@@ -229,10 +230,10 @@ def spending_by_category(
             continue
         if include_transfers:
             if tx.amount_cents < 0:
-                _add(tx.category_id, abs(tx.amount_cents))
+                _add(tx.category_id, abs(tx.amount_cents), gross=abs(tx.amount_cents))
             continue
         if is_true_spend(tx):
-            _add(tx.category_id, abs(tx.amount_cents))
+            _add(tx.category_id, abs(tx.amount_cents), gross=abs(tx.amount_cents))
         elif is_reimbursement_in(tx) and tx.category_id:
             _add(tx.category_id, -tx.amount_cents, count=0)
 
@@ -249,7 +250,7 @@ def spending_by_category(
     }
     out = []
     seen = set()
-    for category_id, (total, count) in totals.items():
+    for category_id, (total, count, gross) in totals.items():
         cat = cats.get(category_id) if category_id else None
         spent = int(total or 0)
         budget = budgets.get(category_id) if category_id else None
@@ -264,6 +265,7 @@ def spending_by_category(
             "parent_id": cat.parent_id if cat else None,
             "color": cat.color if cat else "#888",
             "spent_cents": spent,
+            "gross_spent_cents": int(gross or 0),
             "transaction_count": int(count or 0),
             "limit_cents": limit_cents,
             "remaining_cents": remaining,
@@ -282,12 +284,89 @@ def spending_by_category(
                 "parent_id": cat.parent_id,
                 "color": cat.color,
                 "spent_cents": 0,
+                "gross_spent_cents": 0,
                 "transaction_count": 0,
                 "limit_cents": limit_cents,
                 "remaining_cents": limit_cents,
             })
     out.sort(key=lambda r: r["spent_cents"], reverse=True)
     return out
+
+
+def reimbursements_for_month(
+    db: Session,
+    owner: str,
+    month: str,
+    account_id: Optional[str] = None,
+) -> list[dict]:
+    start, end = month_bounds(month)
+    txs = [tx for tx in _month_transactions(db, owner, start, end, account_id) if is_posted_row(tx)]
+    groups: dict[str, list] = {}
+    singles = []
+    for tx in txs:
+        if tx.movement_class != "reimbursement":
+            continue
+        if tx.movement_group_id:
+            groups.setdefault(tx.movement_group_id, []).append(tx)
+        else:
+            singles.append(tx)
+    out = []
+    for group_id, members in groups.items():
+        billed = sum(abs(tx.amount_cents) for tx in members if tx.amount_cents < 0)
+        reimbursed = sum(tx.amount_cents for tx in members if tx.amount_cents > 0)
+        bill = next((tx for tx in members if tx.amount_cents < 0), members[0])
+        out.append({
+            "movement_group_id": group_id,
+            "date": bill.date.isoformat() if bill.date else None,
+            "payee": bill.payee or "",
+            "memo": bill.memo or "",
+            "billed_cents": billed,
+            "reimbursed_cents": reimbursed,
+            "you_bear_cents": billed - reimbursed,
+            "amount_cents": reimbursed or -billed,
+            "rows": [
+                {
+                    "tx_id": tx.id,
+                    "date": tx.date.isoformat() if tx.date else None,
+                    "payee": tx.payee or "",
+                    "memo": tx.memo or "",
+                    "amount_cents": tx.amount_cents,
+                }
+                for tx in members
+            ],
+        })
+    for tx in singles:
+        billed = abs(tx.amount_cents) if tx.amount_cents < 0 else 0
+        reimbursed = tx.amount_cents if tx.amount_cents > 0 else 0
+        out.append({
+            "movement_group_id": None,
+            "date": tx.date.isoformat() if tx.date else None,
+            "payee": tx.payee or "",
+            "memo": tx.memo or "",
+            "billed_cents": billed,
+            "reimbursed_cents": reimbursed,
+            "you_bear_cents": billed - reimbursed,
+            "amount_cents": tx.amount_cents,
+            "rows": [{
+                "tx_id": tx.id,
+                "date": tx.date.isoformat() if tx.date else None,
+                "payee": tx.payee or "",
+                "memo": tx.memo or "",
+                "amount_cents": tx.amount_cents,
+            }],
+        })
+    out.sort(key=lambda r: r.get("date") or "", reverse=True)
+    return out
+
+
+def month_review(db: Session, owner: str, month: str, account_id: Optional[str] = None) -> dict:
+    start, end = month_bounds(month)
+    txs = _month_transactions(db, owner, start, end, account_id)
+    queues = review_queues(db, owner, txs)
+    return {
+        "reimbursements": reimbursements_for_month(db, owner, month, account_id),
+        **queues,
+    }
 
 
 def monthly_trends(

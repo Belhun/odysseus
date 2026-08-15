@@ -20,7 +20,7 @@ from integrations.finance.services.parsers import _normalize_payee
 
 DEFAULT_CATEGORIES = [
     ("Income", True, "#2ecc71"),
-    ("Transfers", False, "#95a5a6"),
+    ("Transfers (label only)", False, "#95a5a6"),
     ("Groceries", False, "#27ae60"),
     ("Dining", False, "#e67e22"),
     ("Gas & Fuel", False, "#f39c12"),
@@ -119,7 +119,27 @@ def deduplicate_categories(db: Session, owner: str) -> int:
     return removed
 
 
+def is_transfers_label_category(cat: FinanceCategory | None) -> bool:
+    if not cat:
+        return False
+    return (cat.name or "").strip().lower().startswith("transfers")
+
+
 def ensure_default_categories(db: Session, owner: str) -> None:
+    renamed = False
+    for cat in (
+        db.query(FinanceCategory)
+        .filter(
+            FinanceCategory.owner == owner,
+            FinanceCategory.parent_id.is_(None),
+            FinanceCategory.name == "Transfers",
+        )
+        .all()
+    ):
+        cat.name = "Transfers (label only)"
+        renamed = True
+    if renamed:
+        db.commit()
     existing_names = {
         c.name.strip().lower()
         for c in db.query(FinanceCategory).filter(

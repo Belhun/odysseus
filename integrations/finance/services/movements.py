@@ -185,6 +185,26 @@ def _accounts_by_id(db: Session, owner: str) -> dict[str, FinanceAccount]:
     return {a.id: a for a in rows}
 
 
+def resolve_stored_class(
+    db: Session,
+    owner: str,
+    tx: FinanceTransaction,
+    movement_class: str,
+) -> str:
+    """UI sends Transfer; processor accounts store pass_through."""
+    cls = validate_movement_class(movement_class, allow_null=False)
+    if cls != "transfer":
+        return cls
+    acct = (
+        db.query(FinanceAccount)
+        .filter(FinanceAccount.id == tx.account_id, FinanceAccount.owner == owner)
+        .first()
+    )
+    if acct and (acct.purpose or "") == "processor":
+        return "pass_through"
+    return "transfer"
+
+
 def classify_transaction(
     db: Session,
     owner: str,
@@ -198,9 +218,71 @@ def classify_transaction(
     )
     if not tx:
         raise ValueError("Transaction not found")
-    tx.movement_class = validate_movement_class(movement_class, allow_null=False)
+    tx.movement_class = resolve_stored_class(db, owner, tx, movement_class)
     db.commit()
     return tx
+
+
+def bulk_classify_transactions(
+    db: Session,
+    owner: str,
+    *,
+    tx_ids: list[str],
+    movement_class: Optional[str] = None,
+    category_id: Optional[str] = None,
+    apply_to_payee: bool = False,
+) -> int:
+    ids = [str(i) for i in tx_ids if i]
+    if not ids:
+        raise ValueError("transaction_ids are required")
+    if movement_class is None and not category_id:
+        raise ValueError("movement_class or category_id is required")
+    txs = (
+        db.query(FinanceTransaction)
+        .filter(FinanceTransaction.owner == owner, FinanceTransaction.id.in_(ids))
+        .all()
+    )
+    if apply_to_payee:
+        payees = {(tx.payee or "").strip().upper() for tx in txs if (tx.payee or "").strip()}
+        if payees:
+            extra = (
+                db.query(FinanceTransaction)
+                .filter(FinanceTransaction.owner == owner)
+                .all()
+            )
+            seen = {tx.id for tx in txs}
+            for tx in extra:
+                if tx.id not in seen and (tx.payee or "").strip().upper() in payees:
+                    txs.append(tx)
+                    seen.add(tx.id)
+    cls = None
+    if movement_class is not None:
+        cls = validate_movement_class(movement_class, allow_null=False)
+    for tx in txs:
+        if cls is not None:
+            tx.movement_class = resolve_stored_class(db, owner, tx, cls)
+        if category_id is not None:
+            tx.category_id = category_id or None
+        maybe_class_from_transfers_category(db, owner, tx)
+    db.commit()
+    return len(txs)
+
+
+def maybe_class_from_transfers_category(db: Session, owner: str, tx: FinanceTransaction) -> None:
+    if not tx.category_id:
+        return
+    if tx.movement_class not in (None, "spend"):
+        return
+    from integrations.finance.models import FinanceCategory
+    from integrations.finance.services.categories import is_transfers_label_category
+
+    cat = (
+        db.query(FinanceCategory)
+        .filter(FinanceCategory.id == tx.category_id, FinanceCategory.owner == owner)
+        .first()
+    )
+    if is_transfers_label_category(cat):
+        tx.movement_class = resolve_stored_class(db, owner, tx, "transfer")
 
 
 def _infer_class_for_link(

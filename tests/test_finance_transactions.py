@@ -229,3 +229,78 @@ def test_manual_row_then_matching_import_is_flagged_not_skipped(finance_client):
 def test_invalid_month_returns_400(finance_client):
     res = finance_client.get("/api/finance/reports/cashflow", params={"month": "2026-13"})
     assert res.status_code == 400
+
+
+@pytest.mark.area_routes
+def test_account_fields_are_editable_and_pin_delta_renders(finance_client):
+    created = finance_client.post("/api/finance/accounts", json={
+        "name": "Navy Fed #2",
+        "account_type": "checking",
+        "opening_balance_cents": 10000,
+    }).json()
+    assert created["purpose"] == "operating"
+    patched = finance_client.patch(f"/api/finance/accounts/{created['id']}", json={
+        "purpose": "trip",
+        "opening_balance_cents": 20000,
+        "opening_balance_date": "2026-07-01",
+        "posted_pin_cents": 23742,
+        "posted_pin_as_of": "2026-08-12",
+        "available_cents": 18000,
+        "available_as_of": "2026-08-01",
+    })
+    assert patched.status_code == 200
+    body = patched.json()
+    assert body["purpose"] == "trip"
+    assert body["opening_balance_cents"] == 20000
+    assert body["posted_pin_cents"] == 23742
+    assert body["posted_pin_delta_cents"] == 20000 - 23742
+    assert body["available_cents"] == 18000
+    listed = finance_client.get("/api/finance/accounts").json()["accounts"]
+    row = next(a for a in listed if a["id"] == created["id"])
+    assert row["posted_pin_delta_cents"] == -3742
+
+
+@pytest.mark.area_routes
+def test_bulk_classify_and_apply_to_payee(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "Wells"}).json()
+    a = finance_client.post("/api/finance/transactions", json={
+        "account_id": acct["id"], "date": "2026-06-01", "amount_cents": -1500, "payee": "STARBUCKS",
+    }).json()
+    b = finance_client.post("/api/finance/transactions", json={
+        "account_id": acct["id"], "date": "2026-06-02", "amount_cents": -2200, "payee": "STARBUCKS",
+    }).json()
+    c = finance_client.post("/api/finance/transactions", json={
+        "account_id": acct["id"], "date": "2026-06-03", "amount_cents": -900, "payee": "COSTCO",
+    }).json()
+    res = finance_client.post("/api/finance/transactions/bulk", json={
+        "transaction_ids": [a["id"]],
+        "movement_class": "spend",
+        "apply_to_payee": True,
+    })
+    assert res.status_code == 200
+    assert res.json()["updated"] == 2
+    txs = finance_client.get("/api/finance/transactions", params={"account_id": acct["id"]}).json()["transactions"]
+    by_id = {tx["id"]: tx for tx in txs}
+    assert by_id[a["id"]]["movement_class"] == "spend"
+    assert by_id[b["id"]]["movement_class"] == "spend"
+    assert by_id[c["id"]]["movement_class"] is None
+    filtered = finance_client.get(
+        "/api/finance/transactions",
+        params={"account_id": acct["id"], "unclassified": True},
+    ).json()["transactions"]
+    assert {tx["id"] for tx in filtered} == {c["id"]}
+
+
+@pytest.mark.area_routes
+def test_transfers_category_sets_transfer_class(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "Wells"}).json()
+    cats = finance_client.get("/api/finance/categories").json()["categories"]
+    transfers = next(c for c in cats if c["name"].lower().startswith("transfers"))
+    tx = finance_client.post("/api/finance/transactions", json={
+        "account_id": acct["id"], "date": "2026-06-01", "amount_cents": -50000, "payee": "NAVY FEDERAL",
+    }).json()
+    patched = finance_client.patch(f"/api/finance/transactions/{tx['id']}", json={
+        "category_id": transfers["id"],
+    })
+    assert patched.status_code == 200
+    assert patched.json()["movement_class"] == "transfer"

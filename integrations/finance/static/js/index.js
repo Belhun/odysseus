@@ -28,7 +28,19 @@ let _txPage = 0;
 let _txListAccountId = null;
 let _txSearchTimer = null;
 let _txShellBuiltForForm = null;
+let _txUnclassified = false;
+let _txUncategorized = false;
+let _selectedTxIds = new Set();
+let _showAccountForm = false;
+let _editingAccountId = null;
 const TX_PAGE_SIZE = 50;
+const CLASS_OPTIONS = [
+  { value: '', label: '—' },
+  { value: 'spend', label: 'Spend' },
+  { value: 'income', label: 'Income' },
+  { value: 'transfer', label: 'Transfer' },
+  { value: 'reimbursement', label: 'Reimbursement' },
+];
 
 const PANEL_FADE_MS = 150;
 
@@ -87,8 +99,9 @@ function _getModal() {
         <button type="button" class="modal-close" id="finance-close-btn" aria-label="Close">&times;</button>
       </div>
       <div class="finance-toolbar" style="display:flex;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-color,#333);flex-wrap:wrap;align-items:center;">
-        <select id="finance-account-select" style="min-width:180px;"></select>
+        <select id="finance-account-select" style="min-width:220px;"></select>
         <button type="button" id="finance-add-account-btn" class="btn-secondary">+ Account</button>
+        <button type="button" id="finance-edit-account-btn" class="btn-secondary">Edit account</button>
         <div style="flex:1"></div>
         <button type="button" class="finance-tab-btn" data-tab="transactions">Transactions</button>
         <button type="button" class="finance-tab-btn" data-tab="import">Import</button>
@@ -109,7 +122,10 @@ function _getModal() {
   }
   _el('finance-close-btn')?.addEventListener('click', closeFinance);
   _modal.addEventListener('click', (e) => { if (e.target === _modal) closeFinance(); });
-  _el('finance-add-account-btn')?.addEventListener('click', _promptNewAccount);
+  _el('finance-add-account-btn')?.addEventListener('click', () => _openAccountForm(null));
+  _el('finance-edit-account-btn')?.addEventListener('click', () => {
+    if (_activeAccountId) _openAccountForm(_activeAccountId);
+  });
   _el('finance-account-select')?.addEventListener('change', (e) => {
     _activeAccountId = e.target.value || null;
     _renderPanel();
@@ -130,8 +146,61 @@ async function _loadAccounts() {
   const sel = _el('finance-account-select');
   if (!sel) return;
   sel.innerHTML = _accounts.map((a) =>
-    `<option value="${a.id}" ${a.id === _activeAccountId ? 'selected' : ''}>${a.name} (${_fmtMoney(a.balance_cents)})</option>`
+    `<option value="${a.id}" ${a.id === _activeAccountId ? 'selected' : ''}>${_escHtml(a.name)} (${_fmtMoney(a.posted_cents ?? a.balance_cents)})</option>`
   ).join('') || '<option value="">No accounts</option>';
+  _renderAccountMeta();
+}
+
+function _fmtShortDate(iso) {
+  if (!iso) return '';
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function _ageLabel(days) {
+  if (days == null) return '';
+  if (days <= 0) return 'as of today';
+  if (days === 1) return 'as of 1 day ago';
+  return `as of ${days} days ago`;
+}
+
+function _pinDeltaText(a) {
+  if (a.posted_pin_cents == null) return '';
+  const asOf = a.posted_pin_as_of ? ` as of ${_fmtShortDate(a.posted_pin_as_of)}` : '';
+  if (!a.posted_pin_delta_cents) return `Books match your pin${asOf}.`;
+  const amt = _fmtMoney(Math.abs(a.posted_pin_delta_cents));
+  if (a.posted_pin_delta_cents < 0) return `Books are ${amt} below your pin${asOf}.`;
+  return `Books are ${amt} above your pin${asOf}.`;
+}
+
+function _renderAccountMeta() {
+  let meta = _el('finance-account-meta');
+  const toolbar = _modal?.querySelector('.finance-toolbar');
+  if (!toolbar) return;
+  if (!meta) {
+    meta = document.createElement('div');
+    meta.id = 'finance-account-meta';
+    meta.style.cssText = 'width:100%;font-size:0.8rem;opacity:0.9;padding:0 0 4px;';
+    toolbar.appendChild(meta);
+  }
+  const a = _accounts.find((x) => x.id === _activeAccountId);
+  if (!a) {
+    meta.textContent = '';
+    return;
+  }
+  const availAge = _ageLabel(a.available_age_days);
+  const stale = (a.available_age_days ?? 0) > 3;
+  const avail = a.available_cents == null
+    ? 'Available not pinned'
+    : `Available ${_fmtMoney(a.available_cents)}${availAge ? ` (${availAge})` : ''}`;
+  meta.innerHTML = `
+    <span>Posted ${_fmtMoney(a.posted_cents ?? a.balance_cents)}</span>
+    <span style="margin-left:10px;${stale ? 'opacity:0.55;' : ''}">${_escHtml(avail)}</span>
+    ${a.posted_pin_cents != null ? `<span style="margin-left:10px;">${_escHtml(_pinDeltaText(a))}</span>` : ''}
+    ${stale && a.available_cents != null ? '<button type="button" id="finance-repin-btn" class="btn-secondary" style="margin-left:8px;font-size:0.75rem;">Re-pin available</button>' : ''}
+  `;
+  _el('finance-repin-btn')?.addEventListener('click', () => _openAccountForm(a.id));
 }
 
 async function _loadCategories() {
@@ -235,32 +304,173 @@ function _bindCategoryForm() {
   });
 }
 
-async function _promptNewAccount() {
-  const name = prompt('Account name (e.g. Wells Fargo Checking):');
-  if (!name?.trim()) return;
-  const institution = prompt('Institution (optional):') || '';
-  const type = prompt('Type: checking, savings, credit_card, loan, cash, other', 'checking') || 'checking';
-  await _api('/accounts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: name.trim(), institution, account_type: type }),
-  });
-  await _loadAccounts();
-  _renderPanel();
+function _dollarsToCents(raw) {
+  if (raw === '' || raw == null) return null;
+  const n = Number(raw);
+  if (Number.isNaN(n)) return null;
+  return Math.round(n * 100);
+}
+
+function _centsToDollars(cents) {
+  if (cents == null) return '';
+  return (Number(cents) / 100).toFixed(2);
+}
+
+function _openAccountForm(accountId) {
+  _editingAccountId = accountId;
+  _showAccountForm = true;
+  _renderAccountForm();
+}
+
+function _closeAccountForm() {
+  _showAccountForm = false;
+  _editingAccountId = null;
+  _el('finance-account-form')?.remove();
+}
+
+function _renderAccountForm() {
+  if (!_showAccountForm || !_modal) return;
+  _el('finance-account-form')?.remove();
+  const existing = _accounts.find((a) => a.id === _editingAccountId) || {};
+  const wrap = document.createElement('div');
+  wrap.id = 'finance-account-form';
+  wrap.style.cssText = 'padding:12px;border-bottom:1px solid var(--border-color,#333);background:var(--surface,#1c1c1c);';
+  wrap.innerHTML = `
+    <div style="font-weight:600;margin-bottom:8px;">${_editingAccountId ? 'Edit account' : 'New account'}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;">
+      <label>Name<input id="fin-acct-name" type="text" value="${_escHtml(existing.name || '')}" /></label>
+      <label>Institution<input id="fin-acct-inst" type="text" value="${_escHtml(existing.institution || '')}" /></label>
+      <label>Type
+        <select id="fin-acct-type">
+          ${['checking','savings','credit_card','loan','cash','other'].map((t) =>
+            `<option value="${t}" ${existing.account_type === t ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </label>
+      <label>Purpose
+        <select id="fin-acct-purpose">
+          ${['operating','trip','processor'].map((t) =>
+            `<option value="${t}" ${(existing.purpose || 'operating') === t ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </label>
+      <label id="fin-acct-rail-wrap">Rail
+        <select id="fin-acct-rail">
+          <option value="">—</option>
+          ${['paypal','venmo','google'].map((t) =>
+            `<option value="${t}" ${existing.rail === t ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </label>
+      <label>Opening posted ($)
+        <input id="fin-acct-opening" type="number" step="0.01" value="${_centsToDollars(existing.opening_balance_cents || 0)}" />
+      </label>
+      <label>Balance as of
+        <input id="fin-acct-opening-date" type="date" value="${existing.opening_balance_date || ''}" />
+      </label>
+      <label>Available ($)
+        <input id="fin-acct-avail" type="number" step="0.01" value="${_centsToDollars(existing.available_cents)}" />
+      </label>
+      <label>Available as of
+        <input id="fin-acct-avail-date" type="date" value="${existing.available_as_of || ''}" />
+      </label>
+      <label>Posted pin ($)
+        <input id="fin-acct-pin" type="number" step="0.01" value="${_centsToDollars(existing.posted_pin_cents)}" />
+      </label>
+      <label>Pin as of
+        <input id="fin-acct-pin-date" type="date" value="${existing.posted_pin_as_of || ''}" />
+      </label>
+    </div>
+    <p style="font-size:0.8rem;opacity:0.8;margin:8px 0;">
+      Opening posted is the balance shown the morning before your first imported row; use 0 if you imported from account opening.
+    </p>
+    <p id="fin-acct-error" style="color:var(--danger,#e74c3c);font-size:0.85rem;"></p>
+    <div style="display:flex;gap:8px;">
+      <button type="button" id="fin-acct-save" class="btn-primary">Save account</button>
+      <button type="button" id="fin-acct-cancel" class="btn-secondary">Cancel</button>
+    </div>`;
+  const header = _modal.querySelector('.finance-toolbar');
+  header?.after(wrap);
+  const syncRail = () => {
+    const proc = _el('fin-acct-purpose')?.value === 'processor';
+    const railWrap = _el('fin-acct-rail-wrap');
+    if (railWrap) railWrap.style.display = proc ? '' : 'none';
+  };
+  _el('fin-acct-purpose')?.addEventListener('change', syncRail);
+  syncRail();
+  _el('fin-acct-cancel')?.addEventListener('click', _closeAccountForm);
+  _el('fin-acct-save')?.addEventListener('click', _saveAccountForm);
+}
+
+async function _saveAccountForm() {
+  const err = _el('fin-acct-error');
+  const name = _el('fin-acct-name')?.value?.trim();
+  if (!name) {
+    if (err) err.textContent = 'Name is required.';
+    return;
+  }
+  const purpose = _el('fin-acct-purpose')?.value || 'operating';
+  const body = {
+    name,
+    institution: _el('fin-acct-inst')?.value || '',
+    account_type: _el('fin-acct-type')?.value || 'checking',
+    purpose,
+    rail: purpose === 'processor' ? (_el('fin-acct-rail')?.value || null) : null,
+    opening_balance_cents: _dollarsToCents(_el('fin-acct-opening')?.value) || 0,
+    opening_balance_date: _el('fin-acct-opening-date')?.value || null,
+    available_cents: _dollarsToCents(_el('fin-acct-avail')?.value),
+    available_as_of: _el('fin-acct-avail-date')?.value || null,
+    posted_pin_cents: _dollarsToCents(_el('fin-acct-pin')?.value),
+    posted_pin_as_of: _el('fin-acct-pin-date')?.value || null,
+  };
+  try {
+    if (_editingAccountId) {
+      await _api(`/accounts/${_editingAccountId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } else {
+      const created = await _api('/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      _activeAccountId = created.id;
+    }
+    _closeAccountForm();
+    await _loadAccounts();
+    _renderPanel();
+  } catch (e) {
+    if (err) err.textContent = e.message || String(e);
+  }
 }
 
 function _tabStyle(tab) {
   return _activeTab === tab ? 'font-weight:600;text-decoration:underline;' : '';
 }
 
+function _uiClassValue(cls) {
+  return cls === 'pass_through' ? 'transfer' : (cls || '');
+}
+
+function _classOptionsHtml(selected) {
+  const value = _uiClassValue(selected);
+  return CLASS_OPTIONS.map((o) =>
+    `<option value="${o.value}" ${value === o.value ? 'selected' : ''}>${o.label}</option>`
+  ).join('');
+}
+
 function _txRowHtml(tx) {
   const amtClass = tx.amount_cents < 0 ? 'color:var(--danger,#e74c3c)' : 'color:var(--success,#2ecc71)';
   const catOpts = _categoryOptionsHtml(tx.category_id);
+  const checked = _selectedTxIds.has(tx.id) ? 'checked' : '';
+  const linked = tx.is_linked ? ' <span title="Linked movement" style="opacity:0.7;">↔</span>' : '';
   return `<tr>
+    <td><input type="checkbox" class="finance-tx-check" data-tx-id="${tx.id}" ${checked} /></td>
     <td>${tx.date || ''}</td>
-    <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(tx.payee)}">${_escHtml(tx.payee)}</td>
+    <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(tx.payee)}">${_escHtml(tx.payee)}${linked}</td>
     <td style="${amtClass};text-align:right;">${_fmtMoney(tx.amount_cents)}</td>
     <td><select data-tx-cat="${tx.id}" class="finance-cat-select"><option value="">—</option>${catOpts}</select></td>
+    <td><select data-tx-class="${tx.id}" class="finance-class-select">${_classOptionsHtml(tx.movement_class)}</select></td>
+    <td><button type="button" class="btn-secondary finance-apply-payee" data-tx-id="${tx.id}" data-payee="${_escHtml(tx.payee)}" style="font-size:0.75rem;">Apply to payee</button></td>
   </tr>`;
 }
 
@@ -274,6 +484,67 @@ function _wireCategorySelects(root) {
       });
     });
   });
+  root?.querySelectorAll('.finance-class-select').forEach((sel) => {
+    sel.addEventListener('change', async () => {
+      if (!sel.value) return;
+      await _api(`/transactions/${sel.dataset.txClass}/classify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ movement_class: sel.value }),
+      });
+    });
+  });
+  root?.querySelectorAll('.finance-tx-check').forEach((box) => {
+    box.addEventListener('change', () => {
+      if (box.checked) _selectedTxIds.add(box.dataset.txId);
+      else _selectedTxIds.delete(box.dataset.txId);
+      _updateBulkCount();
+    });
+  });
+  root?.querySelectorAll('.finance-apply-payee').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const row = btn.closest('tr');
+      const cls = row?.querySelector('.finance-class-select')?.value;
+      const cat = row?.querySelector('.finance-cat-select')?.value;
+      if (!cls && !cat) return;
+      await _api('/transactions/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transaction_ids: [btn.dataset.txId],
+          movement_class: cls || null,
+          category_id: cat || null,
+          apply_to_payee: true,
+        }),
+      });
+      _fetchTransactionPage();
+    });
+  });
+}
+
+function _updateBulkCount() {
+  const el = _el('finance-bulk-count');
+  if (el) el.textContent = `${_selectedTxIds.size} selected`;
+}
+
+async function _applyBulk() {
+  const ids = [..._selectedTxIds];
+  if (!ids.length) return;
+  const cls = _el('finance-bulk-class')?.value || null;
+  const cat = _el('finance-bulk-cat')?.value || null;
+  if (!cls && !cat) return;
+  await _api('/transactions/bulk', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      transaction_ids: ids,
+      movement_class: cls,
+      category_id: cat,
+      apply_to_payee: !!_el('finance-bulk-payee')?.checked,
+    }),
+  });
+  _selectedTxIds.clear();
+  _fetchTransactionPage();
 }
 
 function _txPagerHtml(total, { border = 'top' } = {}) {
@@ -338,15 +609,17 @@ async function _fetchTransactionPage() {
   const selEnd = searchInput?.selectionEnd ?? null;
 
   if (status) status.textContent = 'Loading…';
-  if (tbody) {
-    tbody.innerHTML = '<tr><td colspan="4" style="opacity:0.7;">Loading transactions…</td></tr>';
+    if (tbody) {
+    tbody.innerHTML = '<tr><td colspan="7" style="opacity:0.7;">Loading transactions…</td></tr>';
   }
 
   try {
     const offset = _txPage * TX_PAGE_SIZE;
     const data = await _api(
       `/transactions?account_id=${encodeURIComponent(_activeAccountId)}`
-      + `&limit=${TX_PAGE_SIZE}&offset=${offset}&search=${encodeURIComponent(_txSearch)}`,
+      + `&limit=${TX_PAGE_SIZE}&offset=${offset}&search=${encodeURIComponent(_txSearch)}`
+      + `${_txUnclassified ? '&unclassified=true' : ''}`
+      + `${_txUncategorized ? '&uncategorized=true' : ''}`,
     );
     const txs = data.transactions || [];
     const total = Number(data.total) || 0;
@@ -354,14 +627,14 @@ async function _fetchTransactionPage() {
     if (tbody) {
       tbody.innerHTML = txs.length
         ? txs.map(_txRowHtml).join('')
-        : '<tr><td colspan="4">No matching transactions.</td></tr>';
+        : '<tr><td colspan="7">No matching transactions.</td></tr>';
       _wireCategorySelects(tbody);
     }
     _renderTxPager(total);
   } catch (err) {
     if (status) status.textContent = '';
     if (tbody) {
-      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger,#e74c3c);">${_escHtml(err.message || String(err))}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" style="color:var(--danger,#e74c3c);">${_escHtml(err.message || String(err))}</td></tr>`;
     }
     _renderTxPager(0);
   }
@@ -386,13 +659,22 @@ function _ensureTransactionsShell() {
     <div id="finance-tx-root">
       <div style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         <input id="finance-tx-search" type="search" placeholder="Search payee…" autocomplete="off" style="flex:1;min-width:160px;" />
+        <label style="font-size:0.85rem;"><input type="checkbox" id="finance-filter-unclassified" ${_txUnclassified ? 'checked' : ''} /> Unclassified</label>
+        <label style="font-size:0.85rem;"><input type="checkbox" id="finance-filter-uncategorized" ${_txUncategorized ? 'checked' : ''} /> Uncategorized</label>
         <button type="button" id="finance-add-category-btn" class="btn-secondary">+ Category</button>
+      </div>
+      <div id="finance-bulk-bar" style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:0.85rem;">
+        <span id="finance-bulk-count">0 selected</span>
+        <select id="finance-bulk-class">${_classOptionsHtml('')}</select>
+        <select id="finance-bulk-cat"><option value="">Set category</option>${_categoryOptionsHtml('')}</select>
+        <label><input type="checkbox" id="finance-bulk-payee" /> Apply to this payee</label>
+        <button type="button" id="finance-bulk-apply" class="btn-primary">Apply to selection</button>
       </div>
       ${_showCategoryForm ? _categoryFormHtml() : ''}
       <div id="finance-tx-pager-top"></div>
       <div id="finance-tx-status" style="font-size:0.85rem;opacity:0.8;min-height:1.2em;margin-bottom:4px;"></div>
       <table class="finance-table" style="width:100%;border-collapse:collapse;font-size:0.9rem;">
-        <thead><tr><th>Date</th><th>Payee</th><th style="text-align:right;">Amount</th><th>Category</th></tr></thead>
+        <thead><tr><th></th><th>Date</th><th>Payee</th><th style="text-align:right;">Amount</th><th>Category</th><th>Class</th><th></th></tr></thead>
         <tbody id="finance-tx-tbody"></tbody>
       </table>
       <div id="finance-tx-pager"></div>
@@ -412,6 +694,17 @@ function _ensureTransactionsShell() {
     _showCategoryForm = true;
     _renderTransactions();
   });
+  _el('finance-filter-unclassified')?.addEventListener('change', (e) => {
+    _txUnclassified = !!e.target.checked;
+    _txPage = 0;
+    _fetchTransactionPage();
+  });
+  _el('finance-filter-uncategorized')?.addEventListener('change', (e) => {
+    _txUncategorized = !!e.target.checked;
+    _txPage = 0;
+    _fetchTransactionPage();
+  });
+  _el('finance-bulk-apply')?.addEventListener('click', _applyBulk);
   if (_showCategoryForm) _bindCategoryForm();
 }
 
@@ -427,6 +720,7 @@ async function _renderTransactions() {
     _txListAccountId = _activeAccountId;
     _txPage = 0;
     _txSearch = '';
+    _selectedTxIds.clear();
     _txShellBuiltForForm = null;
   }
   _ensureTransactionsShell();
@@ -540,7 +834,7 @@ async function _renderBudget() {
     </tr>`).join('');
   _panelSwap(panel, `
     <h3 style="margin-top:0;">Budget — ${data.month}</h3>
-    <p style="opacity:0.8;font-size:0.85rem;">Set monthly limits (whole dollars). Spending is based on categorized outflows.</p>
+    <p style="opacity:0.8;font-size:0.85rem;">${_escHtml(_classifiedStat(data))} Set monthly limits (whole dollars). Category rows are gross; reimbursements offset below the table.</p>
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr><th>Category</th><th style="text-align:right;">Spent</th><th style="text-align:right;">Limit</th><th style="text-align:right;">Remaining</th><th>Set limit</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="5">No spending this month yet.</td></tr>'}</tbody>
@@ -565,28 +859,67 @@ async function _renderBudget() {
   });
 }
 
+function _spendTitle(cf) {
+  const n = Number(cf.unclassified_count || 0);
+  if (n > 0) return `Spend (${n} rows counted by sign)`;
+  return 'True spend';
+}
+
+function _classifiedStat(cf) {
+  const unclassified = Number(cf.unclassified_count || 0);
+  const outflow = Number(cf.unclassified_outflow_cents || 0);
+  const gross = Number(cf.gross_spend_cents || cf.spending_cents || 0);
+  if (!unclassified) return '100% of this month classified.';
+  const classifiedPct = gross > 0 ? Math.max(0, Math.round(100 * (gross - outflow) / gross)) : 0;
+  return `${classifiedPct}% of ${cf.month || 'this month'} spend classified; ${unclassified} rows worth ${_fmtMoney(outflow)} are not.`;
+}
+
 async function _renderReports() {
   const panel = _el('finance-panel');
   if (!panel) return;
   const seq = _panelLoading(panel);
   const month = new Date().toISOString().slice(0, 7);
-  const [spending, trends] = await Promise.all([
+  const [spending, trends, worth] = await Promise.all([
     _api(`/reports/spending?month=${month}`),
     _api('/reports/trends?months=6'),
+    _api('/reports/net-worth'),
   ]);
   if (seq !== _renderSeq) return;
   const catRows = (spending.categories || []).map((c) =>
-    `<tr><td>${c.category_name}</td><td style="text-align:right;">${_fmtMoney(c.spent_cents)}</td><td style="text-align:right;">${c.transaction_count}</td></tr>`
+    `<tr><td>${_escHtml(c.category_name)}</td><td style="text-align:right;">${_fmtMoney(c.gross_spent_cents ?? c.spent_cents)}</td><td style="text-align:right;">${c.transaction_count}</td></tr>`
   ).join('');
   const trendRows = (trends.trends || []).map((t) =>
     `<tr><td>${t.month}</td><td style="text-align:right;color:var(--success,#2ecc71);">${_fmtMoney(t.income_cents)}</td><td style="text-align:right;color:var(--danger,#e74c3c);">${_fmtMoney(t.spending_cents)}</td></tr>`
   ).join('');
+  const reimbRows = (spending.reimbursements || []).map((r) => {
+    const share = r.billed_cents
+      ? `${_escHtml(r.payee)}: ${_fmtMoney(r.billed_cents)} billed, ${_fmtMoney(r.reimbursed_cents)} reimbursed, ${_fmtMoney(r.you_bear_cents)} you bear`
+      : `${_escHtml(r.payee)} ${_fmtMoney(r.amount_cents)}`;
+    return `<tr><td>${r.date || ''}</td><td>${_escHtml(share)}</td><td>${_escHtml(r.memo || '')}</td></tr>`;
+  }).join('');
+  const funding = spending.unmatched_funding || [];
+  const fundingCents = spending.unmatched_funding_cents || 0;
+  const unclassifiedNote = spending.unclassified_count
+    ? `<p>Up to ${_fmtMoney(spending.unclassified_outflow_cents)} of this may be transfers or reimbursements.</p>`
+    : '';
   _panelSwap(panel, `
-    <h3 style="margin-top:0;">Spending by category — ${spending.month}</h3>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-      <thead><tr><th>Category</th><th style="text-align:right;">Spent</th><th style="text-align:right;">Txns</th></tr></thead>
+    <h3 style="margin-top:0;">${_spendTitle(spending)} — ${spending.month}</h3>
+    <p style="font-size:0.85rem;opacity:0.85;">${_escHtml(_classifiedStat(spending))}</p>
+    ${unclassifiedNote}
+    <p>Income ${_fmtMoney(spending.income_cents)} · Gross spend ${_fmtMoney(spending.gross_spend_cents)} · Less reimbursements ${_fmtMoney(spending.reimbursement_in_cents)} · Net ${_fmtMoney(spending.net_spend_cents)}</p>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:12px;">
+      <thead><tr><th>Category</th><th style="text-align:right;">Spent (gross)</th><th style="text-align:right;">Txns</th></tr></thead>
       <tbody>${catRows || '<tr><td colspan="3">No data</td></tr>'}</tbody>
     </table>
+    <p style="font-size:0.85rem;">Less reimbursements received: ${_fmtMoney(spending.reimbursement_in_cents)}</p>
+    <h3>Reimbursements</h3>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+      <thead><tr><th>Date</th><th>Share</th><th>Memo</th></tr></thead>
+      <tbody>${reimbRows || '<tr><td colspan="3">None this month</td></tr>'}</tbody>
+    </table>
+    <p>${funding.length} funding legs with no matching bill, ${_fmtMoney(fundingCents)} total; merchant spend may be missing.</p>
+    <h3>Net worth</h3>
+    <p>Assets ${_fmtMoney(worth.assets_cents)} · Liabilities ${_fmtMoney(worth.liabilities_cents)} · Net ${_fmtMoney(worth.net_worth_cents)}</p>
     <h3>6-month trends</h3>
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr><th>Month</th><th style="text-align:right;">Income</th><th style="text-align:right;">Spending</th></tr></thead>
