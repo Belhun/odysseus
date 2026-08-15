@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from integrations.finance.database import get_session_factory
+from integrations.finance.database import get_session_factory, init_finance_db
 from integrations.finance.models import (
     FinanceCategory,
     FinanceImportBatch,
@@ -67,7 +67,7 @@ from integrations.finance.services.transactions import (
     void_transaction,
 )
 from src.auth_helpers import require_user
-from src.plugins.registry import is_plugin_active
+from src.plugins.registry import is_plugin_active, is_plugin_installed
 from src.upload_limits import FINANCE_IMPORT_MAX_BYTES, read_upload_limited
 
 
@@ -238,6 +238,8 @@ def setup_finance_routes() -> APIRouter:
     from integrations.finance.confirmation_gate import register_finance_confirmation_gate
 
     register_finance_confirmation_gate()
+    if is_plugin_installed("finance"):
+        init_finance_db()
 
     router = APIRouter(
         prefix="/api/finance",

@@ -20,6 +20,10 @@ def run_install() -> dict[str, Any]:
     manifest = load_manifest("finance")
     version = manifest.get("version", "0.1.0")
 
+    # Existing installs return early on the marker. Schema migrations must
+    # still run so already-installed plugins pick up new columns.
+    init_finance_db()
+
     if is_plugin_installed("finance"):
         if not is_plugin_active("finance"):
             set_feature_flag("finance", True)
@@ -29,7 +33,10 @@ def run_install() -> dict[str, Any]:
             "plugin_id": "finance",
             "version": installed.get("version", version),
             "already_installed": True,
-            "steps": [{"step": "marker", "status": "ok", "message": "Already installed"}],
+            "steps": [
+                {"step": "database", "status": "ok", "message": "Finance database migrated"},
+                {"step": "marker", "status": "ok", "message": "Already installed"},
+            ],
             "reload_required": False,
         }
 
