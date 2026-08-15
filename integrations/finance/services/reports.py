@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from calendar import monthrange
 from datetime import date
 from typing import Optional
@@ -26,14 +27,32 @@ from integrations.finance.services.movements import (
 )
 
 
+MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+UNCLASSIFIED_SURPLUS_THRESHOLD_CENTS = 100
+
+
 def month_key(d: date) -> str:
     return d.strftime("%Y-%m")
 
 
+def validate_month(month: str) -> str:
+    if not MONTH_RE.fullmatch(str(month or "").strip()):
+        raise ValueError("month must be YYYY-MM")
+    return str(month).strip()
+
+
 def month_bounds(month: str) -> tuple[date, date]:
+    month = validate_month(month)
     year, mon = int(month[:4]), int(month[5:7])
     last = monthrange(year, mon)[1]
     return date(year, mon, 1), date(year, mon, last)
+
+
+def overlay_surplus_cents(surplus_cents: int, unclassified_outflow_cents: int) -> int | None:
+    """Refuse a printed surplus when unclassified outflows exceed a small threshold."""
+    if int(unclassified_outflow_cents or 0) > UNCLASSIFIED_SURPLUS_THRESHOLD_CENTS:
+        return None
+    return int(surplus_cents)
 
 
 def previous_complete_month(today: date | None = None) -> str:
@@ -300,9 +319,14 @@ def monthly_trends(
 
 
 def spend_by_account(db: Session, owner: str, month: str) -> list[dict]:
+    start, end = month_bounds(month)
+    txs = _month_transactions(db, owner, start, end)
+    account_ids = {tx.account_id for tx in txs}
+    if not account_ids:
+        return []
     accounts = (
         db.query(FinanceAccount)
-        .filter(FinanceAccount.owner == owner, FinanceAccount.is_closed == False)  # noqa: E712
+        .filter(FinanceAccount.owner == owner, FinanceAccount.id.in_(account_ids))
         .order_by(FinanceAccount.display_order, FinanceAccount.name)
         .all()
     )
@@ -313,6 +337,7 @@ def spend_by_account(db: Session, owner: str, month: str) -> list[dict]:
             "account_id": acct.id,
             "name": acct.name,
             "purpose": acct.purpose or "operating",
+            "is_closed": bool(acct.is_closed),
             "personal_spend_cents": cf["personal_spend_cents"],
             "income_cents": cf["income_cents"],
             "unclassified_count": cf["unclassified_count"],
@@ -332,29 +357,18 @@ def net_worth(db: Session, owner: str) -> dict:
     account_rows = []
     for acct in accounts:
         bal = posted_cents(db, acct)
-        if acct.account_type in ("credit_card", "loan"):
-            liability = abs(bal) if bal < 0 else bal
-            liabilities_cents += liability
-            account_rows.append({
-                "id": acct.id,
-                "name": acct.name,
-                "account_type": acct.account_type,
-                "purpose": acct.purpose or "operating",
-                "balance_cents": bal,
-                "posted_cents": bal,
-                "bucket": "liability",
-            })
-        else:
-            assets_cents += bal
-            account_rows.append({
-                "id": acct.id,
-                "name": acct.name,
-                "account_type": acct.account_type,
-                "purpose": acct.purpose or "operating",
-                "balance_cents": bal,
-                "posted_cents": bal,
-                "bucket": "asset",
-            })
+        assets_cents += max(0, bal)
+        liabilities_cents += max(0, -bal)
+        bucket = "liability" if bal < 0 else "asset"
+        account_rows.append({
+            "id": acct.id,
+            "name": acct.name,
+            "account_type": acct.account_type,
+            "purpose": acct.purpose or "operating",
+            "balance_cents": bal,
+            "posted_cents": bal,
+            "bucket": bucket,
+        })
     return {
         "assets_cents": assets_cents,
         "liabilities_cents": liabilities_cents,

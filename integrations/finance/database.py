@@ -50,6 +50,11 @@ def _set_sqlite_pragma(dbapi_conn, _connection_record):
         cursor.close()
 
 
+def attach_sqlite_pragmas(engine) -> None:
+    """Attach production SQLite pragmas (foreign_keys=ON) to a test or file engine."""
+    event.listen(engine, "connect", _set_sqlite_pragma)
+
+
 def _migrate_unique_dedup_index(engine) -> None:
     """Ensure (account_id, dedup_hash) index is UNIQUE; dedupe existing rows first."""
     with engine.connect() as conn:
@@ -149,15 +154,23 @@ def _migrate_trustworthy_books_schema(engine) -> None:
         _ensure_column(conn, "finance_transactions", "source", "TEXT DEFAULT 'import'")
         _ensure_column(conn, "finance_transactions", "movement_class", "TEXT")
         _ensure_column(conn, "finance_transactions", "movement_group_id", "TEXT")
+        _ensure_column(conn, "finance_transactions", "match_hash", "TEXT")
 
         _ensure_column(conn, "finance_recurring_series", "category_id", "TEXT")
         _ensure_column(conn, "finance_recurring_series", "movement_class", "TEXT")
+        _ensure_column(conn, "finance_categorization_rules", "movement_class", "TEXT")
 
         if _table_exists(conn, "finance_transactions"):
             conn.execute(
                 text(
                     "UPDATE finance_transactions SET source = 'import' "
                     "WHERE source IS NULL OR TRIM(source) = ''"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE finance_transactions SET status = lower(trim(status)) "
+                    "WHERE status IS NOT NULL"
                 )
             )
             _ensure_index(
@@ -190,9 +203,6 @@ def _merge_default_config_keys() -> None:
     if "transfer_day_gap" not in data:
         data["transfer_day_gap"] = 3
         changed = True
-    if "mom_payee_tokens" not in data:
-        data["mom_payee_tokens"] = ["MOM", "MOTHER"]
-        changed = True
     if changed:
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -217,7 +227,6 @@ def write_default_config() -> None:
                 "currency": "USD",
                 "default_import_preset": "auto",
                 "transfer_day_gap": 3,
-                "mom_payee_tokens": ["MOM", "MOTHER"],
             },
             indent=2,
         ),

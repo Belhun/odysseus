@@ -3,10 +3,6 @@
 from datetime import date
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
-
 import integrations.finance.database as finance_db
 from integrations.finance.install import run_install
 from integrations.finance.models import FinanceAccount, FinanceTransaction
@@ -30,15 +26,7 @@ def finance_db_env(monkeypatch, tmp_path):
     monkeypatch.setattr("src.settings.FEATURES_FILE", str(tmp_path / "features.json"))
     finance_db.reset_engine_cache()
     run_install()
-
-    db_path = plugins_root / "finance" / "finance.db"
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-        poolclass=NullPool,
-    )
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    yield {"owner": "alice", "session_factory": session_factory}
+    yield {"owner": "alice", "session_factory": finance_db.get_session_factory()}
     run_uninstall(remove_data=True)
     finance_db.reset_engine_cache()
 
@@ -50,6 +38,7 @@ def _acct(db, owner, **kwargs):
         name=kwargs.get("name", "Checking"),
         account_type="checking",
         opening_balance_cents=kwargs.get("opening_balance_cents", 10000),
+        opening_balance_date=kwargs.get("opening_balance_date"),
         posted_pin_cents=kwargs.get("posted_pin_cents"),
         available_cents=kwargs.get("available_cents"),
     )
@@ -58,13 +47,13 @@ def _acct(db, owner, **kwargs):
     return acct
 
 
-def _tx(db, owner, acct_id, tx_id, amount, status="cleared"):
+def _tx(db, owner, acct_id, tx_id, amount, status="cleared", day=1, month=7):
     db.add(
         FinanceTransaction(
             id=tx_id,
             owner=owner,
             account_id=acct_id,
-            date=date(2026, 7, 1),
+            date=date(2026, month, day),
             amount_cents=amount,
             payee=tx_id,
             dedup_hash=tx_id,
@@ -127,5 +116,40 @@ def test_pins_are_snapshots_not_derived(finance_db_env):
         assert snap["posted_cents"] == -4000
         assert snap["posted_pin_cents"] == 99999
         assert snap["available_cents"] == 1234
+    finally:
+        db.close()
+
+
+@pytest.mark.area_routes
+def test_posted_ignores_rows_before_opening_balance_date(finance_db_env):
+    owner = finance_db_env["owner"]
+    db = finance_db_env["session_factory"]()
+    try:
+        acct = _acct(
+            db,
+            owner,
+            opening_balance_cents=100000,
+            opening_balance_date=date(2026, 7, 1),
+        )
+        _tx(db, owner, acct.id, "tx-before", -4000, day=15, month=6)
+        _tx(db, owner, acct.id, "tx-after", -2000, day=2, month=7)
+        assert posted_cents(db, acct) == 98000
+    finally:
+        db.close()
+
+
+@pytest.mark.area_routes
+def test_mixed_case_void_is_unposted(finance_db_env):
+    owner = finance_db_env["owner"]
+    db = finance_db_env["session_factory"]()
+    try:
+        acct = _acct(db, owner, opening_balance_cents=10000)
+        _tx(db, owner, acct.id, "tx-void-case", -4000, "Void")
+        _tx(db, owner, acct.id, "tx-void-pad", -1000, " void ")
+        assert posted_cents(db, acct) == 10000
+        from integrations.finance.services.balances import is_posted_row
+
+        row = db.query(FinanceTransaction).filter(FinanceTransaction.id == "tx-void-case").one()
+        assert is_posted_row(row) is False
     finally:
         db.close()

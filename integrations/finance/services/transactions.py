@@ -14,6 +14,7 @@ from integrations.finance.models import (
     TX_STATUSES,
     FinanceAccount,
     FinanceTransaction,
+    FinanceTransactionSplit,
 )
 from integrations.finance.services.accounts import log_mutation
 from integrations.finance.services.balances import normalize_tx_status
@@ -140,6 +141,30 @@ def _manual_dedup_hash(account_id: str, tx_date: date, amount_cents: int, payee:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+def movement_match_hash(account_id: str, tx_date: date, amount_cents: int, payee: str) -> str:
+    """Unsalted identity hash used to flag a bank row that matches a manual entry."""
+    key = "|".join([
+        account_id,
+        tx_date.isoformat(),
+        str(amount_cents),
+        _normalize_payee(payee),
+    ])
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def delete_splits_for_transactions(db: Session, owner: str, tx_ids: list[str]) -> int:
+    if not tx_ids:
+        return 0
+    return (
+        db.query(FinanceTransactionSplit)
+        .filter(
+            FinanceTransactionSplit.owner == owner,
+            FinanceTransactionSplit.transaction_id.in_(tx_ids),
+        )
+        .delete(synchronize_session=False)
+    )
+
+
 def _tx_snapshot(tx: FinanceTransaction) -> dict:
     return {
         "id": tx.id,
@@ -188,6 +213,7 @@ def create_manual_transaction(
         source="manual",
         movement_class=validate_movement_class(movement_class),
         dedup_hash=_manual_dedup_hash(account.id, tx_date, int(amount_cents), payee or "", tx_id),
+        match_hash=movement_match_hash(account.id, tx_date, int(amount_cents), payee or ""),
     )
     db.add(tx)
     log_mutation(
@@ -248,6 +274,9 @@ def patch_ledger_transaction(
     if tx.source == "manual":
         tx.dedup_hash = _manual_dedup_hash(
             tx.account_id, tx.date, tx.amount_cents, tx.payee or "", tx.id
+        )
+        tx.match_hash = movement_match_hash(
+            tx.account_id, tx.date, tx.amount_cents, tx.payee or ""
         )
     if ledger_changed or movement_class is not None or payee is not None or memo is not None or category_id is not None:
         log_mutation(
@@ -339,6 +368,7 @@ def delete_manual_transaction(
         before=before,
         actor=actor,
     )
+    delete_splits_for_transactions(db, owner, [tx.id])
     db.delete(tx)
     db.commit()
 

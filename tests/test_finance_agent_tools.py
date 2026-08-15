@@ -4,11 +4,10 @@ import json
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 
 import integrations.finance.database as finance_db
+from tests.conftest import make_finance_test_engine
 from integrations.finance.confirmation_gate import register_finance_confirmation_gate
 from integrations.finance.install import run_install
 from integrations.finance.models import FinanceAccount, FinanceBase, FinanceCategory, FinanceTransaction
@@ -40,11 +39,7 @@ def finance_tool_env(monkeypatch, tmp_path):
     run_install()
 
     db_path = plugins_root / "finance" / "finance.db"
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-        poolclass=NullPool,
-    )
+    engine = make_finance_test_engine(db_path)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     monkeypatch.setattr("integrations.finance.database.get_session_factory", lambda: session_factory)
 

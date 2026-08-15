@@ -17,6 +17,9 @@ origin:
 supersedes_for_implementation:
   - docs/plans/finance/2026-07-17-001-feat-internal-transfer-linking-plan.md
   - docs/plans/finance/2026-07-17-002-feat-manual-transaction-crud-plan.md
+  - docs/plans/finance/2026-07-17-002-feat-reconciliation-workflow-plan.md
+    # Status lock on reconciled rows is deferred. This branch treats reconciled
+    # as freely PATCHable posted. Do not implement edit-lock from that plan.
 ---
 
 # feat: Trustworthy books — unified implementation plan

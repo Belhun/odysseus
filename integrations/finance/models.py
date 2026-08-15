@@ -120,6 +120,7 @@ class FinanceTransaction(TimestampMixin, FinanceBase):
     check_number = Column(String, nullable=True)
     fitid = Column(String, nullable=True)
     dedup_hash = Column(String, nullable=False)
+    match_hash = Column(String, nullable=True, index=True)
     category_id = Column(String, ForeignKey("finance_categories.id"), nullable=True, index=True)
     status = Column(String, default="cleared")
     source = Column(String, default="import")
@@ -136,7 +137,8 @@ class FinanceCategorizationRule(TimestampMixin, FinanceBase):
     id = Column(String, primary_key=True, index=True)
     owner = Column(String, nullable=False, index=True)
     pattern = Column(String, nullable=False)
-    category_id = Column(String, ForeignKey("finance_categories.id"), nullable=False)
+    category_id = Column(String, ForeignKey("finance_categories.id"), nullable=True)
+    movement_class = Column(String, nullable=True)
     priority = Column(Integer, default=100)
 
 

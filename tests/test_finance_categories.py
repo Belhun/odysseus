@@ -3,10 +3,6 @@
 import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
-
 import integrations.finance.database as finance_db
 from integrations.finance.install import run_install
 from integrations.finance.models import FinanceAccount, FinanceCategory, FinanceCategorizationRule, FinanceTransaction
@@ -32,16 +28,7 @@ def finance_db_env(monkeypatch, tmp_path):
     monkeypatch.setattr("src.settings.FEATURES_FILE", str(tmp_path / "features.json"))
     finance_db.reset_engine_cache()
     run_install()
-
-    db_path = plugins_root / "finance" / "finance.db"
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-        poolclass=NullPool,
-    )
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-
-    yield {"owner": "alice", "session_factory": session_factory}
+    yield {"owner": "alice", "session_factory": finance_db.get_session_factory()}
 
     run_uninstall(remove_data=True)
     finance_db.reset_engine_cache()

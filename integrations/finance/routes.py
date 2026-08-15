@@ -39,7 +39,9 @@ from integrations.finance.services.categories import (
 from integrations.finance.services.import_service import (
     build_import_preview,
     commit_import_preview,
+    rollback_import_batch,
 )
+from integrations.finance.services.reports import validate_month
 from integrations.finance.services.recurring import list_recurring_series, patch_recurring_series
 from integrations.finance.services.movements import (
     classify_transaction,
@@ -74,6 +76,15 @@ from src.upload_limits import FINANCE_IMPORT_MAX_BYTES, read_upload_limited
 def _require_finance_plugin(_request: Request) -> None:
     if not is_plugin_active("finance"):
         raise HTTPException(404, "Finance plugin is not installed")
+
+
+def _optional_month(month: Optional[str]) -> Optional[str]:
+    if not month:
+        return None
+    try:
+        return validate_month(month)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 class AccountCreate(BaseModel):
@@ -116,6 +127,8 @@ class AccountPins(BaseModel):
     posted_pin_as_of: Optional[str] = None
     available_cents: Optional[int] = None
     available_as_of: Optional[str] = None
+    clear_posted_pin: bool = False
+    clear_available: bool = False
 
 
 class CategoryCreate(BaseModel):
@@ -127,14 +140,19 @@ class CategoryCreate(BaseModel):
 
 class RuleCreate(BaseModel):
     pattern: str = Field(min_length=1, max_length=200)
-    category_id: str
+    category_id: Optional[str] = None
+    movement_class: Optional[str] = None
     priority: int = 100
+    apply_existing: bool = True
 
 
 class BudgetSet(BaseModel):
     category_id: str
     month: str
     limit_cents: int = Field(ge=0)
+
+    def model_post_init(self, __context) -> None:
+        object.__setattr__(self, "month", validate_month(self.month))
 
 
 class TransactionCreate(BaseModel):
@@ -350,6 +368,8 @@ def setup_finance_routes() -> APIRouter:
                     posted_pin_as_of=body.posted_pin_as_of,
                     available_cents=body.available_cents,
                     available_as_of=body.available_as_of,
+                    clear_posted_pin=body.clear_posted_pin,
+                    clear_available=body.clear_available,
                 )
             except ValueError as exc:
                 message = str(exc)
@@ -429,14 +449,17 @@ def setup_finance_routes() -> APIRouter:
         user = require_user(request)
         db = get_session_factory()()
         try:
-            _require_owned_category(db, user, body.category_id)
+            if body.category_id:
+                _require_owned_category(db, user, body.category_id)
             try:
                 rule = create_rule_for_owner(
                     db,
                     user,
                     pattern=body.pattern,
                     category_id=body.category_id,
+                    movement_class=body.movement_class,
                     priority=body.priority,
+                    apply_existing=body.apply_existing,
                 )
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
@@ -477,6 +500,7 @@ def setup_finance_routes() -> APIRouter:
         offset: int = Query(0, ge=0),
     ):
         user = require_user(request)
+        month = _optional_month(month)
         db = get_session_factory()()
         try:
             q = apply_transaction_filters(
@@ -782,18 +806,10 @@ def setup_finance_routes() -> APIRouter:
         user = require_user(request)
         db = get_session_factory()()
         try:
-            batch = db.query(FinanceImportBatch).filter(
-                FinanceImportBatch.id == batch_id, FinanceImportBatch.owner == user
-            ).first()
-            if not batch:
-                raise HTTPException(404, "Import batch not found")
-            deleted = (
-                db.query(FinanceTransaction)
-                .filter(FinanceTransaction.import_batch_id == batch_id)
-                .delete(synchronize_session=False)
-            )
-            db.delete(batch)
-            db.commit()
+            try:
+                deleted = rollback_import_batch(db, user, batch_id)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
             return {"ok": True, "deleted_transactions": deleted}
         finally:
             db.close()
@@ -806,7 +822,7 @@ def setup_finance_routes() -> APIRouter:
         include_transfers: bool = False,
     ):
         user = require_user(request)
-        month = month or month_key(date.today())
+        month = _optional_month(month) or month_key(date.today())
         db = get_session_factory()()
         try:
             ensure_default_categories(db, user)
@@ -860,7 +876,7 @@ def setup_finance_routes() -> APIRouter:
         include_transfers: bool = False,
     ):
         user = require_user(request)
-        month = month or month_key(date.today())
+        month = _optional_month(month) or month_key(date.today())
         db = get_session_factory()()
         try:
             cashflow = month_cashflow(
@@ -906,7 +922,7 @@ def setup_finance_routes() -> APIRouter:
         include_transfers: bool = False,
     ):
         user = require_user(request)
-        month = month or month_key(date.today())
+        month = _optional_month(month) or month_key(date.today())
         db = get_session_factory()()
         try:
             return month_cashflow(
@@ -918,7 +934,7 @@ def setup_finance_routes() -> APIRouter:
     @router.get("/reports/spend-by-account")
     def report_spend_by_account(request: Request, month: Optional[str] = None):
         user = require_user(request)
-        month = month or month_key(date.today())
+        month = _optional_month(month) or month_key(date.today())
         db = get_session_factory()()
         try:
             return {"month": month, "accounts": spend_by_account(db, user, month)}

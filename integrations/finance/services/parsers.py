@@ -40,6 +40,9 @@ class ParsedTransaction:
     raw: dict[str, Any] = field(default_factory=dict)
 
     def finalize(self, account_id: str = "") -> None:
+        # Early-return is load-bearing: parsers set dedup_hash before account
+        # assignment so the same NFCU file can be imported into two accounts.
+        # Do not "fix" this by always rehashing with account_id.
         if self.dedup_hash:
             return
         key = "|".join([
