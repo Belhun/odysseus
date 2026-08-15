@@ -308,6 +308,69 @@ def _validate_categorize_transaction(payload: dict[str, Any], tool_args: dict[st
 
 
 
+def _require_ledger_fields(payload: dict[str, Any], *keys: str) -> Optional[str]:
+    for key in keys:
+        if payload.get(key) in (None, ""):
+            return f"{key} is required on the confirmation payload"
+    return None
+
+
+def _validate_create_transaction(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
+    missing = _require_ledger_fields(payload, "amount_cents", "date", "account_id")
+    if missing:
+        return missing
+    if int(tool_args.get("amount_cents") or 0) != int(payload["amount_cents"]):
+        return "Confirmed amount does not match tool call"
+    if str(tool_args.get("date") or "")[:10] != str(payload.get("date") or "")[:10]:
+        return "Confirmed date does not match tool call"
+    return None
+
+
+def _validate_update_transaction(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
+    missing = _require_ledger_fields(payload, "amount_cents", "date")
+    if missing:
+        return missing
+    expected_id = str(payload.get("transaction_id") or payload.get("id") or "").strip()
+    actual_id = str(tool_args.get("transaction_id") or tool_args.get("id") or "").strip()
+    if expected_id and actual_id and not _id_prefix_matches(expected_id, actual_id):
+        return "Confirmed transaction_id does not match tool call"
+    if int(tool_args.get("amount_cents") or 0) != int(payload["amount_cents"]):
+        return "Confirmed amount does not match tool call"
+    if str(tool_args.get("date") or "")[:10] != str(payload.get("date") or "")[:10]:
+        return "Confirmed date does not match tool call"
+    return None
+
+
+def _validate_tx_id_action(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
+    expected = str(payload.get("transaction_id") or payload.get("id") or "").strip()
+    actual = str(tool_args.get("transaction_id") or tool_args.get("id") or "").strip()
+    if expected and actual and not _id_prefix_matches(expected, actual):
+        return "Confirmed transaction_id does not match tool call"
+    if not expected:
+        return "transaction_id is required on the confirmation payload"
+    return None
+
+
+def _validate_link_transactions(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
+    expected = [str(i) for i in (payload.get("tx_ids") or []) if i]
+    actual = [str(i) for i in (tool_args.get("tx_ids") or []) if i]
+    if len(expected) < 2:
+        return "tx_ids is required on the confirmation payload"
+    if set(expected) != set(actual):
+        return "Confirmed tx_ids do not match tool call"
+    return None
+
+
+def _validate_pin_account(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
+    expected = str(payload.get("account_id") or "").strip()
+    actual = str(tool_args.get("account_id") or "").strip()
+    if expected and actual and not _id_prefix_matches(expected, actual):
+        return "Confirmed account_id does not match tool call"
+    if not expected:
+        return "account_id is required on the confirmation payload"
+    return None
+
+
 def category_consumed_item_key(tool_args: dict[str, Any]) -> str:
 
     """Stable key for tracking which batch item was consumed."""
@@ -341,6 +404,30 @@ def register_finance_confirmation_gate() -> None:
                 "create_rule": _validate_create_rule,
 
                 "categorize_transaction": _validate_categorize_transaction,
+
+                "create_transaction": _validate_create_transaction,
+
+                "update_transaction": _validate_update_transaction,
+
+                "void_transaction": _validate_tx_id_action,
+
+                "unvoid_transaction": _validate_tx_id_action,
+
+                "delete_transaction": _validate_tx_id_action,
+
+                "classify_transaction": _validate_tx_id_action,
+
+                "link_transactions": _validate_link_transactions,
+
+                "pin_account": _validate_pin_account,
+
+            },
+
+            hard_gated_actions={
+
+                "delete_transaction",
+
+                "update_transaction",
 
             },
 
