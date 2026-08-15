@@ -41,7 +41,21 @@ from integrations.finance.services.import_service import (
     commit_import_preview,
 )
 from integrations.finance.services.recurring import list_recurring_series, patch_recurring_series
-from integrations.finance.services.reports import month_key, monthly_trends, net_worth, spending_by_category
+from integrations.finance.services.movements import (
+    classify_transaction,
+    detect_movements,
+    link_movements,
+    movement_candidates,
+    unlink_movement,
+)
+from integrations.finance.services.reports import (
+    month_cashflow,
+    month_key,
+    monthly_trends,
+    net_worth,
+    spend_by_account,
+    spending_by_category,
+)
 from integrations.finance.services.transactions import (
     ImportedTransactionError,
     apply_transaction_filters,
@@ -162,6 +176,29 @@ class SplitsBody(BaseModel):
 
 class RecurringPatch(BaseModel):
     status: str
+    category_id: Optional[str] = None
+    movement_class: Optional[str] = None
+
+
+class MovementClassifyBody(BaseModel):
+    movement_class: str
+
+
+class MovementLinkBody(BaseModel):
+    tx_ids: list[str]
+
+
+class MovementUnlinkBody(BaseModel):
+    tx_id: Optional[str] = None
+    movement_group_id: Optional[str] = None
+
+
+class MovementDetectBody(BaseModel):
+    account_ids: Optional[list[str]] = None
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+    day_gap: Optional[int] = None
+    auto_link: bool = False
 
 
 def _require_owned_category(db, user: str, category_id: str | None) -> None:
@@ -760,13 +797,39 @@ def setup_finance_routes() -> APIRouter:
             db.close()
 
     @router.get("/budgets")
-    def list_budgets(request: Request, month: Optional[str] = None):
+    def list_budgets(
+        request: Request,
+        month: Optional[str] = None,
+        account_id: Optional[str] = None,
+        include_transfers: bool = False,
+    ):
         user = require_user(request)
         month = month or month_key(date.today())
         db = get_session_factory()()
         try:
             ensure_default_categories(db, user)
-            return {"month": month, "categories": spending_by_category(db, user, month)}
+            cashflow = month_cashflow(
+                db, user, month, account_id=account_id, include_transfers=include_transfers
+            )
+            return {
+                "month": month,
+                "categories": spending_by_category(
+                    db,
+                    user,
+                    month,
+                    account_id=account_id,
+                    include_transfers=include_transfers,
+                ),
+                **{k: cashflow[k] for k in (
+                    "income_cents",
+                    "gross_spend_cents",
+                    "reimbursement_in_cents",
+                    "net_spend_cents",
+                    "personal_spend_cents",
+                    "unclassified_count",
+                    "incomplete",
+                )},
+            }
         finally:
             db.close()
 
@@ -788,21 +851,75 @@ def setup_finance_routes() -> APIRouter:
             db.close()
 
     @router.get("/reports/spending")
-    def report_spending(request: Request, month: Optional[str] = None):
+    def report_spending(
+        request: Request,
+        month: Optional[str] = None,
+        account_id: Optional[str] = None,
+        include_transfers: bool = False,
+    ):
         user = require_user(request)
         month = month or month_key(date.today())
         db = get_session_factory()()
         try:
-            return {"month": month, "categories": spending_by_category(db, user, month)}
+            cashflow = month_cashflow(
+                db, user, month, account_id=account_id, include_transfers=include_transfers
+            )
+            return {
+                "month": month,
+                "categories": spending_by_category(
+                    db,
+                    user,
+                    month,
+                    account_id=account_id,
+                    include_transfers=include_transfers,
+                ),
+                **cashflow,
+            }
         finally:
             db.close()
 
     @router.get("/reports/trends")
-    def report_trends(request: Request, months: int = Query(6, ge=1, le=24)):
+    def report_trends(
+        request: Request,
+        months: int = Query(6, ge=1, le=24),
+        include_transfers: bool = False,
+        account_id: Optional[str] = None,
+    ):
         user = require_user(request)
         db = get_session_factory()()
         try:
-            return {"trends": monthly_trends(db, user, months)}
+            return {
+                "trends": monthly_trends(
+                    db, user, months, include_transfers=include_transfers, account_id=account_id
+                )
+            }
+        finally:
+            db.close()
+
+    @router.get("/reports/cashflow")
+    def report_cashflow(
+        request: Request,
+        month: Optional[str] = None,
+        account_id: Optional[str] = None,
+        include_transfers: bool = False,
+    ):
+        user = require_user(request)
+        month = month or month_key(date.today())
+        db = get_session_factory()()
+        try:
+            return month_cashflow(
+                db, user, month, account_id=account_id, include_transfers=include_transfers
+            )
+        finally:
+            db.close()
+
+    @router.get("/reports/spend-by-account")
+    def report_spend_by_account(request: Request, month: Optional[str] = None):
+        user = require_user(request)
+        month = month or month_key(date.today())
+        db = get_session_factory()()
+        try:
+            return {"month": month, "accounts": spend_by_account(db, user, month)}
         finally:
             db.close()
 
@@ -834,6 +951,84 @@ def setup_finance_routes() -> APIRouter:
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
             return {"id": row.id, "status": row.status}
+        finally:
+            db.close()
+
+    @router.get("/movements/candidates")
+    def get_movement_candidates(
+        request: Request,
+        tx_id: str,
+        day_gap: Optional[int] = None,
+    ):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                return {"candidates": movement_candidates(db, user, tx_id, day_gap=day_gap)}
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+        finally:
+            db.close()
+
+    @router.post("/movements/detect")
+    def post_detect_movements(request: Request, body: MovementDetectBody):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            from_date = date.fromisoformat(body.from_date) if body.from_date else None
+            to_date = date.fromisoformat(body.to_date) if body.to_date else None
+            return detect_movements(
+                db,
+                user,
+                account_ids=body.account_ids,
+                day_gap=body.day_gap,
+                auto_link=body.auto_link,
+                from_date=from_date,
+                to_date=to_date,
+            )
+        finally:
+            db.close()
+
+    @router.post("/movements/link")
+    def post_link_movements(request: Request, body: MovementLinkBody):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                group_id = link_movements(db, user, body.tx_ids)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            return {"movement_group_id": group_id}
+        finally:
+            db.close()
+
+    @router.post("/movements/unlink")
+    def post_unlink_movements(request: Request, body: MovementUnlinkBody):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                cleared = unlink_movement(
+                    db, user, tx_id=body.tx_id, movement_group_id=body.movement_group_id
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            return {"ok": True, "cleared": cleared}
+        finally:
+            db.close()
+
+    @router.post("/transactions/{tx_id}/classify")
+    def classify_tx(request: Request, tx_id: str, body: MovementClassifyBody):
+        user = require_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                tx = classify_transaction(db, user, tx_id, body.movement_class)
+            except ValueError as exc:
+                message = str(exc)
+                code = 404 if "not found" in message.lower() else 400
+                raise HTTPException(code, message) from exc
+            return _transaction_dict(tx)
         finally:
             db.close()
 
