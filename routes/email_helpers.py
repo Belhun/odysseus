@@ -527,6 +527,83 @@ def attachment_extract_dir(folder: str, uid: str) -> Path:
     return target
 
 
+def _mail_attachments_relpath(stored: str) -> str | None:
+    """Return the path under mail-attachments, or None if unsafe/missing."""
+    normalized = stored.replace("\\", "/")
+    match = re.search(r"(?i)(?:^|/)mail-attachments/(.+)$", normalized)
+    if not match:
+        return None
+    rel = match.group(1).strip("/")
+    if not rel:
+        return None
+    parts = Path(rel).parts
+    if ".." in parts or any(part in (".", "") for part in parts):
+        return None
+    return rel
+
+
+def _path_is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def resolve_stored_attachment_path(stored: str | None) -> Path | None:
+    """Resolve a stored attachments.local_path for the current host.
+
+    Rows copied from Windows keep absolute ``E:\\odysseus\\data\\mail-attachments\\...``
+    values. If that file exists (Windows live tree), return it. If it is
+    missing, remap the mail-attachments tail onto ATTACHMENTS_DIR,
+    ODYSSEUS_DATA_DIR, DATA_DIR, and /app/data. Traversal is refused.
+    """
+    if not stored or not str(stored).strip():
+        return None
+    stored = str(stored)
+    try:
+        existing = Path(stored)
+        if existing.is_file():
+            return existing
+    except OSError:
+        pass
+
+    rel = _mail_attachments_relpath(stored)
+    if not rel:
+        return None
+
+    roots: list[Path] = [ATTACHMENTS_DIR, DATA_DIR / "mail-attachments"]
+    env_data = os.environ.get("ODYSSEUS_DATA_DIR")
+    if env_data:
+        roots.append(Path(env_data) / "mail-attachments")
+    roots.append(Path("/app/data") / "mail-attachments")
+
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            resolved = (root / rel).resolve()
+            if not resolved.is_file():
+                continue
+            if not _path_is_under(resolved, root):
+                continue
+            return resolved
+        except OSError:
+            continue
+    return None
+
+
+def resolved_attachment_local_path(stored: str | None) -> str | None:
+    """String path for API/agent display. Remap when the file is found."""
+    found = resolve_stored_attachment_path(stored)
+    if found is not None:
+        return str(found)
+    return stored
+
+
 def _init_scheduled_db():
     import sqlite3
     conn = sqlite3.connect(SCHEDULED_DB)

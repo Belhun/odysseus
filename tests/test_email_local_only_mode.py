@@ -145,6 +145,104 @@ def test_email_domain_map_includes_local_mirror_tools():
     assert LOCAL_EMAIL_TOOLS <= email_tools
 
 
+@pytest.mark.asyncio
+async def test_local_only_mark_read_updates_store_without_mcp(local_db, monkeypatch):
+    import src.tool_execution as tool_execution
+    from src.tool_execution import execute_tool_block
+
+    _seed_message(local_db, owner="user-a", uid=42, subject="mark me")
+    monkeypatch.setattr("src.tool_security.is_email_local_only", lambda owner: True)
+    monkeypatch.setattr(
+        "routes.email_local_store.resolve_account_id",
+        lambda sel, owner="": "acc1",
+    )
+    monkeypatch.setattr(
+        tool_execution,
+        "get_mcp_manager",
+        lambda: (_ for _ in ()).throw(AssertionError("local-only mark_read must not reach MCP")),
+    )
+
+    desc, result = await execute_tool_block(
+        type("Block", (), {
+            "tool_type": "mark_email_read",
+            "content": json.dumps({"uid": "42", "folder": "INBOX", "account": "acc1"}),
+        })(),
+        owner="user-a",
+    )
+    assert result["exit_code"] == 0
+    assert "local-only" in desc
+    conn = local_db._connect()
+    try:
+        row = conn.execute("SELECT is_read, read_dirty FROM messages WHERE uid=42").fetchone()
+        assert int(row[0]) == 1
+        assert int(row[1]) == 1
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_local_only_bulk_mark_read_all_unread(local_db, monkeypatch):
+    import src.tool_execution as tool_execution
+    from src.tool_execution import execute_tool_block
+
+    _seed_message(local_db, owner="user-a", uid=1, subject="unread a")
+    _seed_message(local_db, owner="user-a", uid=2, subject="unread b")
+    monkeypatch.setattr("src.tool_security.is_email_local_only", lambda owner: True)
+    monkeypatch.setattr(
+        "routes.email_local_store.resolve_account_id",
+        lambda sel, owner="": "acc1",
+    )
+    monkeypatch.setattr(
+        "routes.email_local_store._enumerate_accounts",
+        lambda owner, accounts=None: [type("Acc", (), {"id": "acc1", "name": "Gmail"})()],
+    )
+    monkeypatch.setattr(
+        tool_execution,
+        "get_mcp_manager",
+        lambda: (_ for _ in ()).throw(AssertionError("local-only bulk_email must not reach MCP")),
+    )
+
+    desc, result = await execute_tool_block(
+        type("Block", (), {
+            "tool_type": "mcp__email__bulk_email",
+            "content": json.dumps({"action": "mark_read", "all_unread": True}),
+        })(),
+        owner="user-a",
+    )
+    assert result["exit_code"] == 0
+    assert "2" in result["output"]
+    conn = local_db._connect()
+    try:
+        unread = conn.execute("SELECT COUNT(*) FROM messages WHERE is_read=0").fetchone()[0]
+        assert unread == 0
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_local_only_bulk_delete_refused(local_db, monkeypatch):
+    from src.tool_execution import execute_tool_block
+
+    _seed_message(local_db, owner="user-a", uid=9, subject="keep me")
+    monkeypatch.setattr("src.tool_security.is_email_local_only", lambda owner: True)
+
+    _desc, result = await execute_tool_block(
+        type("Block", (), {
+            "tool_type": "bulk_email",
+            "content": json.dumps({"action": "delete", "uids": ["9"]}),
+        })(),
+        owner="user-a",
+    )
+    assert result["exit_code"] == 1
+    assert "Nothing was deleted" in result["error"]
+    conn = local_db._connect()
+    try:
+        n = conn.execute("SELECT COUNT(*) FROM messages WHERE uid=9").fetchone()[0]
+        assert n == 1
+    finally:
+        conn.close()
+
+
 def test_local_only_effective_email_tools_keep_local_reads(monkeypatch):
     """Simulate the turn composition that left the resume-review chat write-only:
     email domain tools + local-only disabling live IMAP reads. Local mirror

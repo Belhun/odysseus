@@ -2309,10 +2309,10 @@ def _build_base_prompt(
         if is_email_local_only(owner):
             agent_prompt = agent_prompt.replace(
                 "Prefer `read_local_emails` for browsing and most reads (instant, full history); use live `list_emails` only when freshness matters or the folder has not synced yet.",
-                "Local only mode is ON — ONLY use `read_local_emails` (list/search/full by uid) and `sync_local_emails` for email reads; live list_emails/read_email/search_emails are blocked. Run sync_local_emails if results look stale.",
+                "Local only mode is ON — ONLY use `read_local_emails` (list/search/full by uid) and `sync_local_emails` for email reads; live list_emails/read_email/search_emails are blocked. `list_email_accounts`, `mark_email_read`, and `bulk_email` mark_read/mark_unread update the local mirror and queue a \\Seen push on the next sync. Run sync_local_emails if results look stale.",
             ).replace(
                 "Prefer `read_local_emails` for browsing when synced; use live `list_emails` when freshness matters.",
-                "Local only mode is ON — ONLY use `read_local_emails` and `sync_local_emails` for email reads; live list_emails/read_email/search_emails are blocked.",
+                "Local only mode is ON — ONLY use `read_local_emails` and `sync_local_emails` for email reads; live list_emails/read_email/search_emails are blocked. `list_email_accounts` / `mark_email_read` / `bulk_email` mark_read work on the local mirror.",
             )
     except Exception:
         pass

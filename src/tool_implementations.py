@@ -375,3 +375,156 @@ async def do_sync_local_emails(content: str, owner: Optional[str] = None) -> Dic
         "output": format_sync_all_log(result, duration_seconds=result.get("duration_seconds")),
         "exit_code": 0,
     }
+
+
+async def do_list_email_accounts(content: str, owner: Optional[str] = None) -> Dict:
+    """List configured email accounts from app.db (no live IMAP / MCP)."""
+    import asyncio
+    from routes.email_local_store import _enumerate_accounts
+
+    accounts = await asyncio.to_thread(_enumerate_accounts, owner or "")
+    if not accounts:
+        return {"output": "No email accounts configured.", "exit_code": 0}
+    lines = [f"Found {len(accounts)} email account(s):\n"]
+    for acc in accounts:
+        star = " (default)" if getattr(acc, "is_default", False) else ""
+        addr = getattr(acc, "imap_user", None) or getattr(acc, "from_address", None) or "(unknown)"
+        lines.append(f"- **{acc.name}**{star}\n  email: {addr}\n  id: {acc.id}")
+    return {"output": "\n".join(lines), "exit_code": 0}
+
+
+async def do_local_email_flags(tool: str, content: str, owner: Optional[str] = None) -> Dict:
+    """Local-only mark_read / bulk mark_read: update email_store.db, queue IMAP push."""
+    import asyncio
+    from collections import defaultdict
+    from routes.email_local_store import (
+        _enumerate_accounts,
+        list_local_unread_rows,
+        mirror_imap_read_state_bulk,
+        resolve_account_id,
+    )
+    from src.tool_utils import _parse_tool_args
+
+    try:
+        args = _parse_tool_args(content)
+    except ValueError:
+        return {"error": "Invalid JSON arguments", "exit_code": 1}
+
+    folder = (args.get("folder") or "INBOX").strip() or "INBOX"
+    account_sel = args.get("account")
+
+    def _resolve(sel):
+        return resolve_account_id(sel, owner=owner or "") if sel else None
+
+    if tool == "mark_email_read":
+        uid = args.get("uid")
+        if uid is None or str(uid).strip() == "":
+            return {"error": "uid is required", "exit_code": 1}
+        account_id = _resolve(account_sel)
+        if account_sel and not account_id:
+            return {"error": f"Email account not found for {account_sel!r}", "exit_code": 1}
+        if not account_id:
+            account_id = _resolve(None)
+        if not account_id:
+            return {"error": "No email account available for this owner.", "exit_code": 1}
+        is_read = bool(args.get("read", True))
+        n = await asyncio.to_thread(
+            mirror_imap_read_state_bulk,
+            owner or "",
+            account_id,
+            folder,
+            [uid],
+            is_read,
+            dirty=True,
+        )
+        if not n:
+            return {
+                "error": f"No local message matched UID {uid} in {folder} (account {account_id}).",
+                "exit_code": 1,
+            }
+        state = "read" if is_read else "unread"
+        return {
+            "output": (
+                f"Marked UID {uid} as {state} in the local mirror ({n} row(s)). "
+                "Next sync_local_emails will push the \\Seen flag to IMAP."
+            ),
+            "exit_code": 0,
+        }
+
+    if tool != "bulk_email":
+        return {"error": f"Unsupported local-only email tool: {tool}", "exit_code": 1}
+
+    action = (args.get("action") or "").strip()
+    if action not in ("mark_read", "mark_unread"):
+        return {
+            "error": (
+                f"Local only mode can mark_read/mark_unread on the local mirror. "
+                f"{action or 'this action'} needs the live email MCP (IMAP). "
+                "Nothing was deleted or archived."
+            ),
+            "exit_code": 1,
+        }
+    is_read = action == "mark_read"
+    all_unread = bool(args.get("all_unread", False))
+    uids = args.get("uids") or []
+
+    account_ids: list[str] = []
+    if account_sel:
+        account_id = _resolve(account_sel)
+        if not account_id:
+            return {"error": f"Email account not found for {account_sel!r}", "exit_code": 1}
+        account_ids = [account_id]
+    else:
+        accounts = await asyncio.to_thread(_enumerate_accounts, owner or "")
+        account_ids = [acc.id for acc in accounts]
+        if not account_ids:
+            fallback = _resolve(None)
+            if fallback:
+                account_ids = [fallback]
+        if not account_ids:
+            return {"error": "No email account available for this owner.", "exit_code": 1}
+
+    grouped: dict[tuple[str, str], list] = defaultdict(list)
+    if all_unread:
+        for account_id in account_ids:
+            rows = await asyncio.to_thread(
+                list_local_unread_rows,
+                owner or "",
+                account_id,
+                None,
+            )
+            for row in rows:
+                grouped[(row["account_id"], row["folder"])].append(row["uid"])
+    else:
+        if not uids:
+            return {
+                "error": "No messages selected (pass uids or all_unread=true).",
+                "exit_code": 1,
+            }
+        for account_id in account_ids:
+            grouped[(account_id, folder)].extend(uids)
+
+    total = 0
+    for (account_id, dest_folder), dest_uids in grouped.items():
+        total += await asyncio.to_thread(
+            mirror_imap_read_state_bulk,
+            owner or "",
+            account_id,
+            dest_folder,
+            dest_uids,
+            is_read,
+            dirty=True,
+        )
+    verb = "marked read" if is_read else "marked unread"
+    if not total:
+        return {
+            "error": f"No matching local messages to {verb}.",
+            "exit_code": 1,
+        }
+    return {
+        "output": (
+            f"Done — {total} local email(s) {verb}. "
+            "Nothing was deleted. Next sync_local_emails will push \\Seen to IMAP."
+        ),
+        "exit_code": 0,
+    }

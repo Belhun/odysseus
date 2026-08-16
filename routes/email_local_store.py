@@ -29,6 +29,8 @@ from routes.email_helpers import (
     _q,
     _uid_from_fetch_meta,
     attachment_extract_dir,
+    resolve_stored_attachment_path,
+    resolved_attachment_local_path,
 )
 from routes.email_mime_parse import AttachmentPart, parse_mime_for_local_store
 
@@ -515,8 +517,8 @@ def _can_reuse_attachments(existing_atts, attachments_meta: list[dict]) -> bool:
         local_path = row["local_path"]
         if not local_path:
             return False
-        p = Path(local_path)
-        if not p.is_file() or p.stat().st_size != int(row["size"] or 0):
+        p = resolve_stored_attachment_path(local_path)
+        if p is None or not p.is_file() or p.stat().st_size != int(row["size"] or 0):
             return False
     return True
 
@@ -529,7 +531,7 @@ def _normalize_attachment_rows(existing_atts) -> list[dict[str, Any]]:
             "content_type": r["content_type"],
             "size": int(r["size"] or 0),
             "is_inline": int(r["is_inline"] or 0),
-            "local_path": r["local_path"],
+            "local_path": resolved_attachment_local_path(r["local_path"]),
             "extracted": int(r["extracted"] or 0),
             "skipped_reason": r["skipped_reason"],
         }
@@ -630,7 +632,7 @@ def _unlink_attachment_paths(paths: list[str], *, folder: str | None = None, uid
         if not path_str:
             continue
         try:
-            p = Path(path_str)
+            p = resolve_stored_attachment_path(path_str) or Path(path_str)
             if p.is_file():
                 p.unlink()
                 removed += 1
@@ -2398,7 +2400,7 @@ def _local_attachments_for_read(atts: list[dict[str, Any]]) -> list[dict[str, An
             "content_type": a.get("content_type") or "application/octet-stream",
             "size": int(a.get("size") or 0),
             "is_inline": bool(a.get("is_inline")),
-            "local_path": a.get("local_path"),
+            "local_path": resolved_attachment_local_path(a.get("local_path")),
         })
     return out
 
@@ -2425,6 +2427,37 @@ def _format_local_read_response(row: dict[str, Any], atts: list[dict[str, Any]])
         "related_attachments": [],
         "local_id": row.get("id"),
     }
+
+
+def list_local_unread_rows(
+    owner: str,
+    account_id: str | None = None,
+    folder: str | None = None,
+    limit: int = 20000,
+) -> list[dict[str, Any]]:
+    """Unread local rows for a mark-read sweep. Omit folder to include every folder."""
+    clauses = ["owner=?", "is_read=0"]
+    params: list[Any] = [owner or ""]
+    if account_id:
+        clauses.append("account_id=?")
+        params.append(account_id)
+    if folder:
+        clauses.append("folder=?")
+        params.append(folder)
+    db = _connect()
+    try:
+        rows = db.execute(
+            f"""
+            SELECT uid, folder, account_id FROM messages
+            WHERE {" AND ".join(clauses)}
+            ORDER BY date_epoch DESC
+            LIMIT ?
+            """,
+            [*params, int(limit)],
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        db.close()
 
 
 def query_local_emails(
@@ -2497,6 +2530,8 @@ def get_local_email(owner: str, row_id: int) -> dict[str, Any] | None:
             (int(row_id),),
         ).fetchall()
         msg["attachments"] = [dict(a) for a in atts]
+        for att in msg["attachments"]:
+            att["local_path"] = resolved_attachment_local_path(att.get("local_path"))
         return msg
     finally:
         db.close()

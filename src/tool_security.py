@@ -45,6 +45,14 @@ LIVE_IMAP_READ_TOOLS = frozenset({
     "search_emails",
 })
 
+# Bare / mcp__email__ names that Local only mode can run against email_store.db
+# without the builtin email MCP subprocess. Archive/delete/send still need MCP.
+LOCAL_ONLY_NATIVE_EMAIL_TOOLS = frozenset({
+    "list_email_accounts",
+    "mark_email_read",
+    "bulk_email",
+})
+
 
 # Tools regular/public users must not execute directly. These either expose
 # server/runtime access, sensitive user data, external messaging, persistent

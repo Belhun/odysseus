@@ -23,6 +23,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from src.tool_security import (
     BUILTIN_EMAIL_TOOLS,
+    LOCAL_ONLY_NATIVE_EMAIL_TOOLS,
     email_tool_policy_names,
     is_public_blocked_tool,
     owner_is_admin_or_single_user,
@@ -623,6 +624,7 @@ async def _execute_tool_block_impl(
         do_list_cookbook_servers,
         do_edit_image, do_trigger_research, do_manage_research, do_resolve_contact,
         do_manage_contact, do_read_local_emails, do_sync_local_emails,
+        do_list_email_accounts, do_local_email_flags,
         do_vault_search, do_vault_get, do_vault_unlock,
         do_app_api,
     )
@@ -698,6 +700,14 @@ async def _execute_tool_block_impl(
             desc = f"{tool}: BLOCKED (local-only email mode)"
             result = {"error": local_only_live_email_block_message(), "exit_code": 1}
             logger.info("Tool blocked by local-only email mode: %s owner=%r", tool, owner)
+            return desc, result
+        bare_local = tool[len("mcp__email__"):] if tool.startswith("mcp__email__") else tool
+        if bare_local in LOCAL_ONLY_NATIVE_EMAIL_TOOLS:
+            desc = f"email (local-only): {bare_local}"
+            if bare_local == "list_email_accounts":
+                result = await do_list_email_accounts(content, owner=owner)
+            else:
+                result = await do_local_email_flags(bare_local, content, owner=owner)
             return desc, result
 
     if tool_policy and any(tool_policy.blocks(name) for name in policy_names):
