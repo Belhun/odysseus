@@ -385,10 +385,15 @@ function _renderAccountForm() {
       Opening posted is the balance shown the morning before your first imported row; use 0 if you imported from account opening.
     </p>
     <p id="fin-acct-error" style="color:var(--danger,#e74c3c);font-size:0.85rem;"></p>
-    <div style="display:flex;gap:8px;">
+    <div style="display:flex;gap:8px;align-items:center;">
       <button type="button" id="fin-acct-save" class="btn-primary">Save account</button>
       <button type="button" id="fin-acct-cancel" class="btn-secondary">Cancel</button>
-    </div>`;
+      ${_editingAccountId ? `
+        <div style="flex:1"></div>
+        <button type="button" id="fin-acct-delete" class="btn-secondary" style="color:var(--danger,#e74c3c);">Delete account</button>
+      ` : ''}
+    </div>
+    ${_editingAccountId ? '<div id="fin-acct-delete-confirm"></div>' : ''}`;
   const header = _modal.querySelector('.finance-toolbar');
   header?.after(wrap);
   const syncRail = () => {
@@ -400,6 +405,79 @@ function _renderAccountForm() {
   syncRail();
   _el('fin-acct-cancel')?.addEventListener('click', _closeAccountForm);
   _el('fin-acct-save')?.addEventListener('click', _saveAccountForm);
+  _el('fin-acct-delete')?.addEventListener('click', () => _askDeleteAccount(existing));
+}
+
+async function _askDeleteAccount(account) {
+  const box = _el('fin-acct-delete-confirm');
+  if (!box) return;
+  const name = account.name || 'this account';
+  let txTotal = 0;
+  try {
+    const listed = await _api(
+      `/transactions?account_id=${encodeURIComponent(account.id)}&limit=1&include_void=true`
+    );
+    txTotal = listed.total || 0;
+  } catch {
+    txTotal = 0;
+  }
+  const rowsLine = txTotal
+    ? `This also deletes <strong>${txTotal}</strong> transaction${txTotal === 1 ? '' : 's'} and their import history. Linked transfers in other accounts go back to unlinked.`
+    : 'This account has no transactions.';
+  box.innerHTML = `
+    <div style="margin-top:10px;padding:10px;border:1px solid var(--danger,#e74c3c);border-radius:6px;">
+      <div style="font-weight:600;margin-bottom:4px;">Delete ${_escHtml(name)}?</div>
+      <p style="font-size:0.85rem;margin:0 0 8px;">${rowsLine} You cannot undo this.</p>
+      <div style="display:flex;gap:8px;">
+        <button type="button" id="fin-acct-delete-step2" class="btn-secondary" style="color:var(--danger,#e74c3c);">Continue</button>
+        <button type="button" id="fin-acct-delete-abort" class="btn-secondary">Keep account</button>
+      </div>
+    </div>`;
+  _el('fin-acct-delete-abort')?.addEventListener('click', () => { box.innerHTML = ''; });
+  _el('fin-acct-delete-step2')?.addEventListener('click', () => _confirmDeleteAccount(account, txTotal));
+}
+
+function _confirmDeleteAccount(account, txTotal) {
+  const box = _el('fin-acct-delete-confirm');
+  if (!box) return;
+  const name = account.name || '';
+  box.innerHTML = `
+    <div style="margin-top:10px;padding:10px;border:1px solid var(--danger,#e74c3c);border-radius:6px;">
+      <div style="font-weight:600;margin-bottom:4px;">Last check</div>
+      <p style="font-size:0.85rem;margin:0 0 8px;">Type <strong>${_escHtml(name)}</strong> to delete it for good.</p>
+      <input id="fin-acct-delete-name" type="text" autocomplete="off" placeholder="Account name" style="width:100%;margin-bottom:8px;" />
+      <p id="fin-acct-delete-error" style="color:var(--danger,#e74c3c);font-size:0.85rem;margin:0 0 8px;"></p>
+      <div style="display:flex;gap:8px;">
+        <button type="button" id="fin-acct-delete-final" class="btn-secondary" style="color:var(--danger,#e74c3c);" disabled>Delete forever</button>
+        <button type="button" id="fin-acct-delete-abort2" class="btn-secondary">Keep account</button>
+      </div>
+    </div>`;
+  const input = _el('fin-acct-delete-name');
+  const finalBtn = _el('fin-acct-delete-final');
+  const matches = () => (input?.value || '').trim() === name.trim();
+  input?.addEventListener('input', () => {
+    if (finalBtn) finalBtn.disabled = !matches();
+  });
+  input?.focus();
+  _el('fin-acct-delete-abort2')?.addEventListener('click', () => { box.innerHTML = ''; });
+  finalBtn?.addEventListener('click', async () => {
+    if (!matches()) return;
+    const errEl = _el('fin-acct-delete-error');
+    finalBtn.disabled = true;
+    try {
+      await _api(
+        `/accounts/${account.id}?purge_transactions=${txTotal ? 'true' : 'false'}`,
+        { method: 'DELETE' }
+      );
+      if (_activeAccountId === account.id) _activeAccountId = null;
+      _closeAccountForm();
+      await _loadAccounts();
+      await _renderPanel();
+    } catch (err) {
+      finalBtn.disabled = false;
+      if (errEl) errEl.textContent = err.message || String(err);
+    }
+  });
 }
 
 async function _saveAccountForm() {

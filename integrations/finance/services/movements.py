@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections import defaultdict
 from datetime import date, timedelta
@@ -484,38 +485,30 @@ def detect_movements(
     used: set[str] = set()
     suggestions: list[dict[str, Any]] = []
     auto: list[dict[str, Any]] = []
+    by_amount: dict[int, list[FinanceTransaction]] = defaultdict(list)
+    for tx in unmatched:
+        by_amount[tx.amount_cents].append(tx)
 
     def _peers(tx: FinanceTransaction, window: int) -> list[FinanceTransaction]:
         return [
             other
-            for other in unmatched
+            for other in by_amount.get(-tx.amount_cents, [])
             if other.id != tx.id
             and other.id not in used
             and other.account_id != tx.account_id
-            and other.amount_cents == -tx.amount_cents
             and _date_delta_days(other.date, tx.date) <= window
         ]
-
-    candidates = {tx.id: _peers(tx, gap) for tx in unmatched}
 
     for tx in unmatched:
         if tx.id in used:
             continue
-        peers = candidates.get(tx.id) or []
+        peers = _peers(tx, gap)
         if not peers:
             continue
         tight = [p for p in peers if _date_delta_days(p.date, tx.date) <= 1]
         if len(tight) == 1 and len(peers) == 1:
             peer = tight[0]
-            reverse = [
-                other
-                for other in unmatched
-                if other.id != peer.id
-                and other.id not in used
-                and other.account_id != peer.account_id
-                and other.amount_cents == -peer.amount_cents
-                and _date_delta_days(other.date, peer.date) <= 1
-            ]
+            reverse = _peers(peer, 1)
             if len(reverse) == 1 and reverse[0].id == tx.id:
                 payload = {
                     "tx_ids": [tx.id, peer.id],
@@ -641,6 +634,15 @@ def cleanup_orphaned_movement_groups(
 
 
 def maybe_backfill_movements(db: Session, owner: str) -> None:
+    """One-shot heuristics + unique auto-link per owner.
+
+    Null movement_class is normal (sign infers spend/income). Do not treat
+    leftover nulls as a reason to re-scan the ledger on every page load.
+    """
+    settings = load_finance_settings()
+    done = [str(item) for item in (settings.get("movement_backfill_v1_owners") or [])]
+    if owner in done:
+        return
     has_null = (
         db.query(FinanceTransaction.id)
         .filter(
@@ -649,10 +651,37 @@ def maybe_backfill_movements(db: Session, owner: str) -> None:
         )
         .first()
     )
-    if not has_null:
-        return
-    apply_payee_heuristics(db, owner)
-    detect_movements(db, owner, auto_link=True)
+    if has_null:
+        apply_payee_heuristics(db, owner)
+        detect_movements(db, owner, auto_link=True)
+    done.append(owner)
+    save_finance_settings({"movement_backfill_v1_owners": done})
+
+
+def schedule_movement_warmup() -> None:
+    """Warm one-shot backfill off the request path after process start."""
+    import threading
+
+    def _run() -> None:
+        log = logging.getLogger(__name__)
+        try:
+            from integrations.finance.database import get_session_factory
+
+            db = get_session_factory()()
+            try:
+                owners = {
+                    row[0]
+                    for row in db.query(FinanceTransaction.owner).distinct().all()
+                    if row[0]
+                }
+                for owner in owners:
+                    maybe_backfill_movements(db, owner)
+            finally:
+                db.close()
+        except Exception:
+            log.exception("Finance movement warmup failed")
+
+    threading.Thread(target=_run, name="finance-movement-warmup", daemon=True).start()
 
 
 def _tx_review_dict(tx: FinanceTransaction) -> dict[str, Any]:

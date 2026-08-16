@@ -429,16 +429,18 @@ def setup_finance_routes() -> APIRouter:
             db.close()
 
     @router.delete("/accounts/{account_id}")
-    def delete_account(request: Request, account_id: str):
+    def delete_account(request: Request, account_id: str, purge_transactions: bool = False):
         user = require_user(request)
         db = get_session_factory()()
         try:
             try:
-                delete_account_for_owner(db, user, account_id)
+                deleted = delete_account_for_owner(
+                    db, user, account_id, purge_transactions=purge_transactions
+                )
             except ValueError as exc:
                 code = 400 if "transactions" in str(exc) else 404
                 raise HTTPException(code, str(exc)) from exc
-            return {"ok": True}
+            return {"ok": True, "deleted_transactions": deleted}
         finally:
             db.close()
 

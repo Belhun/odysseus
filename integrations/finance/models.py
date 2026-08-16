@@ -107,6 +107,7 @@ class FinanceTransaction(TimestampMixin, FinanceBase):
         Index("ix_finance_tx_owner_date", "owner", "date"),
         Index("ix_finance_tx_owner_class_date", "owner", "movement_class", "date"),
         Index("ix_finance_tx_owner_group", "owner", "movement_group_id"),
+        Index("ix_finance_tx_account_date", "account_id", "date"),
     )
 
     id = Column(String, primary_key=True, index=True)

@@ -59,6 +59,25 @@ class ParsedTransaction:
         self.dedup_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+def disambiguate_repeat_hashes(transactions: list["ParsedTransaction"]) -> None:
+    """Keep same-day same-amount repeats as distinct rows.
+
+    Banks often omit a unique id (Navy Fed Zelle is a common case). The first
+    copy keeps its original hash so a prior import still matches. Later copies
+    in the same file get a stable occurrence suffix.
+    """
+    seen: dict[str, int] = {}
+    for tx in transactions:
+        if not tx.dedup_hash:
+            tx.finalize()
+        base = tx.dedup_hash
+        n = seen.get(base, 0)
+        seen[base] = n + 1
+        if n == 0:
+            continue
+        tx.dedup_hash = hashlib.sha256(f"{base}|occ:{n}".encode("utf-8")).hexdigest()
+
+
 def _normalize_payee(payee: str) -> str:
     return re.sub(r"\s+", " ", (payee or "").strip().upper())
 
@@ -203,6 +222,7 @@ def parse_wells_fargo_csv(content: str) -> ParseResult:
             out.append(tx)
         except ValueError as exc:
             errors.append(RowParseError(row=i, message=str(exc)))
+    disambiguate_repeat_hashes(out)
     return ParseResult(transactions=out, errors=errors)
 
 
@@ -238,6 +258,7 @@ def parse_navy_federal_csv(content: str) -> ParseResult:
             out.append(tx)
         except ValueError as exc:
             errors.append(RowParseError(row=i, message=str(exc)))
+    disambiguate_repeat_hashes(out)
     return ParseResult(transactions=out, errors=errors)
 
 
@@ -309,6 +330,7 @@ def parse_generic_csv(
             out.append(tx)
         except ValueError as exc:
             errors.append(RowParseError(row=i, message=str(exc)))
+    disambiguate_repeat_hashes(out)
     return ParseResult(transactions=out, errors=errors)
 
 
@@ -378,6 +400,7 @@ def parse_ofx_qfx(content: bytes | str) -> list[ParsedTransaction]:
             )
             parsed.finalize()
             out.append(parsed)
+    disambiguate_repeat_hashes(out)
     if not out and not list(accounts):
         raise ValueError("OFX/QFX file contains no accounts or transactions")
     return out

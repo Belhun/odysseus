@@ -314,16 +314,46 @@ def pin_account_balances(
     )
 
 
-def delete_account_for_owner(db: Session, owner: str, account_id: str) -> None:
+def delete_account_for_owner(
+    db: Session,
+    owner: str,
+    account_id: str,
+    *,
+    purge_transactions: bool = False,
+) -> int:
+    """Delete an account. Returns how many transactions went with it.
+
+    Without `purge_transactions` an account holding rows is refused, so a
+    stray click cannot wipe imported books.
+    """
+    from integrations.finance.models import FinanceImportBatch, FinanceImportPreview
+    from integrations.finance.services.movements import cleanup_orphaned_movement_groups
+    from integrations.finance.services.transactions import delete_splits_for_transactions
+
     account = _get_owned_account(db, owner, account_id)
-    tx_count = (
+    txs = (
         db.query(FinanceTransaction)
         .filter(FinanceTransaction.account_id == account_id)
-        .count()
+        .all()
     )
-    if tx_count:
+    if txs and not purge_transactions:
         raise ValueError(
-            f"Account has {tx_count} transactions; delete batches first or close account"
+            f"Account has {len(txs)} transactions; confirm deleting them or close the account"
         )
+    group_ids = {tx.movement_group_id for tx in txs if tx.movement_group_id}
+    tx_ids = [tx.id for tx in txs]
+    delete_splits_for_transactions(db, owner, tx_ids)
+    db.query(FinanceTransaction).filter(
+        FinanceTransaction.account_id == account_id
+    ).delete(synchronize_session=False)
+    # Group peers live in other accounts, so demote them after the rows are gone.
+    cleanup_orphaned_movement_groups(db, owner, group_ids)
+    db.query(FinanceImportPreview).filter(
+        FinanceImportPreview.account_id == account_id
+    ).delete(synchronize_session=False)
+    db.query(FinanceImportBatch).filter(
+        FinanceImportBatch.account_id == account_id
+    ).delete(synchronize_session=False)
     db.delete(account)
     db.commit()
+    return len(tx_ids)

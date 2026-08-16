@@ -89,6 +89,96 @@ def test_pins_endpoint_does_not_change_posted(finance_client):
 
 
 @pytest.mark.area_routes
+def test_accounts_and_categories_list_skip_movement_detect(finance_client, monkeypatch):
+    import integrations.finance.services.movements as movements
+
+    calls: list[str] = []
+
+    def _detect(*_args, **_kwargs):
+        calls.append("detect")
+        return {
+            "suggestions": [],
+            "auto_linked": [],
+            "unmatched_funding": [],
+            "unmatched_inflow": [],
+            "p2p_inflows": [],
+            "heuristics_applied": 0,
+            "day_gap": 3,
+            "unmatched_count": 0,
+        }
+
+    monkeypatch.setattr(movements, "detect_movements", _detect)
+    monkeypatch.setattr(movements, "maybe_backfill_movements", lambda *_a, **_k: calls.append("backfill"))
+    finance_client.post("/api/finance/accounts", json={"name": "WF", "opening_balance_cents": 0})
+    _import_csv(finance_client, finance_client.get("/api/finance/accounts").json()["accounts"][0]["id"], "wells.csv", WELLS_FARGO_SAMPLE)
+    calls.clear()
+    listed = finance_client.get("/api/finance/accounts")
+    cats = finance_client.get("/api/finance/categories")
+    assert listed.status_code == 200
+    assert cats.status_code == 200
+    assert calls == []
+
+
+@pytest.mark.area_routes
+def test_delete_account_needs_purge_flag_when_it_holds_rows(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "WF"}).json()
+    _import_csv(finance_client, acct["id"], "wells.csv", WELLS_FARGO_SAMPLE)
+
+    refused = finance_client.delete(f"/api/finance/accounts/{acct['id']}")
+    assert refused.status_code == 400
+    assert "transactions" in refused.json()["detail"]
+    assert finance_client.get("/api/finance/accounts").json()["accounts"]
+
+    purged = finance_client.delete(
+        f"/api/finance/accounts/{acct['id']}?purge_transactions=true"
+    )
+    assert purged.status_code == 200
+    assert purged.json()["deleted_transactions"] == 2
+    assert finance_client.get("/api/finance/accounts").json()["accounts"] == []
+    assert finance_client.get("/api/finance/import/batches").json()["batches"] == []
+
+
+@pytest.mark.area_routes
+def test_delete_empty_account_without_purge(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "Spare"}).json()
+    deleted = finance_client.delete(f"/api/finance/accounts/{acct['id']}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted_transactions"] == 0
+    assert finance_client.get("/api/finance/accounts").json()["accounts"] == []
+    assert finance_client.delete(f"/api/finance/accounts/{acct['id']}").status_code == 404
+
+
+@pytest.mark.area_routes
+def test_delete_account_unlinks_transfer_peer_in_other_account(finance_client):
+    wells = finance_client.post("/api/finance/accounts", json={"name": "WF"}).json()
+    trip = finance_client.post(
+        "/api/finance/accounts", json={"name": "Trip", "purpose": "trip"}
+    ).json()
+    out_leg = finance_client.post("/api/finance/transactions", json={
+        "account_id": wells["id"], "date": "2026-06-01",
+        "amount_cents": -50000, "payee": "TO TRIP",
+    }).json()
+    in_leg = finance_client.post("/api/finance/transactions", json={
+        "account_id": trip["id"], "date": "2026-06-01",
+        "amount_cents": 50000, "payee": "FROM WELLS",
+    }).json()
+    linked = finance_client.post(
+        "/api/finance/movements/link", json={"tx_ids": [out_leg["id"], in_leg["id"]]}
+    )
+    assert linked.status_code == 200
+
+    purged = finance_client.delete(
+        f"/api/finance/accounts/{trip['id']}?purge_transactions=true"
+    )
+    assert purged.status_code == 200
+    survivor = finance_client.get(
+        "/api/finance/transactions", params={"account_id": wells["id"]}
+    ).json()["transactions"][0]
+    assert survivor["movement_group_id"] is None
+    assert survivor["movement_class"] is None
+
+
+@pytest.mark.area_routes
 def test_import_and_batch_delete_never_touch_pins(finance_client):
     acct = finance_client.post("/api/finance/accounts", json={
         "name": "WF",
@@ -431,6 +521,44 @@ def test_import_commit_releases_savepoints_for_large_files(finance_client):
     )
     assert listed.status_code == 200
     assert listed.json()["total"] == 1200
+
+
+@pytest.mark.area_routes
+def test_same_day_same_amount_zelle_repeats_import_and_retry(finance_client):
+    header = (
+        "Posting Date,Transaction Date,Amount,Credit Debit Indicator,type,Type Group,"
+        "Reference,Instructed Currency,Currency Exchange Rate,Instructed Amount,"
+        "Description,Category,Check Serial Number,Card Ending,Rewards Total,Rewards Type\n"
+    )
+    zelle = "12/15/2025,12/15/2025,75.00,Credit,Transfer,Transfer,,,,,Transfer from Zelle,Transfers,,,,\n"
+    acct = finance_client.post("/api/finance/accounts", json={"name": "NFCU"}).json()
+    first_preview, first_commit = _import_csv(
+        finance_client, acct["id"], "nfcu.csv", header + zelle
+    )
+    assert first_preview["new_count"] == 1
+    assert first_commit["imported_count"] == 1
+
+    retry_preview, retry_commit = _import_csv(
+        finance_client, acct["id"], "nfcu.csv", header + zelle + zelle
+    )
+    assert retry_preview["duplicate_count"] == 1
+    assert retry_preview["new_count"] == 1
+    assert retry_commit["imported_count"] == 1
+    listed = finance_client.get(
+        "/api/finance/transactions", params={"account_id": acct["id"]}
+    ).json()
+    assert listed["total"] == 2
+
+    again_preview, again_commit = _import_csv(
+        finance_client, acct["id"], "nfcu.csv", header + zelle + zelle
+    )
+    assert again_preview["new_count"] == 0
+    assert again_preview["duplicate_count"] == 2
+    assert again_commit["imported_count"] == 0
+    listed_again = finance_client.get(
+        "/api/finance/transactions", params={"account_id": acct["id"]}
+    ).json()
+    assert listed_again["total"] == 2
 
 
 @pytest.mark.area_routes

@@ -189,6 +189,12 @@ def _migrate_trustworthy_books_schema(engine) -> None:
                 "CREATE INDEX ix_finance_tx_owner_group "
                 "ON finance_transactions (owner, movement_group_id)",
             )
+            _ensure_index(
+                conn,
+                "ix_finance_tx_account_date",
+                "CREATE INDEX ix_finance_tx_account_date "
+                "ON finance_transactions (account_id, date)",
+            )
 
         conn.commit()
 
