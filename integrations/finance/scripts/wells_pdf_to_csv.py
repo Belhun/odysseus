@@ -4,6 +4,7 @@ Run from the repo root:
 
     python -m integrations.finance.scripts.wells_pdf_to_csv ^
         "C:\\Users\\You\\Downloads\\wells-pdfs" ^
+        "C:\\Users\\You\\Downloads\\checking.csv" ^
         -o "C:\\Users\\You\\Downloads\\wells-from-statements.csv"
 """
 
@@ -16,8 +17,9 @@ from pathlib import Path
 from integrations.finance.services.wells_statement_pdf import (
     WellsStatementError,
     convert_wells_statements,
-    expand_pdf_inputs,
+    expand_convert_inputs,
     format_convert_report,
+    merge_wells_bank_csvs,
     result_to_csv,
 )
 
@@ -29,7 +31,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "paths",
         nargs="+",
-        help="PDF files and/or a folder of monthly statements",
+        help="PDF files, a folder of monthly statements, and/or a Wells checking CSV "
+        "(checking.csv is fine; the filename does not need to say Wells Fargo)",
     )
     parser.add_argument(
         "-o",
@@ -45,8 +48,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        pdfs = expand_pdf_inputs(args.paths)
+        pdfs, csvs = expand_convert_inputs(args.paths)
         result = convert_wells_statements(pdfs)
+        if csvs:
+            result = merge_wells_bank_csvs(
+                result,
+                [
+                    (path.name, path.read_text(encoding="utf-8-sig", errors="replace"))
+                    for path in csvs
+                ],
+            )
     except WellsStatementError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -414,6 +414,26 @@ def test_statement_setup_enriches_thin_csv_without_duplicating(finance_client):
 
 
 @pytest.mark.area_routes
+def test_import_commit_releases_savepoints_for_large_files(finance_client):
+    """Stacked begin_nested() savepoints recurse on commit past ~1000 rows."""
+    acct = finance_client.post("/api/finance/accounts", json={"name": "WF"}).json()
+    lines = ["DATE,DESCRIPTION,AMOUNT"]
+    for i in range(1200):
+        lines.append(f"01/01/2024,Payee {i},-1.00")
+    preview, commit = _import_csv(
+        finance_client, acct["id"], "bulk.csv", "\n".join(lines) + "\n"
+    )
+    assert preview["new_count"] == 1200
+    assert commit["imported_count"] == 1200
+    listed = finance_client.get(
+        "/api/finance/transactions",
+        params={"account_id": acct["id"], "limit": 1},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 1200
+
+
+@pytest.mark.area_routes
 def test_same_day_same_amount_different_payees_do_not_merge(finance_client):
     acct = finance_client.post("/api/finance/accounts", json={"name": "WF"}).json()
     thin = """DATE,DESCRIPTION,AMOUNT

@@ -462,12 +462,11 @@ def commit_import_preview(
             statement_end=parse_optional_date(row.get("statement_end")),
             source_statement=(row.get("source_statement") or None),
         )
-        nested = db.begin_nested()
         try:
-            db.add(tx)
-            db.flush()
+            with db.begin_nested():
+                db.add(tx)
+                db.flush()
         except IntegrityError:
-            nested.rollback()
             duplicate_count += 1
             continue
         imported.append(tx)

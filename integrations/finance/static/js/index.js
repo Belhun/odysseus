@@ -765,9 +765,14 @@ async function _renderImport() {
   `;
   _panelSwap(panel, `
     <h3 style="margin-top:0;">Statement setup file</h3>
-    <p style="opacity:0.85;margin-top:0;">Upload Wells Fargo monthly statement PDFs. Odysseus builds one setup file with opening posted, daily balances, and the rest of the statement fields. Download it, then import it when you set up the account. Later bank CSVs only add new rows and fill blanks.</p>
+    <p style="opacity:0.85;margin-top:0;">No account needed yet. Upload Wells Fargo monthly statement PDFs and optionally the latest checking CSV. Odysseus builds one setup file. Then create a new account from it, or import into an account you already have.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
-      <input type="file" id="finance-stmt-files" accept=".pdf,application/pdf" multiple />
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:0.85rem;">Statement PDFs
+        <input type="file" id="finance-stmt-files" accept=".pdf,application/pdf" multiple />
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:0.85rem;">Checking CSV (optional)
+        <input type="file" id="finance-stmt-csv" accept=".csv,text/csv" multiple />
+      </label>
       <button type="button" id="finance-stmt-convert-btn" class="btn-primary">Convert statements</button>
     </div>
     <div id="finance-stmt-status"></div>
@@ -796,21 +801,118 @@ function _renderSetupConvertResult() {
   if (!resultEl || !_setupConvert) return;
   if (status) {
     status.textContent = `${_setupConvert.statement_count} statements, ${_setupConvert.transaction_count} transactions. Opening posted ${_setupConvert.opening_posted} as of ${_setupConvert.opening_as_of}.`;
+    if (_setupConvert.bank_appended_count) {
+      status.textContent += ` Added ${_setupConvert.bank_appended_count} newer posted rows from the checking CSV.`;
+    }
   }
   const warn = (_setupConvert.warnings || []).map((w) => `<li>${_escHtml(w)}</li>`).join('');
+  const acctOpts = (_accounts || []).map((a) =>
+    `<option value="${a.id}" ${a.id === _activeAccountId ? 'selected' : ''}>${_escHtml(a.name)}</option>`
+  ).join('');
   resultEl.innerHTML = `
     ${warn ? `<ul>${warn}</ul>` : ''}
-    <pre style="max-height:220px;overflow:auto;white-space:pre-wrap;font-size:0.8rem;opacity:0.9;">${_escHtml(_setupConvert.report || '')}</pre>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+    <pre style="max-height:180px;overflow:auto;white-space:pre-wrap;font-size:0.8rem;opacity:0.9;">${_escHtml(_setupConvert.report || '')}</pre>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;">
       <button type="button" id="finance-stmt-download-btn" class="btn-primary">Download setup file</button>
-      ${_activeAccountId ? '<button type="button" id="finance-stmt-import-btn">Preview import into this account</button>' : ''}
-    </div>`;
+      <button type="button" id="finance-stmt-new-acct-btn">Create a new account from this file</button>
+      ${acctOpts ? `
+        <label style="display:flex;gap:6px;align-items:center;">Import into
+          <select id="finance-stmt-import-account">${acctOpts}</select>
+        </label>
+        <button type="button" id="finance-stmt-import-btn">Preview import</button>
+      ` : ''}
+    </div>
+    <div id="finance-stmt-new-acct"></div>`;
   _el('finance-stmt-download-btn')?.addEventListener('click', () => {
     _downloadText(_setupConvert.filename || 'wells-from-statements.csv', _setupConvert.csv);
   });
   _el('finance-stmt-import-btn')?.addEventListener('click', () => {
-    _previewSetupFile();
+    _previewSetupFile(_el('finance-stmt-import-account')?.value);
   });
+  _el('finance-stmt-new-acct-btn')?.addEventListener('click', _renderSetupNewAccountForm);
+}
+
+function _suggestedSetupAccount() {
+  const s = _setupConvert?.suggested_account || {};
+  return {
+    name: s.name || 'Wells Fargo Checking',
+    institution: s.institution || 'Wells Fargo',
+    account_type: s.account_type || 'checking',
+    purpose: s.purpose || 'operating',
+    opening_balance_cents: s.opening_balance_cents ?? _setupConvert?.opening_posted_cents ?? 0,
+    opening_balance_date: s.opening_balance_date || _setupConvert?.opening_as_of || '',
+    mask_last4: s.mask_last4 || '',
+  };
+}
+
+function _renderSetupNewAccountForm() {
+  const host = _el('finance-stmt-new-acct');
+  if (!host) return;
+  const s = _suggestedSetupAccount();
+  const types = ['checking', 'savings', 'credit_card', 'loan', 'cash', 'other'];
+  host.innerHTML = `
+    <div style="margin-top:12px;padding:12px;border:1px solid var(--border-color,#333);border-radius:8px;">
+      <p style="margin-top:0;">Edit anything that looks wrong, then create the account. Opening posted comes from the oldest statement. Import runs next.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;">
+        <label>Name<input id="stmt-acct-name" type="text" value="${_escHtml(s.name)}" /></label>
+        <label>Institution<input id="stmt-acct-inst" type="text" value="${_escHtml(s.institution)}" /></label>
+        <label>Type
+          <select id="stmt-acct-type">
+            ${types.map((t) => `<option value="${t}" ${s.account_type === t ? 'selected' : ''}>${t}</option>`).join('')}
+          </select>
+        </label>
+        <label>Purpose
+          <select id="stmt-acct-purpose">
+            ${['operating','trip','processor'].map((t) =>
+              `<option value="${t}" ${s.purpose === t ? 'selected' : ''}>${t}</option>`).join('')}
+          </select>
+        </label>
+        <label>Last 4<input id="stmt-acct-last4" type="text" maxlength="4" value="${_escHtml(s.mask_last4)}" /></label>
+        <label>Opening posted ($)
+          <input id="stmt-acct-opening" type="number" step="0.01" value="${_centsToDollars(s.opening_balance_cents)}" />
+        </label>
+        <label>Balance as of
+          <input id="stmt-acct-opening-date" type="date" value="${_escHtml(s.opening_balance_date)}" />
+        </label>
+      </div>
+      <p id="stmt-acct-error" style="color:var(--danger,#e74c3c);font-size:0.85rem;"></p>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button type="button" id="stmt-acct-save" class="btn-primary">Create account and preview import</button>
+        <button type="button" id="stmt-acct-cancel" class="btn-secondary">Cancel</button>
+      </div>
+    </div>`;
+  _el('stmt-acct-cancel')?.addEventListener('click', () => { host.innerHTML = ''; });
+  _el('stmt-acct-save')?.addEventListener('click', _createSetupAccountAndImport);
+}
+
+async function _createSetupAccountAndImport() {
+  const err = _el('stmt-acct-error');
+  const name = _el('stmt-acct-name')?.value?.trim();
+  if (!name) {
+    if (err) err.textContent = 'Name is required.';
+    return;
+  }
+  const body = {
+    name,
+    institution: _el('stmt-acct-inst')?.value || '',
+    account_type: _el('stmt-acct-type')?.value || 'checking',
+    purpose: _el('stmt-acct-purpose')?.value || 'operating',
+    mask_last4: _el('stmt-acct-last4')?.value?.trim() || null,
+    opening_balance_cents: _dollarsToCents(_el('stmt-acct-opening')?.value) || 0,
+    opening_balance_date: _el('stmt-acct-opening-date')?.value || null,
+  };
+  try {
+    const created = await _api('/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    _activeAccountId = created.id;
+    await _loadAccounts();
+    await _previewSetupFile(created.id);
+  } catch (e) {
+    if (err) err.textContent = e.message || String(e);
+  }
 }
 
 async function _runStatementConvert() {
@@ -818,14 +920,19 @@ async function _runStatementConvert() {
   const status = _el('finance-stmt-status');
   const resultEl = _el('finance-stmt-result');
   const files = Array.from(fileInput?.files || []);
+  const csvFiles = Array.from(_el('finance-stmt-csv')?.files || []);
   if (!files.length) {
     if (status) status.textContent = 'Choose one or more Wells Fargo statement PDFs.';
     return;
   }
-  if (status) status.textContent = `Converting ${files.length} PDF${files.length === 1 ? '' : 's'}… this can take a minute for a full history.`;
+  if (status) {
+    const extra = csvFiles.length ? ` plus ${csvFiles.length} checking CSV${csvFiles.length === 1 ? '' : 's'}` : '';
+    status.textContent = `Converting ${files.length} PDF${files.length === 1 ? '' : 's'}${extra}… this can take a minute for a full history.`;
+  }
   if (resultEl) resultEl.innerHTML = '';
   const fd = new FormData();
   files.forEach((f) => fd.append('files', f));
+  csvFiles.forEach((f) => fd.append('csv_files', f));
   try {
     const data = await fetch(`${API}/statements/convert`, { method: 'POST', body: fd, credentials: 'same-origin' })
       .then(async (r) => {
@@ -844,14 +951,15 @@ async function _runStatementConvert() {
   }
 }
 
-async function _previewSetupFile() {
-  if (!_setupConvert?.csv || !_activeAccountId) return;
+async function _previewSetupFile(accountId) {
+  const id = accountId || _el('finance-stmt-import-account')?.value || _activeAccountId;
+  if (!_setupConvert?.csv || !id) return;
   const file = new File(
     [_setupConvert.csv],
     _setupConvert.filename || 'wells-from-statements.csv',
     { type: 'text/csv' },
   );
-  await _postImportPreview(file, 'csv_wells_fargo');
+  await _postImportPreview(file, 'csv_wells_fargo', id);
 }
 
 async function _runImportPreview() {
@@ -866,13 +974,18 @@ async function _runImportPreview() {
   await _postImportPreview(file, preset);
 }
 
-async function _postImportPreview(file, preset) {
+async function _postImportPreview(file, preset, accountId) {
   const status = _el('finance-import-status');
   const previewEl = _el('finance-import-preview');
+  const acct = accountId || _activeAccountId;
+  if (!acct) {
+    if (status) status.textContent = 'Pick an account, or create one from the setup file.';
+    return;
+  }
   if (status) status.textContent = 'Parsing…';
   const fd = new FormData();
   fd.append('file', file);
-  fd.append('account_id', _activeAccountId);
+  fd.append('account_id', acct);
   if (preset) fd.append('preset', preset);
   const mappingId = _el('finance-import-mapping')?.value || '';
   if (mappingId) fd.append('mapping_id', mappingId);
