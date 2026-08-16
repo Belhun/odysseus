@@ -62,6 +62,15 @@ ICS_MAX_BYTES = read_byte_limit_env(
 FINANCE_IMPORT_MAX_BYTES = read_byte_limit_env(
     "ODYSSEUS_FINANCE_IMPORT_MAX_BYTES", 10 * 1024 * 1024
 )
+FINANCE_STATEMENT_FILE_MAX_BYTES = read_byte_limit_env(
+    "ODYSSEUS_FINANCE_STATEMENT_FILE_MAX_BYTES", 8 * 1024 * 1024
+)
+FINANCE_STATEMENT_BATCH_MAX_BYTES = read_byte_limit_env(
+    "ODYSSEUS_FINANCE_STATEMENT_BATCH_MAX_BYTES", 64 * 1024 * 1024
+)
+FINANCE_STATEMENT_MAX_FILES = read_byte_limit_env(
+    "ODYSSEUS_FINANCE_STATEMENT_MAX_FILES", 150
+)
 
 
 async def read_upload_limited(upload: UploadFile, limit: int, label: str = "Upload") -> bytes:

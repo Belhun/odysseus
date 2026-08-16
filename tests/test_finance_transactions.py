@@ -117,6 +117,39 @@ def test_import_and_batch_delete_never_touch_pins(finance_client):
 
 
 @pytest.mark.area_routes
+def test_import_applies_opening_posted_from_statement_csv(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={
+        "name": "WF",
+        "opening_balance_cents": 0,
+    }).json()
+    csv_text = """# odysseus-finance: v1
+# source: wells-statement-pdf
+# opening_posted: 104.14
+# opening_as_of: 2018-12-12
+DATE,DESCRIPTION,AMOUNT,CHECK #
+12/12/2018,Test Cafe,-25.00,
+01/03/2019,Direct Deposit,50.00,
+"""
+    preview = finance_client.post(
+        "/api/finance/import/preview",
+        data={"account_id": acct["id"]},
+        files={"file": ("wells-from-statements.csv", csv_text.encode("utf-8"), "text/csv")},
+    ).json()
+    assert preview["opening"]["opening_posted_cents"] == 10414
+    assert preview["opening"]["opening_as_of"] == "2018-12-12"
+    commit = finance_client.post(
+        "/api/finance/import/commit",
+        json={"preview_id": preview["preview_id"], "apply_opening": True},
+    )
+    assert commit.status_code == 200
+    assert commit.json()["opening_applied"] is True
+    after = finance_client.get("/api/finance/accounts").json()["accounts"][0]
+    assert after["opening_balance_cents"] == 10414
+    assert after["opening_balance_date"] == "2018-12-12"
+    assert after["posted_cents"] == 10414 - 2500 + 5000
+
+
+@pytest.mark.area_routes
 def test_manual_create_void_delete_and_imported_409(finance_client):
     acct = finance_client.post("/api/finance/accounts", json={
         "name": "Cash",
@@ -304,3 +337,145 @@ def test_transfers_category_sets_transfer_class(finance_client):
     })
     assert patched.status_code == 200
     assert patched.json()["movement_class"] == "transfer"
+
+
+STATEMENT_SETUP_CSV = """# odysseus-finance: v1
+# source: wells-statement-pdf
+# opening_posted: 100.00
+# opening_as_of: 2026-06-01
+DATE,DESCRIPTION,AMOUNT,CHECK #,DAILY_BALANCE,STATEMENT_START,STATEMENT_END,SOURCE_PDF
+06/26/2026,Purchase authorized on 06/25 TEST MERCHANT PURCHASE Card 1111,-9.85,,90.15,2026-06-01,2026-06-30,jun.pdf
+06/25/2026,PAYROLL DEPOSIT,1500.00,,1600.00,2026-06-01,2026-06-30,jun.pdf
+"""
+
+
+def _import_csv(client, account_id, name, text, apply_opening=False):
+    preview = client.post(
+        "/api/finance/import/preview",
+        data={"account_id": account_id},
+        files={"file": (name, text.encode("utf-8"), "text/csv")},
+    )
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    commit = client.post(
+        "/api/finance/import/commit",
+        json={
+            "preview_id": body["preview_id"],
+            "apply_opening": apply_opening,
+        },
+    )
+    assert commit.status_code == 200, commit.text
+    return body, commit.json()
+
+
+@pytest.mark.area_routes
+def test_statement_setup_enriches_thin_csv_without_duplicating(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "WF"}).json()
+    first_preview, first_commit = _import_csv(
+        finance_client, acct["id"], "wells.csv", WELLS_FARGO_SAMPLE
+    )
+    assert first_preview["new_count"] == 2
+    assert first_commit["imported_count"] == 2
+
+    second_preview, second_commit = _import_csv(
+        finance_client, acct["id"], "wells-from-statements.csv", STATEMENT_SETUP_CSV
+    )
+    assert second_preview["new_count"] == 0
+    assert second_preview["enrich_count"] == 2
+    assert second_preview["duplicate_count"] == 0
+    assert second_commit["imported_count"] == 0
+    assert second_commit["enriched_count"] == 2
+
+    listed = finance_client.get(
+        "/api/finance/transactions", params={"account_id": acct["id"]}
+    ).json()["transactions"]
+    assert len(listed) == 2
+    by_amount = {row["amount_cents"]: row for row in listed}
+    merchant = by_amount[-985]
+    assert merchant["daily_balance_cents"] == 9015
+    assert merchant["statement_start"] == "2026-06-01"
+    assert merchant["source_statement"] == "jun.pdf"
+    assert "TEST MERCHANT PURCHASE" in merchant["payee"]
+    assert merchant["payee"].startswith("Purchase authorized")
+
+    third_preview, third_commit = _import_csv(
+        finance_client, acct["id"], "wells-from-statements.csv", STATEMENT_SETUP_CSV
+    )
+    assert third_preview["new_count"] == 0
+    assert third_preview["enrich_count"] == 0
+    assert third_preview["duplicate_count"] == 2
+    assert third_commit["imported_count"] == 0
+    assert third_commit["enriched_count"] == 0
+    listed_again = finance_client.get(
+        "/api/finance/transactions", params={"account_id": acct["id"]}
+    ).json()["transactions"]
+    assert len(listed_again) == 2
+    assert by_amount[-985]["daily_balance_cents"] == 9015
+
+
+@pytest.mark.area_routes
+def test_same_day_same_amount_different_payees_do_not_merge(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "WF"}).json()
+    thin = """DATE,DESCRIPTION,AMOUNT
+01/05/2024,Starbucks,-4.50
+01/05/2024,Uber,-4.50
+"""
+    _import_csv(finance_client, acct["id"], "thin.csv", thin)
+    setup = """DATE,DESCRIPTION,AMOUNT,DAILY_BALANCE,STATEMENT_START,STATEMENT_END,SOURCE_PDF
+01/05/2024,Starbucks,-4.50,20.00,2024-01-01,2024-01-31,jan.pdf
+01/05/2024,Uber,-4.50,15.50,2024-01-01,2024-01-31,jan.pdf
+"""
+    preview, commit = _import_csv(finance_client, acct["id"], "setup.csv", setup)
+    assert preview["new_count"] == 0
+    assert preview["enrich_count"] == 2
+    assert commit["imported_count"] == 0
+    listed = finance_client.get(
+        "/api/finance/transactions", params={"account_id": acct["id"]}
+    ).json()["transactions"]
+    assert len(listed) == 2
+    by_payee = {row["payee"]: row for row in listed}
+    assert by_payee["Starbucks"]["daily_balance_cents"] == 2000
+    assert by_payee["Uber"]["daily_balance_cents"] == 1550
+
+
+@pytest.mark.area_routes
+def test_statement_reimport_adds_only_new_rows(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "WF"}).json()
+    _import_csv(finance_client, acct["id"], "wells.csv", WELLS_FARGO_SAMPLE)
+    setup = (
+        STATEMENT_SETUP_CSV.rstrip()
+        + "\n06/27/2026,New Cafe,-3.00,,87.15,2026-06-01,2026-06-30,jun.pdf\n"
+    )
+    preview, commit = _import_csv(
+        finance_client, acct["id"], "wells-from-statements.csv", setup
+    )
+    assert preview["new_count"] == 1
+    assert preview["enrich_count"] == 2
+    assert commit["imported_count"] == 1
+    listed = finance_client.get(
+        "/api/finance/transactions", params={"account_id": acct["id"]}
+    ).json()["transactions"]
+    assert len(listed) == 3
+    cafe = next(row for row in listed if row["payee"] == "New Cafe")
+    assert cafe["daily_balance_cents"] == 8715
+
+
+@pytest.mark.area_routes
+def test_enrich_does_not_overwrite_existing_values(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "WF"}).json()
+    _import_csv(finance_client, acct["id"], "wells.csv", WELLS_FARGO_SAMPLE)
+    _import_csv(
+        finance_client, acct["id"], "wells-from-statements.csv", STATEMENT_SETUP_CSV
+    )
+    thinner = """DATE,DESCRIPTION,AMOUNT,DAILY_BALANCE
+06/26/2026,TEST MERCHANT PURCHASE,-9.85,1.00
+"""
+    preview, commit = _import_csv(finance_client, acct["id"], "later.csv", thinner)
+    assert preview["new_count"] == 0
+    assert commit["imported_count"] == 0
+    listed = finance_client.get(
+        "/api/finance/transactions", params={"account_id": acct["id"]}
+    ).json()["transactions"]
+    merchant = next(row for row in listed if row["amount_cents"] == -985)
+    assert merchant["daily_balance_cents"] == 9015
+    assert merchant["payee"].startswith("Purchase authorized")

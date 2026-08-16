@@ -109,6 +109,51 @@ def test_finance_transactions_pagination(finance_client):
 
 
 @pytest.mark.area_routes
+def test_convert_statement_pdfs_returns_setup_csv(finance_client, monkeypatch):
+    from pathlib import Path
+
+    from integrations.finance.services import wells_statement_pdf as mod
+    from tests.test_finance_wells_statement_pdf import (
+        february_statement_pages,
+        january_statement_pages,
+    )
+
+    def fake_extract(path):
+        name = Path(path).name
+        if name.startswith("jan"):
+            return january_statement_pages()
+        if name.startswith("feb"):
+            return february_statement_pages()
+        raise AssertionError(name)
+
+    monkeypatch.setattr(mod, "extract_pdf_items", fake_extract)
+    res = finance_client.post(
+        "/api/finance/statements/convert",
+        files=[
+            ("files", ("jan.pdf", b"%PDF-fake", "application/pdf")),
+            ("files", ("feb.pdf", b"%PDF-fake", "application/pdf")),
+        ],
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["statement_count"] == 2
+    assert body["transaction_count"] == 4
+    assert body["opening_posted_cents"] == 10000
+    assert body["opening_as_of"] == "2024-01-01"
+    assert body["csv"].startswith("# odysseus-finance: v1")
+    assert "DAILY_BALANCE" in body["csv"]
+
+
+@pytest.mark.area_routes
+def test_convert_statement_pdfs_rejects_non_pdf(finance_client):
+    res = finance_client.post(
+        "/api/finance/statements/convert",
+        files=[("files", ("notes.csv", b"not a pdf", "text/csv"))],
+    )
+    assert res.status_code == 400
+
+
+@pytest.mark.area_routes
 def test_plugin_install_writes_marker_and_feature(monkeypatch, tmp_path):
     plugins_root = tmp_path / "plugins"
     monkeypatch.setattr("src.plugins.registry.PLUGINS_DATA_ROOT", plugins_root)

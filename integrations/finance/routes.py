@@ -55,6 +55,13 @@ from integrations.finance.services.import_service import (
     commit_import_preview,
     rollback_import_batch,
 )
+from integrations.finance.services.wells_statement_pdf import (
+    WellsStatementError,
+    convert_wells_statement_uploads,
+    format_convert_report,
+    format_dollars,
+    result_to_csv,
+)
 from integrations.finance.services.mappings import (
     list_mappings_for_owner,
     mapping_dict,
@@ -92,7 +99,14 @@ from integrations.finance.services.transactions import (
 )
 from src.auth_helpers import require_user
 from src.plugins.registry import is_plugin_active, is_plugin_installed
-from src.upload_limits import FINANCE_IMPORT_MAX_BYTES, read_upload_limited
+from src.upload_limits import (
+    FINANCE_IMPORT_MAX_BYTES,
+    FINANCE_STATEMENT_BATCH_MAX_BYTES,
+    FINANCE_STATEMENT_FILE_MAX_BYTES,
+    FINANCE_STATEMENT_MAX_FILES,
+    format_byte_limit,
+    read_upload_limited,
+)
 
 
 def _require_finance_plugin(_request: Request) -> None:
@@ -202,6 +216,7 @@ class TransactionPatch(BaseModel):
 class ImportCommitBody(BaseModel):
     preview_id: str
     skip_duplicates: bool = True
+    apply_opening: bool = False
 
 
 class MappingSaveBody(BaseModel):
@@ -317,6 +332,10 @@ def _transaction_dict(tx: FinanceTransaction, category_name: str | None = None) 
         "import_batch_id": tx.import_batch_id,
         "movement_class": tx.movement_class,
         "movement_group_id": tx.movement_group_id,
+        "daily_balance_cents": tx.daily_balance_cents,
+        "statement_start": tx.statement_start.isoformat() if tx.statement_start else None,
+        "statement_end": tx.statement_end.isoformat() if tx.statement_end else None,
+        "source_statement": tx.source_statement,
     }
 
 
@@ -863,8 +882,61 @@ def setup_finance_routes() -> APIRouter:
 
         try:
             return await asyncio.to_thread(_run_preview)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
+        except ValueError as err:
+            raise HTTPException(400, str(err))
+
+    @router.post("/statements/convert")
+    async def convert_statement_pdfs(
+        request: Request,
+        files: list[UploadFile] = File(...),
+    ):
+        require_user(request)
+        if not files:
+            raise HTTPException(400, "Choose one or more Wells Fargo statement PDFs")
+        if len(files) > FINANCE_STATEMENT_MAX_FILES:
+            raise HTTPException(
+                400,
+                f"Too many PDFs (max {FINANCE_STATEMENT_MAX_FILES} per convert)",
+            )
+        uploads: list[tuple[str, bytes]] = []
+        total = 0
+        for upload in files:
+            data = await read_upload_limited(
+                upload, FINANCE_STATEMENT_FILE_MAX_BYTES, "Statement PDF"
+            )
+            total += len(data)
+            if total > FINANCE_STATEMENT_BATCH_MAX_BYTES:
+                raise HTTPException(
+                    413,
+                    f"Statement batch exceeds {format_byte_limit(FINANCE_STATEMENT_BATCH_MAX_BYTES)} limit",
+                )
+            name = upload.filename or "statement.pdf"
+            if not name.lower().endswith(".pdf"):
+                raise HTTPException(400, f"{name}: upload PDF statements only")
+            uploads.append((name, data))
+
+        def _run_convert():
+            return convert_wells_statement_uploads(uploads)
+
+        try:
+            result = await asyncio.to_thread(_run_convert)
+        except WellsStatementError as err:
+            raise HTTPException(400, str(err))
+
+        csv_text = result_to_csv(result)
+        return {
+            "opening_posted_cents": result.opening_posted_cents,
+            "opening_as_of": result.opening_as_of.isoformat(),
+            "opening_posted": format_dollars(result.opening_posted_cents),
+            "last_ending_cents": result.last_ending_cents,
+            "last_ending_date": result.last_ending_date.isoformat(),
+            "statement_count": len(result.statements),
+            "transaction_count": len(result.transactions),
+            "warnings": result.warnings,
+            "report": format_convert_report(result),
+            "csv": csv_text,
+            "filename": "wells-from-statements.csv",
+        }
 
     @router.post("/import/commit")
     def import_commit(request: Request, body: ImportCommitBody):
@@ -872,7 +944,8 @@ def setup_finance_routes() -> APIRouter:
         db = get_session_factory()()
         try:
             result = commit_import_preview(
-                db, user, body.preview_id, skip_duplicates=body.skip_duplicates
+                db, user, body.preview_id, skip_duplicates=body.skip_duplicates,
+                apply_opening=body.apply_opening,
             )
             return result
         except ValueError as exc:
