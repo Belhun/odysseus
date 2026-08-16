@@ -21,6 +21,7 @@ let _categories = [];
 let _activeAccountId = null;
 let _activeTab = 'transactions';
 let _preview = null;
+let _setupConvert = null;
 let _showCategoryForm = false;
 let _renderSeq = 0;
 let _txSearch = '';
@@ -737,14 +738,13 @@ async function _renderImport() {
   const panel = _el('finance-panel');
   if (!panel) return;
   _renderSeq += 1;
-  if (!_activeAccountId) {
-    _panelSwap(panel, '<p>Create an account first, then import a CSV or QFX export from your bank.</p>');
-    return;
-  }
-  const mappings = await _api('/import/mappings').catch(() => ({ mappings: [] }));
+  const mappings = _activeAccountId
+    ? await _api('/import/mappings').catch(() => ({ mappings: [] }))
+    : { mappings: [] };
   const saved = mappings.mappings || [];
-  _panelSwap(panel, `
-    <p style="opacity:0.85;margin-top:0;">Upload a CSV or QFX/OFX export from Wells Fargo, Navy Federal, or another bank. Data stays on this server.</p>
+  const bankBlock = _activeAccountId ? `
+    <h3 style="margin:24px 0 8px;">Bank export</h3>
+    <p style="opacity:0.85;margin-top:0;">After the setup file is in, upload a CSV or QFX/OFX from Wells Fargo, Navy Federal, or another bank. Matching rows are skipped. Missing statement fields are filled in. New rows are added.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
       <input type="file" id="finance-import-file" accept=".csv,.qfx,.ofx,text/csv" />
       <select id="finance-import-preset">
@@ -759,25 +759,120 @@ async function _renderImport() {
       </select>
       <button type="button" id="finance-import-preview-btn" class="btn-primary">Preview import</button>
     </div>
+  ` : `
+    <h3 style="margin:24px 0 8px;">Bank export</h3>
+    <p>Create an account first, then import the setup file or a bank CSV.</p>
+  `;
+  _panelSwap(panel, `
+    <h3 style="margin-top:0;">Statement setup file</h3>
+    <p style="opacity:0.85;margin-top:0;">Upload Wells Fargo monthly statement PDFs. Odysseus builds one setup file with opening posted, daily balances, and the rest of the statement fields. Download it, then import it when you set up the account. Later bank CSVs only add new rows and fill blanks.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+      <input type="file" id="finance-stmt-files" accept=".pdf,application/pdf" multiple />
+      <button type="button" id="finance-stmt-convert-btn" class="btn-primary">Convert statements</button>
+    </div>
+    <div id="finance-stmt-status"></div>
+    <div id="finance-stmt-result"></div>
+    ${bankBlock}
     <div id="finance-import-status"></div>
     <div id="finance-import-preview"></div>`);
+  _el('finance-stmt-convert-btn')?.addEventListener('click', _runStatementConvert);
   _el('finance-import-preview-btn')?.addEventListener('click', _runImportPreview);
+  if (_setupConvert) _renderSetupConvertResult();
+}
+
+function _downloadText(filename, text, mime) {
+  const blob = new Blob([text], { type: mime || 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function _renderSetupConvertResult() {
+  const resultEl = _el('finance-stmt-result');
+  const status = _el('finance-stmt-status');
+  if (!resultEl || !_setupConvert) return;
+  if (status) {
+    status.textContent = `${_setupConvert.statement_count} statements, ${_setupConvert.transaction_count} transactions. Opening posted ${_setupConvert.opening_posted} as of ${_setupConvert.opening_as_of}.`;
+  }
+  const warn = (_setupConvert.warnings || []).map((w) => `<li>${_escHtml(w)}</li>`).join('');
+  resultEl.innerHTML = `
+    ${warn ? `<ul>${warn}</ul>` : ''}
+    <pre style="max-height:220px;overflow:auto;white-space:pre-wrap;font-size:0.8rem;opacity:0.9;">${_escHtml(_setupConvert.report || '')}</pre>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+      <button type="button" id="finance-stmt-download-btn" class="btn-primary">Download setup file</button>
+      ${_activeAccountId ? '<button type="button" id="finance-stmt-import-btn">Preview import into this account</button>' : ''}
+    </div>`;
+  _el('finance-stmt-download-btn')?.addEventListener('click', () => {
+    _downloadText(_setupConvert.filename || 'wells-from-statements.csv', _setupConvert.csv);
+  });
+  _el('finance-stmt-import-btn')?.addEventListener('click', () => {
+    _previewSetupFile();
+  });
+}
+
+async function _runStatementConvert() {
+  const fileInput = _el('finance-stmt-files');
+  const status = _el('finance-stmt-status');
+  const resultEl = _el('finance-stmt-result');
+  const files = Array.from(fileInput?.files || []);
+  if (!files.length) {
+    if (status) status.textContent = 'Choose one or more Wells Fargo statement PDFs.';
+    return;
+  }
+  if (status) status.textContent = `Converting ${files.length} PDF${files.length === 1 ? '' : 's'}… this can take a minute for a full history.`;
+  if (resultEl) resultEl.innerHTML = '';
+  const fd = new FormData();
+  files.forEach((f) => fd.append('files', f));
+  try {
+    const data = await fetch(`${API}/statements/convert`, { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) {
+          const detail = d.detail;
+          throw new Error(typeof detail === 'string' ? detail : (detail && JSON.stringify(detail)) || 'Convert failed');
+        }
+        return d;
+      });
+    _setupConvert = data;
+    _renderSetupConvertResult();
+  } catch (err) {
+    if (status) status.textContent = err.message || String(err);
+    if (resultEl) resultEl.innerHTML = '';
+  }
+}
+
+async function _previewSetupFile() {
+  if (!_setupConvert?.csv || !_activeAccountId) return;
+  const file = new File(
+    [_setupConvert.csv],
+    _setupConvert.filename || 'wells-from-statements.csv',
+    { type: 'text/csv' },
+  );
+  await _postImportPreview(file, 'csv_wells_fargo');
 }
 
 async function _runImportPreview() {
   const fileInput = _el('finance-import-file');
   const status = _el('finance-import-status');
-  const previewEl = _el('finance-import-preview');
   const file = fileInput?.files?.[0];
   if (!file) {
     if (status) status.textContent = 'Choose a file first.';
     return;
   }
+  const preset = _el('finance-import-preset')?.value || '';
+  await _postImportPreview(file, preset);
+}
+
+async function _postImportPreview(file, preset) {
+  const status = _el('finance-import-status');
+  const previewEl = _el('finance-import-preview');
   if (status) status.textContent = 'Parsing…';
   const fd = new FormData();
   fd.append('file', file);
   fd.append('account_id', _activeAccountId);
-  const preset = _el('finance-import-preset')?.value || '';
   if (preset) fd.append('preset', preset);
   const mappingId = _el('finance-import-mapping')?.value || '';
   if (mappingId) fd.append('mapping_id', mappingId);
@@ -797,20 +892,33 @@ async function _runImportPreview() {
       _renderMappingForm(_preview, previewEl);
       return;
     }
-    if (status) status.textContent = `${_preview.new_count} new, ${_preview.duplicate_count} duplicates (${_preview.format})`;
+    const enrich = _preview.enrich_count || 0;
+    if (status) {
+      status.textContent = `${_preview.new_count} new, ${enrich} filled from this file, ${_preview.duplicate_count} already in the books (${_preview.format})`;
+    }
     const rows = (_preview.rows || []).slice(0, 100).map((r) =>
-      `<tr style="${r.status === 'duplicate' ? 'opacity:0.5' : ''}${r.status === 'possible_manual_duplicate' ? ';outline:1px solid var(--warn,#f1c40f)' : ''}">
+      `<tr style="${r.status === 'duplicate' ? 'opacity:0.5' : ''}${r.status === 'enrich' ? ';background:rgba(46,204,113,0.12)' : ''}${r.status === 'possible_manual_duplicate' ? ';outline:1px solid var(--warn,#f1c40f)' : ''}">
         <td>${r.date}</td><td>${_escHtml(r.payee)}</td><td style="text-align:right;">${_fmtMoney(r.amount_cents)}</td><td>${_escHtml(r.status)}</td>
       </tr>`
     ).join('');
+    const importLabel = enrich
+      ? `Import ${_preview.new_count} new and fill ${enrich}`
+      : `Import ${_preview.new_count} transactions`;
     previewEl.innerHTML = `
       ${_preview.warning ? `<p style="color:var(--warn,#f1c40f);">${_escHtml(_preview.warning)}</p>` : ''}
+      ${_preview.opening ? `<p>This file includes opening posted <strong>${_fmtMoney(_preview.opening.opening_posted_cents)}</strong> as of ${_escHtml(_preview.opening.opening_as_of)}.</p>
+        <label style="display:flex;gap:8px;align-items:center;margin:8px 0;">
+          <input type="checkbox" id="finance-import-apply-opening" ${_preview.opening.account_has_opening ? '' : 'checked'} />
+          Apply opening posted to this account
+        </label>
+        ${_preview.opening.account_has_opening ? '<p style="font-size:0.85rem;opacity:0.8;">This account already has an opening posted. Check the box only if you want to replace it.</p>' : ''}
+      ` : ''}
       <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
         <thead><tr><th>Date</th><th>Payee</th><th>Amount</th><th>Status</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
       ${(_preview.rows || []).length > 100 ? '<p>Showing first 100 rows…</p>' : ''}
-      <button type="button" id="finance-import-commit-btn" class="btn-primary" style="margin-top:12px;">Import ${_preview.new_count} transactions</button>`;
+      <button type="button" id="finance-import-commit-btn" class="btn-primary" style="margin-top:12px;">${importLabel}</button>`;
     _el('finance-import-commit-btn')?.addEventListener('click', _commitImport);
   } catch (err) {
     if (status) status.textContent = err.message || String(err);
@@ -869,13 +977,20 @@ async function _commitImport() {
   if (!_preview?.preview_id) return;
   const status = _el('finance-import-status');
   try {
+    const applyOpening = !!_el('finance-import-apply-opening')?.checked;
     const result = await _api('/import/commit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ preview_id: _preview.preview_id, skip_duplicates: true }),
+      body: JSON.stringify({
+        preview_id: _preview.preview_id,
+        skip_duplicates: true,
+        apply_opening: applyOpening,
+      }),
     });
     if (status) {
       status.textContent = `Imported ${result.imported_count} transactions (${result.duplicate_count} skipped as duplicates).`;
+      if (result.enriched_count) status.textContent += ` Filled ${result.enriched_count} existing rows.`;
+      if (result.opening_applied) status.textContent += ' Opening posted applied from the file.';
       if (result.warning) status.textContent += ` ${result.warning}`;
     }
     _preview = null;

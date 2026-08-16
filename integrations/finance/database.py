@@ -155,6 +155,10 @@ def _migrate_trustworthy_books_schema(engine) -> None:
         _ensure_column(conn, "finance_transactions", "movement_class", "TEXT")
         _ensure_column(conn, "finance_transactions", "movement_group_id", "TEXT")
         _ensure_column(conn, "finance_transactions", "match_hash", "TEXT")
+        _ensure_column(conn, "finance_transactions", "daily_balance_cents", "INTEGER")
+        _ensure_column(conn, "finance_transactions", "statement_start", "DATE")
+        _ensure_column(conn, "finance_transactions", "statement_end", "DATE")
+        _ensure_column(conn, "finance_transactions", "source_statement", "TEXT")
 
         _ensure_column(conn, "finance_recurring_series", "category_id", "TEXT")
         _ensure_column(conn, "finance_recurring_series", "movement_class", "TEXT")

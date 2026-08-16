@@ -59,7 +59,18 @@ bad-date,10.00,BROKEN
 
 
 @pytest.mark.area_routes
-def test_parse_upload_empty_file_raises():
+def test_parse_wells_statement_setup_extra_columns():
+    csv_text = """DATE,DESCRIPTION,AMOUNT,CHECK #,DAILY_BALANCE,STATEMENT_START,STATEMENT_END,SOURCE_PDF
+01/05/2024,Test Cafe,-10.00,,90.00,2024-01-01,2024-01-31,jan.pdf
+"""
+    result = parse_wells_fargo_csv(csv_text)
+    assert result.errors == []
+    tx = result.transactions[0]
+    assert tx.amount_cents == -1000
+    assert tx.daily_balance_cents == 9000
+    assert tx.statement_start.isoformat() == "2024-01-01"
+    assert tx.statement_end.isoformat() == "2024-01-31"
+    assert tx.source_statement == "jan.pdf"
     with pytest.raises(ValueError, match="empty"):
         parse_upload("data.csv", b"")
 

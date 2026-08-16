@@ -114,6 +114,7 @@ def test_init_adds_trustworthy_columns_to_old_db(migrated_old_db):
         assert tx.source == "import"
         assert tx.movement_class is None
         assert tx.movement_group_id is None
+        assert tx.daily_balance_cents is None
         assert tx.date == date(2026, 6, 1)
         assert tx.amount_cents == -4000
     finally:
@@ -147,6 +148,9 @@ def test_fresh_create_all_has_new_tables_and_columns(monkeypatch, tmp_path):
     assert "available_cents" in acct_cols
     assert "movement_class" in tx_cols
     assert "source" in tx_cols
+    assert "daily_balance_cents" in tx_cols
+    assert "statement_start" in tx_cols
+    assert "source_statement" in tx_cols
     finance_db.reset_engine_cache()
 
 
@@ -227,4 +231,7 @@ def test_run_install_twice_migrates_existing_v010_db(monkeypatch, tmp_path):
     assert "available_cents" in acct_cols
     assert "movement_class" in tx_cols
     assert "source" in tx_cols
+    assert "daily_balance_cents" in tx_cols
+    assert "statement_start" in tx_cols
+    assert "source_statement" in tx_cols
     finance_db.reset_engine_cache()

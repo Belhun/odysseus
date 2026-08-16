@@ -53,6 +53,10 @@ def test_direct_upload_routes_use_bounded_reads():
         "routes/email_routes.py": [
             "read_upload_limited(file, EMAIL_COMPOSE_UPLOAD_MAX_BYTES",
         ],
+        "integrations/finance/routes.py": [
+            "read_upload_limited(file, FINANCE_IMPORT_MAX_BYTES",
+            "FINANCE_STATEMENT_FILE_MAX_BYTES",
+        ],
     }
 
     for path, needles in expectations.items():

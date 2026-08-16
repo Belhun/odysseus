@@ -37,6 +37,10 @@ class ParsedTransaction:
     fitid: str | None = None
     bank_category: str | None = None
     dedup_hash: str = ""
+    daily_balance_cents: int | None = None
+    statement_start: date | None = None
+    statement_end: date | None = None
+    source_statement: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     def finalize(self, account_id: str = "") -> None:
@@ -87,13 +91,31 @@ def _parse_date(raw: str, date_format: str | None = None) -> date:
     raise ValueError(f"unrecognized date: {raw!r}")
 
 
+def parse_csv_metadata(content: str) -> tuple[dict[str, str], str]:
+    """Split leading `# key: value` comments from the CSV body."""
+    meta: dict[str, str] = {}
+    body: list[str] = []
+    leading = True
+    for line in content.splitlines(keepends=True):
+        if leading and line.lstrip().startswith("#"):
+            match = re.match(r"^\s*#\s*([A-Za-z0-9_-]+)\s*:\s*(.*?)\s*$", line)
+            if match:
+                key = match.group(1).lower().replace("-", "_")
+                meta[key] = match.group(2).strip()
+            continue
+        leading = False
+        body.append(line)
+    return meta, "".join(body)
+
+
 def _read_csv_dicts(content: str) -> list[dict[str, str]]:
-    sample = content[:4096]
+    _meta, body = parse_csv_metadata(content)
+    sample = body[:4096]
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
     except csv.Error:
         dialect = csv.excel
-    reader = csv.DictReader(io.StringIO(content), dialect=dialect)
+    reader = csv.DictReader(io.StringIO(body), dialect=dialect)
     if not reader.fieldnames:
         raise ValueError("CSV has no header row")
     rows: list[dict[str, str]] = []
@@ -115,6 +137,33 @@ def _get_col(row: dict[str, str], *names: str) -> str:
         if key and row.get(key, "").strip():
             return row[key].strip()
     return ""
+
+
+def _statement_fields(row: dict[str, str]) -> dict[str, Any]:
+    """Optional statement-setup columns. Bad extras are skipped; the row still imports."""
+    extra: dict[str, Any] = {}
+    daily_raw = _get_col(row, "DAILY_BALANCE", "Daily Balance")
+    if daily_raw:
+        try:
+            extra["daily_balance_cents"] = _parse_decimal_amount(daily_raw)
+        except ValueError:
+            pass
+    start_raw = _get_col(row, "STATEMENT_START", "Statement Start")
+    if start_raw:
+        try:
+            extra["statement_start"] = _parse_date(start_raw)
+        except ValueError:
+            pass
+    end_raw = _get_col(row, "STATEMENT_END", "Statement End")
+    if end_raw:
+        try:
+            extra["statement_end"] = _parse_date(end_raw)
+        except ValueError:
+            pass
+    source = _get_col(row, "SOURCE_PDF", "Source PDF", "SOURCE_STATEMENT")
+    if source:
+        extra["source_statement"] = source[:500]
+    return extra
 
 
 def detect_csv_format(content: str) -> str:
@@ -148,6 +197,7 @@ def parse_wells_fargo_csv(content: str) -> ParseResult:
                 payee=payee,
                 check_number=check_no,
                 raw=dict(row),
+                **_statement_fields(row),
             )
             tx.finalize()
             out.append(tx)
@@ -182,6 +232,7 @@ def parse_navy_federal_csv(content: str) -> ParseResult:
                 payee=payee,
                 bank_category=bank_cat,
                 raw=dict(row),
+                **_statement_fields(row),
             )
             tx.finalize()
             out.append(tx)
@@ -252,6 +303,7 @@ def parse_generic_csv(
                 fitid=fitid,
                 bank_category=bank_category,
                 raw=dict(row),
+                **_statement_fields(row),
             )
             tx.finalize()
             out.append(tx)
@@ -353,6 +405,15 @@ def parse_upload(
     if fmt == "ofx":
         return "ofx", parse_ofx_qfx(content), [], extra
     text = content.decode("utf-8", errors="replace")
+    meta, body = parse_csv_metadata(text)
+    extra["file_meta"] = meta
+    if meta.get("opening_posted"):
+        try:
+            extra["opening_posted_cents"] = _parse_decimal_amount(meta["opening_posted"])
+        except ValueError:
+            extra["opening_posted_cents"] = None
+    if meta.get("opening_as_of"):
+        extra["opening_as_of"] = meta["opening_as_of"]
     csv_preset = preset or fmt
     rows = _read_csv_dicts(text) if csv_preset != "ofx" else []
     headers = list(rows[0].keys()) if rows else []

@@ -127,6 +127,10 @@ class FinanceTransaction(TimestampMixin, FinanceBase):
     bank_category = Column(String, nullable=True)
     movement_class = Column(String, nullable=True)
     movement_group_id = Column(String, nullable=True)
+    daily_balance_cents = Column(Integer, nullable=True)
+    statement_start = Column(Date, nullable=True)
+    statement_end = Column(Date, nullable=True)
+    source_statement = Column(String, nullable=True)
 
     account = relationship("FinanceAccount", back_populates="transactions")
 

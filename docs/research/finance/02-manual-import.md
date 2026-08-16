@@ -203,7 +203,7 @@ Normalize payee: uppercase, strip punctuation, collapse whitespace.
 
 ## Open questions
 
-- Support **PDF statement parsing**? High effort; defer unless strong user demand
+- Support **PDF statement parsing** in the Finance upload UI? Deferred. CLI converter: `python -m integrations.finance.scripts.wells_pdf_to_csv`
 - **QIF** format? Older banks; low priority
 - Store original file blob encrypted for audit, or discard after parse?
 
