@@ -404,6 +404,77 @@ def test_convert_uploads_uses_original_filenames(tmp_path, monkeypatch):
     assert {t.source_pdf for t in result.transactions} == {"jan.pdf", "feb.pdf"}
 
 
+BANK_CHECKING_CSV = '''"DATE","DESCRIPTION","AMOUNT","CHECK #","STATUS"
+"01/05/2024","Test Cafe","-10.00","","Posted"
+"01/05/2024","Test Cafe","-10.00","","Posted"
+"01/10/2024","Direct Deposit Employer","50.00","","Posted"
+"01/31/2024","Monthly Service Fee","-15.00","","Posted"
+"02/05/2024","New Merchant","-3.00","","Posted"
+"02/06/2024","Pending Coffee","-4.00","","Pending"
+'''
+
+
+@pytest.mark.area_routes
+def test_merge_checking_csv_keeps_statement_overlap_and_appends_newer(tmp_path, monkeypatch):
+    from integrations.finance.services import wells_statement_pdf as mod
+    from integrations.finance.services.wells_statement_pdf import (
+        convert_wells_statement_uploads,
+        is_wells_bank_csv_filename,
+        merge_wells_bank_csvs,
+    )
+
+    def fake_extract(path):
+        name = Path(path).name
+        if name.startswith("jan"):
+            return january_statement_pages()
+        raise AssertionError(name)
+
+    monkeypatch.setattr(mod, "extract_pdf_items", fake_extract)
+    assert is_wells_bank_csv_filename(Path("checking.csv"))
+    assert is_wells_bank_csv_filename(Path("Wells fargo Checking.csv"))
+    assert not is_wells_bank_csv_filename(Path("wells-from-statements.csv"))
+
+    result = convert_wells_statement_uploads([("jan.pdf", b"%PDF")])
+    assert len(result.transactions) == 3
+    cafe = next(t for t in result.transactions if t.amount_cents == -1000)
+    assert cafe.daily_balance_cents == 9000
+
+    merged = merge_wells_bank_csvs(result, [("checking.csv", BANK_CHECKING_CSV)])
+    assert merged.bank_matched_count == 3
+    assert merged.bank_appended_count == 1
+    assert merged.bank_skipped_pending_count == 1
+    assert merged.bank_skipped_overlap_count == 1
+    assert len(merged.transactions) == 4
+    still_cafe = next(t for t in merged.transactions if t.amount_cents == -1000)
+    assert still_cafe.daily_balance_cents == 9000
+    assert "Test Cafe" in still_cafe.payee
+    assert still_cafe.source_pdf == "jan.pdf"
+    newest = merged.transactions[-1]
+    assert newest.date == date(2024, 2, 5)
+    assert newest.amount_cents == -300
+    assert newest.daily_balance_cents is None
+    assert newest.source_pdf == "checking.csv"
+
+
+@pytest.mark.area_routes
+def test_folder_picks_checking_csv_without_wells_in_filename(tmp_path, monkeypatch):
+    from integrations.finance.services import wells_statement_pdf as mod
+    from integrations.finance.services.wells_statement_pdf import expand_convert_inputs
+
+    def fake_extract(path):
+        return january_statement_pages()
+
+    monkeypatch.setattr(mod, "extract_pdf_items", fake_extract)
+    folder = tmp_path / "stmts"
+    folder.mkdir()
+    (folder / "011019 WellsFargo.pdf").write_bytes(b"%PDF")
+    (folder / "checking.csv").write_text(BANK_CHECKING_CSV, encoding="utf-8")
+    (folder / "notes.csv").write_text("foo,bar\n1,2\n", encoding="utf-8")
+    pdfs, csvs = expand_convert_inputs([folder])
+    assert [p.name for p in pdfs] == ["011019 WellsFargo.pdf"]
+    assert [p.name for p in csvs] == ["checking.csv"]
+
+
 @pytest.mark.area_routes
 @pytest.mark.skipif(not JAN_PDF.exists(), reason="local 2019 Wells PDF missing")
 def test_live_2019_packed_statement():

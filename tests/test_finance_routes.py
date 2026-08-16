@@ -140,8 +140,44 @@ def test_convert_statement_pdfs_returns_setup_csv(finance_client, monkeypatch):
     assert body["transaction_count"] == 4
     assert body["opening_posted_cents"] == 10000
     assert body["opening_as_of"] == "2024-01-01"
+    assert body["suggested_account"]["institution"] == "Wells Fargo"
+    assert body["suggested_account"]["account_type"] == "checking"
+    assert body["suggested_account"]["opening_balance_cents"] == 10000
+    assert body["suggested_account"]["opening_balance_date"] == "2024-01-01"
+    assert "Everyday Checking" in body["suggested_account"]["name"]
     assert body["csv"].startswith("# odysseus-finance: v1")
     assert "DAILY_BALANCE" in body["csv"]
+
+
+@pytest.mark.area_routes
+def test_convert_statement_pdfs_merges_checking_csv(finance_client, monkeypatch):
+    from pathlib import Path
+
+    from integrations.finance.services import wells_statement_pdf as mod
+    from tests.test_finance_wells_statement_pdf import (
+        BANK_CHECKING_CSV,
+        january_statement_pages,
+    )
+
+    def fake_extract(path):
+        return january_statement_pages()
+
+    monkeypatch.setattr(mod, "extract_pdf_items", fake_extract)
+    res = finance_client.post(
+        "/api/finance/statements/convert",
+        files=[
+            ("files", ("jan.pdf", b"%PDF-fake", "application/pdf")),
+            ("csv_files", ("checking.csv", BANK_CHECKING_CSV.encode("utf-8"), "text/csv")),
+        ],
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["statement_count"] == 1
+    assert body["transaction_count"] == 4
+    assert body["bank_appended_count"] == 1
+    assert body["bank_matched_count"] == 3
+    assert "New Merchant" in body["csv"]
+    assert body["csv"].count("Test Cafe") == 1
 
 
 @pytest.mark.area_routes

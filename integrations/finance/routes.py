@@ -61,6 +61,7 @@ from integrations.finance.services.wells_statement_pdf import (
     format_convert_report,
     format_dollars,
     result_to_csv,
+    suggested_account_fields,
 )
 from integrations.finance.services.mappings import (
     list_mappings_for_owner,
@@ -889,6 +890,7 @@ def setup_finance_routes() -> APIRouter:
     async def convert_statement_pdfs(
         request: Request,
         files: list[UploadFile] = File(...),
+        csv_files: list[UploadFile] | None = File(None),
     ):
         require_user(request)
         if not files:
@@ -914,9 +916,24 @@ def setup_finance_routes() -> APIRouter:
             if not name.lower().endswith(".pdf"):
                 raise HTTPException(400, f"{name}: upload PDF statements only")
             uploads.append((name, data))
+        bank_uploads: list[tuple[str, bytes]] = []
+        for upload in csv_files or []:
+            data = await read_upload_limited(
+                upload, FINANCE_IMPORT_MAX_BYTES, "Checking CSV"
+            )
+            total += len(data)
+            if total > FINANCE_STATEMENT_BATCH_MAX_BYTES:
+                raise HTTPException(
+                    413,
+                    f"Statement batch exceeds {format_byte_limit(FINANCE_STATEMENT_BATCH_MAX_BYTES)} limit",
+                )
+            name = upload.filename or "checking.csv"
+            if not name.lower().endswith(".csv"):
+                raise HTTPException(400, f"{name}: bank export must be a CSV")
+            bank_uploads.append((name, data))
 
         def _run_convert():
-            return convert_wells_statement_uploads(uploads)
+            return convert_wells_statement_uploads(uploads, bank_csvs=bank_uploads)
 
         try:
             result = await asyncio.to_thread(_run_convert)
@@ -932,10 +949,13 @@ def setup_finance_routes() -> APIRouter:
             "last_ending_date": result.last_ending_date.isoformat(),
             "statement_count": len(result.statements),
             "transaction_count": len(result.transactions),
+            "bank_appended_count": result.bank_appended_count,
+            "bank_matched_count": result.bank_matched_count,
             "warnings": result.warnings,
             "report": format_convert_report(result),
             "csv": csv_text,
             "filename": "wells-from-statements.csv",
+            "suggested_account": suggested_account_fields(result),
         }
 
     @router.post("/import/commit")

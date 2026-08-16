@@ -149,6 +149,11 @@ class ConvertResult:
     last_ending_date: date
     statements: list[ParsedStatement]
     warnings: list[str] = field(default_factory=list)
+    bank_csv_names: list[str] = field(default_factory=list)
+    bank_matched_count: int = 0
+    bank_appended_count: int = 0
+    bank_skipped_pending_count: int = 0
+    bank_skipped_overlap_count: int = 0
 
 
 def parse_money_cents(raw: str) -> int:
@@ -755,7 +760,10 @@ def _normalize_payee(payee: str) -> str:
     return re.sub(r"\s+", " ", (payee or "").strip().upper())
 
 
-def convert_wells_statement_uploads(files: Sequence[tuple[str, bytes]]) -> ConvertResult:
+def convert_wells_statement_uploads(
+    files: Sequence[tuple[str, bytes]],
+    bank_csvs: Sequence[tuple[str, bytes]] | None = None,
+) -> ConvertResult:
     """Parse uploaded PDFs from memory. Writes a temp dir, then uses the path converter."""
     if not files:
         raise WellsStatementError("no PDF files given")
@@ -778,7 +786,16 @@ def convert_wells_statement_uploads(files: Sequence[tuple[str, bytes]]) -> Conve
             dest = root / dest_name
             dest.write_bytes(data)
             paths.append(dest)
-        return convert_wells_statements(paths)
+        result = convert_wells_statements(paths)
+    if bank_csvs:
+        texts: list[tuple[str, str]] = []
+        for name, data in bank_csvs:
+            label = Path(name or "checking.csv").name or "checking.csv"
+            if not data:
+                raise WellsStatementError(f"{label}: file is empty")
+            texts.append((label, data.decode("utf-8-sig", errors="replace")))
+        result = merge_wells_bank_csvs(result, texts)
+    return result
 
 
 def convert_wells_statements(paths: Iterable[Path]) -> ConvertResult:
@@ -852,6 +869,151 @@ def convert_wells_statements(paths: Iterable[Path]) -> ConvertResult:
     )
 
 
+def _payees_close(left: str, right: str) -> bool:
+    a = _normalize_payee(left)
+    b = _normalize_payee(right)
+    if not a or not b:
+        return True
+    if a == b:
+        return True
+    return a in b or b in a
+
+
+def _claim_statement_match(
+    date_value: date,
+    amount_cents: int,
+    payee: str,
+    by_date_amount: dict[tuple, list[int]],
+    txns: Sequence[StatementTxn],
+    claimed: set[int],
+) -> int | None:
+    candidates = [
+        idx for idx in by_date_amount.get((date_value, amount_cents), []) if idx not in claimed
+    ]
+    if not candidates:
+        return None
+    equal = [idx for idx in candidates if _normalize_payee(txns[idx].payee) == _normalize_payee(payee)]
+    if equal:
+        return equal[0]
+    close = [idx for idx in candidates if _payees_close(txns[idx].payee, payee)]
+    if close:
+        return close[0]
+    return None
+
+
+def is_odysseus_setup_csv(text: str) -> bool:
+    from integrations.finance.services.parsers import parse_csv_metadata
+
+    meta, _body = parse_csv_metadata(text)
+    source = (meta.get("source") or "").lower()
+    return bool(meta.get("odysseus_finance") or source == "wells-statement-pdf")
+
+
+def sniff_wells_bank_csv_text(text: str) -> bool:
+    from integrations.finance.services.parsers import detect_csv_format
+
+    if is_odysseus_setup_csv(text):
+        return False
+    try:
+        return detect_csv_format(text) == "csv_wells_fargo"
+    except ValueError:
+        return False
+
+
+def is_wells_bank_csv_filename(path: Path) -> bool:
+    if path.suffix.lower() != ".csv":
+        return False
+    compact = path.name.lower().replace(" ", "").replace("_", "").replace("-", "")
+    return "checking" in compact
+
+
+def merge_wells_bank_csvs(
+    result: ConvertResult,
+    csvs: Sequence[tuple[str, str]],
+) -> ConvertResult:
+    """Keep statement rows for overlap. Append posted bank-export rows after the last statement."""
+    from collections import defaultdict
+
+    from integrations.finance.services.parsers import parse_wells_fargo_csv
+
+    if not csvs:
+        return result
+    by_date_amount: dict[tuple, list[int]] = defaultdict(list)
+    for idx, txn in enumerate(result.transactions):
+        by_date_amount[(txn.date, txn.amount_cents)].append(idx)
+    claimed: set[int] = set()
+    appended: list[StatementTxn] = []
+    matched = 0
+    skipped_pending = 0
+    skipped_overlap = 0
+    names: list[str] = []
+    cutoff = result.last_ending_date
+    for name, text in csvs:
+        label = Path(name or "checking.csv").name or "checking.csv"
+        if not text.strip():
+            raise WellsStatementError(f"{label}: file is empty")
+        if is_odysseus_setup_csv(text):
+            raise WellsStatementError(
+                f"{label}: this is a statement setup file, not a bank export CSV"
+            )
+        if not sniff_wells_bank_csv_text(text):
+            raise WellsStatementError(
+                f"{label}: not a Wells Fargo checking CSV (need DATE, DESCRIPTION, AMOUNT)"
+            )
+        names.append(label)
+        parsed = parse_wells_fargo_csv(text)
+        for tx in parsed.transactions:
+            status = ""
+            if tx.raw:
+                status = (tx.raw.get("STATUS") or tx.raw.get("Status") or "").strip().lower()
+            if status == "pending":
+                skipped_pending += 1
+                continue
+            hit = _claim_statement_match(
+                tx.date,
+                tx.amount_cents,
+                tx.payee,
+                by_date_amount,
+                result.transactions,
+                claimed,
+            )
+            if hit is not None:
+                claimed.add(hit)
+                matched += 1
+                continue
+            if tx.date <= cutoff:
+                skipped_overlap += 1
+                continue
+            appended.append(
+                StatementTxn(
+                    date=tx.date,
+                    amount_cents=tx.amount_cents,
+                    payee=tx.payee,
+                    check_number=tx.check_number,
+                    daily_balance_cents=None,
+                    source_pdf=label,
+                    statement_start=None,
+                    statement_end=None,
+                )
+            )
+    numbered = [(txn.date, 0, idx, txn) for idx, txn in enumerate(result.transactions)]
+    numbered.extend((txn.date, 1, idx, txn) for idx, txn in enumerate(appended))
+    numbered.sort()
+    result.transactions = [txn for _date, _kind, _idx, txn in numbered]
+    result.bank_csv_names = names
+    result.bank_matched_count = matched
+    result.bank_appended_count = len(appended)
+    result.bank_skipped_pending_count = skipped_pending
+    result.bank_skipped_overlap_count = skipped_overlap
+    if names:
+        result.warnings.append(
+            f"Bank export {', '.join(names)}: kept {matched} overlapping posted rows from statements, "
+            f"added {len(appended)} newer posted rows, skipped {skipped_pending} pending, "
+            f"skipped {skipped_overlap} extra overlap rows"
+        )
+    return result
+
+
 def transactions_to_csv(txns: Sequence[StatementTxn]) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\n")
@@ -901,6 +1063,8 @@ def result_to_csv(result: ConvertResult) -> str:
             f"# statement_count: {len(result.statements)}",
             f"# transaction_count: {len(result.transactions)}",
             f"# product: {product}",
+            f"# bank_csv: {', '.join(result.bank_csv_names)}" if result.bank_csv_names else "# bank_csv:",
+            f"# bank_appended: {result.bank_appended_count}",
         ]
     )
     return header + "\n" + transactions_to_csv(result.transactions)
@@ -915,8 +1079,14 @@ def format_convert_report(result: ConvertResult) -> str:
         f"Last statement ending: {format_dollars(result.last_ending_cents)} on {result.last_ending_date.isoformat()}",
         "",
         "This CSV includes opening posted. Import it in Finance and apply opening posted",
-        "when the account is empty. Skip pending bank-export rows if you add a later CSV.",
+        "when the account is empty. Overlap with a later bank CSV stays on the statement rows.",
     ]
+    if result.bank_csv_names:
+        lines.append(
+            f"Bank export: {', '.join(result.bank_csv_names)}. "
+            f"Added {result.bank_appended_count} newer posted rows after the last statement. "
+            f"Newer bank-export rows have no daily balance."
+        )
     if result.warnings:
         lines.append("")
         lines.append("Warnings:")
@@ -934,24 +1104,67 @@ def format_convert_report(result: ConvertResult) -> str:
     return "\n".join(lines) + "\n"
 
 
+def suggested_account_fields(result: ConvertResult) -> dict:
+    """Fill a new Finance account from statement metadata. User can edit the rest."""
+    stmt = result.statements[0] if result.statements else None
+    product = (stmt.product or "").strip() if stmt else ""
+    last4s = {s.account_last4 for s in (result.statements or []) if s.account_last4}
+    last4 = next(iter(last4s)) if len(last4s) == 1 else None
+    lower = product.lower()
+    account_type = "savings" if "saving" in lower else "checking"
+    return {
+        "name": (product or "Wells Fargo Checking")[:200],
+        "institution": "Wells Fargo",
+        "account_type": account_type,
+        "purpose": "operating",
+        "opening_balance_cents": result.opening_posted_cents,
+        "opening_balance_date": result.opening_as_of.isoformat() if result.opening_as_of else None,
+        "mask_last4": last4,
+    }
+
+
 def is_wells_statement_filename(path: Path) -> bool:
     name = path.name.lower().replace(" ", "").replace("_", "")
     return path.suffix.lower() == ".pdf" and "wellsfargo" in name
 
 
 def expand_pdf_inputs(raw_paths: Sequence[str | Path]) -> list[Path]:
-    out: list[Path] = []
+    pdfs, _csvs = expand_convert_inputs(raw_paths)
+    return pdfs
+
+
+def expand_convert_inputs(raw_paths: Sequence[str | Path]) -> tuple[list[Path], list[Path]]:
+    pdfs: list[Path] = []
+    csvs: list[Path] = []
     for raw in raw_paths:
         path = Path(raw)
         if path.is_dir():
-            found = sorted(p for p in path.iterdir() if is_wells_statement_filename(p))
-            if not found:
+            found_pdfs = sorted(p for p in path.iterdir() if is_wells_statement_filename(p))
+            if not found_pdfs:
                 raise WellsStatementError(f"no Wells Fargo statement PDFs in {path}")
-            out.extend(found)
+            pdfs.extend(found_pdfs)
+            csvs.extend(
+                sorted(
+                    p
+                    for p in path.iterdir()
+                    if is_wells_bank_csv_filename(p) and sniff_wells_bank_csv_text(
+                        p.read_text(encoding="utf-8-sig", errors="replace")
+                    )
+                )
+            )
+        elif path.is_file() and path.suffix.lower() == ".pdf":
+            pdfs.append(path)
+        elif path.is_file() and path.suffix.lower() == ".csv":
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
+            if not sniff_wells_bank_csv_text(text):
+                raise WellsStatementError(
+                    f"{path.name}: not a Wells Fargo checking CSV (need DATE, DESCRIPTION, AMOUNT)"
+                )
+            csvs.append(path)
         elif path.is_file():
-            out.append(path)
+            raise WellsStatementError(f"{path.name}: expected a statement PDF or Wells checking CSV")
         else:
             raise WellsStatementError(f"not found: {path}")
-    if not out:
+    if not pdfs:
         raise WellsStatementError("no PDF files")
-    return out
+    return pdfs, csvs
