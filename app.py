@@ -1311,6 +1311,15 @@ async def _startup_event():
     except Exception as e:
         logger.warning("Performance tracking samplers failed to start: %s", e)
 
+    try:
+        from src.plugins.registry import is_plugin_installed
+        from integrations.finance.services.movements import schedule_movement_warmup
+
+        if is_plugin_installed("finance"):
+            schedule_movement_warmup()
+    except Exception as e:
+        logger.debug("Finance movement warmup skipped: %s", e)
+
     logger.info("Application startup complete")
 
 async def _shutdown_event():

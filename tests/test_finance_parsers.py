@@ -46,6 +46,22 @@ def test_parse_navy_federal_debit_credit_indicator():
 
 
 @pytest.mark.area_routes
+def test_parse_navy_federal_keeps_identical_zelle_repeats():
+    csv_text = """Posting Date,Transaction Date,Amount,Credit Debit Indicator,type,Type Group,Reference,Instructed Currency,Currency Exchange Rate,Instructed Amount,Description,Category,Check Serial Number,Card Ending,Rewards Total,Rewards Type
+12/15/2025,12/15/2025,75.00,Credit,Transfer,Transfer,,,,,Transfer from Zelle,Transfers,,,,
+12/15/2025,12/15/2025,75.00,Credit,Transfer,Transfer,,,,,Transfer from Zelle,Transfers,,,,
+"""
+    result = parse_navy_federal_csv(csv_text)
+    assert len(result.transactions) == 2
+    assert result.transactions[0].amount_cents == 7500
+    assert result.transactions[1].amount_cents == 7500
+    assert result.transactions[0].payee == result.transactions[1].payee
+    assert result.transactions[0].dedup_hash != result.transactions[1].dedup_hash
+    single = parse_navy_federal_csv("\n".join(csv_text.splitlines()[:2]) + "\n")
+    assert result.transactions[0].dedup_hash == single.transactions[0].dedup_hash
+
+
+@pytest.mark.area_routes
 def test_csv_parser_skips_bad_rows_and_reports_errors():
     csv_text = """DATE,AMOUNT,DESCRIPTION
 01/15/2024,-9.85,GROCERY

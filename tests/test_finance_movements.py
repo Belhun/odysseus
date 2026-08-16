@@ -325,3 +325,59 @@ def test_rollback_batch_demotes_surviving_linked_peer(finance_db_env):
         assert cf["income_cents"] == 0
     finally:
         db.close()
+
+
+@pytest.mark.area_routes
+def test_maybe_backfill_runs_once_per_owner(finance_db_env, monkeypatch):
+    from integrations.finance.services import movements as movements_mod
+
+    owner = finance_db_env["owner"]
+    db = finance_db_env["session_factory"]()
+    calls = {"n": 0}
+
+    def _fake_detect(*args, **kwargs):
+        calls["n"] += 1
+        return {
+            "suggestions": [],
+            "auto_linked": [],
+            "unmatched_funding": [],
+            "unmatched_inflow": [],
+            "p2p_inflows": [],
+            "heuristics_applied": 0,
+            "day_gap": 3,
+            "unmatched_count": 0,
+        }
+
+    monkeypatch.setattr(movements_mod, "detect_movements", _fake_detect)
+    monkeypatch.setattr(movements_mod, "apply_payee_heuristics", lambda *a, **k: 0)
+    try:
+        wells = _acct(db, owner, "Wells")
+        _tx(db, owner, wells.id, -400, "Coffee")
+        movements_mod.maybe_backfill_movements(db, owner)
+        movements_mod.maybe_backfill_movements(db, owner)
+        assert calls["n"] == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.area_routes
+def test_detect_indexes_opposite_amount_among_many_unmatched(finance_db_env):
+    owner = finance_db_env["owner"]
+    db = finance_db_env["session_factory"]()
+    try:
+        wells = _acct(db, owner, "Wells")
+        trip = _acct(db, owner, "Trip", purpose="trip")
+        for i in range(80):
+            _tx(db, owner, wells.id, -(1000 + i), f"Spend {i}", day=1 + (i % 28))
+            _tx(db, owner, trip.id, 2000 + i, f"In {i}", day=1 + (i % 28))
+        _tx(db, owner, wells.id, -50000, "NAVY FEDERAL", day=10)
+        _tx(db, owner, trip.id, 50000, "WELLS", day=10)
+        result = detect_movements(db, owner, auto_link=True)
+        assert len(result["auto_linked"]) == 1
+        linked = db.query(FinanceTransaction).filter(
+            FinanceTransaction.owner == owner,
+            FinanceTransaction.movement_group_id.isnot(None),
+        ).count()
+        assert linked == 2
+    finally:
+        db.close()
