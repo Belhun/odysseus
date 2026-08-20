@@ -624,7 +624,7 @@ async def test_manage_finance_create_rule_auto_applies_existing(finance_tool_env
         session_id="sess-rule",
     )
     assert result.get("exit_code") == 0
-    assert "Categorized 1 existing" in (result.get("response") or "")
+    assert "changed=1" in (result.get("response") or "")
 
     db = finance_tool_env["session_factory"]()
     try:
@@ -898,6 +898,362 @@ async def test_manage_finance_list_shows_class_and_unclassified_filter(finance_t
     assert "WHOLE FOODS" not in (only_null.get("response") or "")
 
 
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_agent_search_matches_payee_or_memo_tokens(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(
+            id="acct-search", owner=owner, name="Checking", account_type="checking",
+        ))
+        tx = FinanceTransaction(
+            id="tx-voice-aaaa-bbbb-cccc-ddddeeeeffff",
+            owner=owner,
+            account_id="acct-search",
+            date=__import__("datetime").date(2026, 6, 1),
+            amount_cents=-1200,
+            payee="GOOGLE SERVICES",
+            memo="GOOGLE *VOICE one-time",
+            dedup_hash="voice-memo",
+        )
+        db.add(tx)
+        db.commit()
+    finally:
+        db.close()
+
+    result = await do_manage_finance(
+        json.dumps({
+            "action": "list_transactions",
+            "search": "GOOGLE VOICE",
+        }),
+        owner=owner,
+    )
+    assert result.get("exit_code") == 0
+    assert "GOOGLE SERVICES" in (result.get("response") or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_agent_listing_bounds_negative_limit_and_final_page(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(
+            id="acct-page", owner=owner, name="Checking", account_type="checking",
+        ))
+        for i in range(30):
+            _seed_tx(
+                db,
+                owner,
+                acct_id="acct-page",
+                tx_id=f"tx-page-{i:04d}-aaaa-bbbb-cccc-ddddeeeeffff",
+                payee=f"MERCHANT {i}",
+            )
+        db.commit()
+    finally:
+        db.close()
+
+    bounded = await do_manage_finance(
+        json.dumps({"action": "list_transactions", "limit": -1}),
+        owner=owner,
+    )
+    assert "showing 1 of 30" in (bounded.get("response") or "")
+
+    final_page = await do_manage_finance(
+        json.dumps({"action": "list_transactions", "limit": 25, "offset": 25}),
+        owner=owner,
+    )
+    assert "showing 5 of 30" in (final_page.get("response") or "")
+    assert "next page" not in (final_page.get("response") or "").lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_apply_to_payee_never_exceeds_500_rows(finance_tool_env, monkeypatch):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(
+            id="acct-cap", owner=owner, name="Checking", account_type="checking",
+        ))
+        for i in range(600):
+            _seed_tx(
+                db,
+                owner,
+                acct_id="acct-cap",
+                tx_id=f"tx-cap-{i:04d}-aaaa-bbbb-cccc-ddddeeeeffff",
+                payee="DICE & DRIP",
+            )
+        db.commit()
+    finally:
+        db.close()
+    monkeypatch.setattr(
+        "src.confirmation_gates.core.auto_approve_finance_enabled",
+        lambda user: user == owner,
+    )
+
+    first = await do_manage_finance(
+        json.dumps({
+            "action": "classify_transaction",
+            "transaction_ids": ["tx-cap-0000"],
+            "movement_class": "spend",
+            "apply_to_payee": True,
+        }),
+        owner=owner,
+        session_id="sess-cap",
+    )
+    assert first.get("exit_code") == 0
+    assert "updated=500" in (first.get("response") or "")
+    assert "remaining=100" in (first.get("response") or "")
+
+    db = finance_tool_env["session_factory"]()
+    try:
+        assert db.query(FinanceTransaction).filter_by(
+            owner=owner, movement_class="spend"
+        ).count() == 500
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_classify_by_category_skips_p2p_sign_and_transfers(finance_tool_env, monkeypatch):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(
+            id="acct-safe", owner=owner, name="Checking", account_type="checking",
+        ))
+        db.add_all([
+            FinanceCategory(
+                id="cat-subs", owner=owner, name="Subscriptions", is_income=False,
+            ),
+            FinanceCategory(
+                id="cat-transfer", owner=owner, name="Transfers (label only)", is_income=False,
+            ),
+        ])
+        _seed_tx(
+            db, owner, acct_id="acct-safe", tx_id="tx-zelle-in",
+            payee="ZELLE FROM MOM", amount_cents=2500, category_id="cat-subs",
+        )
+        _seed_tx(
+            db, owner, acct_id="acct-safe", tx_id="tx-zelle-out",
+            payee="ZELLE TO MOM", amount_cents=-2500, category_id="cat-subs",
+        )
+        _seed_tx(
+            db, owner, acct_id="acct-safe", tx_id="tx-netflix",
+            payee="NETFLIX", amount_cents=-1599, category_id="cat-subs",
+        )
+        _seed_tx(
+            db, owner, acct_id="acct-safe", tx_id="tx-transfer-label",
+            payee="BANK TRANSFER", amount_cents=-5000, category_id="cat-transfer",
+        )
+        db.commit()
+    finally:
+        db.close()
+    monkeypatch.setattr(
+        "src.confirmation_gates.core.auto_approve_finance_enabled",
+        lambda user: user == owner,
+    )
+
+    result = await do_manage_finance(
+        json.dumps({
+            "action": "classify_by_category",
+            "category_id": "cat-subs",
+        }),
+        owner=owner,
+        session_id="sess-safe",
+    )
+    assert result.get("exit_code") == 0, result
+    assert "updated=1" in (result.get("response") or "")
+
+    transfers = await do_manage_finance(
+        json.dumps({
+            "action": "classify_by_category",
+            "category_id": "cat-transfer",
+        }),
+        owner=owner,
+        session_id="sess-safe",
+    )
+    assert transfers.get("exit_code") == 0
+    assert "updated=0" in (transfers.get("response") or "")
+
+    db = finance_tool_env["session_factory"]()
+    try:
+        rows = {
+            tx.id: tx for tx in db.query(FinanceTransaction).filter_by(owner=owner).all()
+        }
+        assert rows["tx-netflix"].movement_class == "spend"
+        assert rows["tx-zelle-in"].movement_class is None
+        assert rows["tx-zelle-out"].movement_class is None
+        assert rows["tx-transfer-label"].movement_class is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_one_confirmation_reused_for_category_continuation(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(
+            id="acct-loop", owner=owner, name="Checking", account_type="checking",
+        ))
+        db.add(FinanceCategory(
+            id="cat-loop", owner=owner, name="Dining", is_income=False,
+        ))
+        for i in range(501):
+            _seed_tx(
+                db,
+                owner,
+                acct_id="acct-loop",
+                tx_id=f"tx-loop-{i:04d}-aaaa-bbbb-cccc-ddddeeeeffff",
+                payee=f"COFFEE {i % 3}",
+                category_id="cat-loop",
+            )
+        db.commit()
+    finally:
+        db.close()
+
+    token, error = mint_confirmation(
+        session_id="sess-loop",
+        owner=owner,
+        domain="finance",
+        tool_name="manage_finance",
+        action="classify_by_category",
+        payload={
+            "category_id": "cat-loop",
+            "movement_class": "spend",
+            "overwrite": False,
+            "max_updates": 500,
+            "max_uses": 2,
+        },
+    )
+    assert error is None
+    approve_pending_choice(
+        token=token,
+        session_id="sess-loop",
+        owner=owner,
+        choice="Yes",
+    )
+    call = {
+        "action": "classify_by_category",
+        "category_id": "cat-loop",
+        "confirmation_token": token,
+    }
+    first = await do_manage_finance(
+        json.dumps(call), owner=owner, session_id="sess-loop",
+    )
+    second = await do_manage_finance(
+        json.dumps(call), owner=owner, session_id="sess-loop",
+    )
+    assert "updated=500" in (first.get("response") or "")
+    assert "remaining=1" in (first.get("response") or "")
+    assert "updated=1" in (second.get("response") or "")
+    assert "remaining=0" in (second.get("response") or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_rule_apply_existing_is_fill_only_unless_overwrite(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(
+            id="acct-rule-overwrite", owner=owner, name="Checking", account_type="checking",
+        ))
+        db.add_all([
+            FinanceCategory(id="cat-old", owner=owner, name="Utilities", is_income=False),
+            FinanceCategory(id="cat-new", owner=owner, name="Phone", is_income=False),
+        ])
+        _seed_tx(
+            db,
+            owner,
+            acct_id="acct-rule-overwrite",
+            tx_id="tx-rule-overwrite",
+            payee="GOOGLE *VOICE",
+            category_id="cat-old",
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    async def create(overwrite, session_id):
+        payload = {
+            "pattern": r"^GOOGLE \*VOICE$",
+            "category_id": "cat-new",
+            "priority": 10,
+            "apply_existing": True,
+            "overwrite": overwrite,
+            "max_updates": 500,
+        }
+        token, _ = mint_confirmation(
+            session_id=session_id,
+            owner=owner,
+            domain="finance",
+            tool_name="manage_finance",
+            action="create_rule",
+            payload=payload,
+        )
+        approve_pending_choice(
+            token=token, session_id=session_id, owner=owner, choice="Yes",
+        )
+        return await do_manage_finance(
+            json.dumps({
+                "action": "create_rule",
+                **payload,
+                "confirmation_token": token,
+            }),
+            owner=owner,
+            session_id=session_id,
+        )
+
+    fill_only = await create(False, "sess-rule-fill")
+    assert "changed=0" in (fill_only.get("response") or "")
+    overwritten = await create(True, "sess-rule-overwrite")
+    assert "changed=1" in (overwritten.get("response") or "")
+
+    db = finance_tool_env["session_factory"]()
+    try:
+        tx = db.query(FinanceTransaction).filter_by(id="tx-rule-overwrite").one()
+        assert tx.category_id == "cat-new"
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_classification_status_reports_remaining_without_rows(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(
+            id="acct-status", owner=owner, name="Checking", account_type="checking",
+        ))
+        _seed_tx(
+            db, owner, acct_id="acct-status", tx_id="tx-status-null",
+            payee="MYSTERY", amount_cents=-500,
+        )
+        _seed_tx(
+            db, owner, acct_id="acct-status", tx_id="tx-status-spend",
+            payee="DINER", amount_cents=-800, movement_class="spend",
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    result = await do_manage_finance(
+        json.dumps({"action": "classification_status"}),
+        owner=owner,
+    )
+    response = result.get("response") or ""
+    assert "total=2" in response
+    assert "'unclassified': 1" in response
+    assert "tx-status" not in response
+
+
 FINANCE_READ_ACTIONS = {
     "list_accounts",
     "list_transactions",
@@ -912,6 +1268,8 @@ FINANCE_READ_ACTIONS = {
     "list_import_batches",
     "list_planned",
     "job_scenario",
+    "test_rule",
+    "classification_status",
 }
 
 FINANCE_PAPER_WRITES = {

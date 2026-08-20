@@ -264,7 +264,7 @@ def _validate_create_rule(payload: dict[str, Any], tool_args: dict[str, Any]) ->
 
     actual_pattern = str(tool_args.get("pattern") or "").strip().lower()
 
-    if expected_pattern and actual_pattern != expected_pattern:
+    if not expected_pattern or actual_pattern != expected_pattern:
 
         return "Confirmed rule pattern does not match tool call"
 
@@ -274,16 +274,100 @@ def _validate_create_rule(payload: dict[str, Any], tool_args: dict[str, Any]) ->
 
         actual = str(tool_args.get("category_id") or "").strip()
 
-        if actual and not _id_prefix_matches(expected, actual):
+        if not actual or not _id_prefix_matches(expected, actual):
 
             return "Confirmed category does not match tool call"
 
-    if payload.get("priority") is not None and tool_args.get("priority") is not None:
+    expected_class = str(payload.get("movement_class") or "").strip().lower()
+    actual_class = str(tool_args.get("movement_class") or "").strip().lower()
+    if expected_class != actual_class:
+        return "Confirmed movement_class does not match tool call"
 
-        if int(tool_args["priority"]) != int(payload["priority"]):
+    if int(tool_args.get("priority") or 100) != int(payload.get("priority") or 100):
 
-            return "Confirmed rule priority does not match tool call"
+        return "Confirmed rule priority does not match tool call"
 
+    if bool(tool_args.get("apply_existing", True)) != bool(
+        payload.get("apply_existing", True)
+    ):
+        return "Confirmed apply_existing does not match tool call"
+    if bool(tool_args.get("overwrite")) != bool(payload.get("overwrite")):
+        return "Confirmed overwrite does not match tool call"
+    if int(tool_args.get("max_updates") or 500) != int(
+        payload.get("max_updates") or 500
+    ):
+        return "Confirmed max_updates does not match tool call"
+
+    return None
+
+
+def _validate_apply_rule(
+    payload: dict[str, Any],
+    tool_args: dict[str, Any],
+) -> Optional[str]:
+    expected = str(payload.get("rule_id") or "").strip()
+    actual = str(tool_args.get("rule_id") or "").strip()
+    if not expected or not _id_prefix_matches(expected, actual):
+        return "Confirmed rule_id does not match tool call"
+    if bool(payload.get("overwrite")) != bool(tool_args.get("overwrite")):
+        return "Confirmed overwrite does not match tool call"
+    if int(payload.get("max_updates") or 500) != int(
+        tool_args.get("max_updates") or 500
+    ):
+        return "Confirmed max_updates does not match tool call"
+    return None
+
+
+def _validate_classify_by_category(
+    payload: dict[str, Any],
+    tool_args: dict[str, Any],
+) -> Optional[str]:
+    expected_category = str(payload.get("category_id") or "").strip()
+    actual_category = str(tool_args.get("category_id") or "").strip()
+    if not expected_category or not _id_prefix_matches(
+        expected_category, actual_category
+    ):
+        return "Confirmed category_id does not match tool call"
+    expected_class = str(payload.get("movement_class") or "").strip().lower()
+    actual_class = str(tool_args.get("movement_class") or "").strip().lower()
+    if not expected_class or expected_class != actual_class:
+        return "Confirmed movement_class does not match tool call"
+    if bool(payload.get("overwrite")) != bool(tool_args.get("overwrite")):
+        return "Confirmed overwrite does not match tool call"
+    if int(payload.get("max_updates") or 500) != int(
+        tool_args.get("max_updates") or 500
+    ):
+        return "Confirmed max_updates does not match tool call"
+    return None
+
+
+def _canonical_filter_payload(data: dict[str, Any]) -> dict[str, Any]:
+    raw = data.get("filters")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in raw.items()
+        if value not in (None, "")
+    }
+
+
+def _validate_classify_by_filter(
+    payload: dict[str, Any],
+    tool_args: dict[str, Any],
+) -> Optional[str]:
+    expected_class = str(payload.get("movement_class") or "").strip().lower()
+    actual_class = str(tool_args.get("movement_class") or "").strip().lower()
+    if not expected_class or expected_class != actual_class:
+        return "Confirmed movement_class does not match tool call"
+    if _canonical_filter_payload(payload) != _canonical_filter_payload(tool_args):
+        return "Confirmed filters do not match tool call"
+    if bool(payload.get("overwrite")) != bool(tool_args.get("overwrite")):
+        return "Confirmed overwrite does not match tool call"
+    if int(payload.get("max_updates") or 500) != int(
+        tool_args.get("max_updates") or 500
+    ):
+        return "Confirmed max_updates does not match tool call"
     return None
 
 
@@ -487,6 +571,12 @@ def register_finance_confirmation_gate() -> None:
                 "set_budget": _validate_set_budget,
 
                 "create_rule": _validate_create_rule,
+
+                "apply_rule": _validate_apply_rule,
+
+                "classify_by_category": _validate_classify_by_category,
+
+                "classify_by_filter": _validate_classify_by_filter,
 
                 "categorize_transaction": _validate_categorize_transaction,
 

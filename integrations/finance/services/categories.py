@@ -125,6 +125,17 @@ def is_transfers_label_category(cat: FinanceCategory | None) -> bool:
     return (cat.name or "").strip().lower().startswith("transfers")
 
 
+def rule_matches_payee(pattern: str, payee: str) -> bool:
+    """Use the live regex matcher with the legacy literal fallback."""
+    clean_pattern = (pattern or "").strip()
+    if not clean_pattern:
+        return False
+    try:
+        return re.search(clean_pattern, payee or "", re.IGNORECASE) is not None
+    except re.error:
+        return clean_pattern.upper() in (payee or "").upper()
+
+
 def ensure_default_categories(db: Session, owner: str) -> None:
     renamed = False
     for cat in (
@@ -206,30 +217,181 @@ def apply_rules_to_transactions(db: Session, owner: str, transactions: list[Fina
     categories = {c.id: c for c in db.query(FinanceCategory).filter(FinanceCategory.owner == owner).all()}
     categorized = 0
     for tx in transactions:
-        if tx.category_id:
+        if tx.category_id and tx.movement_class:
             continue
-        payee = (tx.payee or "").upper()
         for rule in rules:
-            pattern = (rule.pattern or "").strip()
-            if not pattern:
+            if not rule_matches_payee(rule.pattern or "", tx.payee or ""):
                 continue
-            try:
-                if re.search(pattern, payee, re.IGNORECASE):
-                    if rule.category_id and rule.category_id in categories and not tx.category_id:
-                        tx.category_id = rule.category_id
-                        categorized += 1
-                    if getattr(rule, "movement_class", None) and not tx.movement_class:
-                        tx.movement_class = rule.movement_class
-                    break
-            except re.error:
-                if pattern.upper() in payee:
-                    if rule.category_id and not tx.category_id:
-                        tx.category_id = rule.category_id
-                        categorized += 1
-                    if getattr(rule, "movement_class", None) and not tx.movement_class:
-                        tx.movement_class = rule.movement_class
-                    break
+            if rule.category_id and rule.category_id in categories and not tx.category_id:
+                tx.category_id = rule.category_id
+                categorized += 1
+            if getattr(rule, "movement_class", None) and not tx.movement_class:
+                from integrations.finance.services.movements import resolve_stored_class
+
+                tx.movement_class = resolve_stored_class(
+                    db, owner, tx, rule.movement_class
+                )
+            if tx.category_id and tx.movement_class:
+                break
     return categorized
+
+
+def _rule_projection(
+    db: Session,
+    owner: str,
+    tx: FinanceTransaction,
+    *,
+    category_id: str | None,
+    movement_class: str | None,
+    overwrite: bool,
+) -> tuple[bool, str | None]:
+    stored_class = None
+    if movement_class:
+        from integrations.finance.services.movements import resolve_stored_class
+
+        stored_class = resolve_stored_class(db, owner, tx, movement_class)
+    needs_category = bool(
+        category_id
+        and (tx.category_id is None or (overwrite and tx.category_id != category_id))
+    )
+    needs_class = bool(
+        stored_class
+        and (
+            tx.movement_class is None
+            or (overwrite and tx.movement_class != stored_class)
+        )
+    )
+    return needs_category or needs_class, stored_class
+
+
+def apply_rule_to_transactions(
+    db: Session,
+    owner: str,
+    rule: FinanceCategorizationRule,
+    *,
+    overwrite: bool = False,
+    max_updates: int = 500,
+    commit: bool = True,
+) -> dict:
+    """Apply one owner-scoped rule field-by-field and cap changed rows."""
+    if rule.owner != owner:
+        raise ValueError("Rule not found")
+    cap = max(1, min(int(max_updates), 500))
+    rows = (
+        db.query(FinanceTransaction)
+        .filter(
+            FinanceTransaction.owner == owner,
+            (FinanceTransaction.status.is_(None)) | (FinanceTransaction.status != "void"),
+        )
+        .order_by(FinanceTransaction.date.asc(), FinanceTransaction.id.asc())
+        .all()
+    )
+    matches = [
+        tx for tx in rows
+        if rule_matches_payee(rule.pattern or "", tx.payee or "")
+    ]
+    eligible: list[tuple[FinanceTransaction, str | None]] = []
+    for tx in matches:
+        needs_change, stored_class = _rule_projection(
+            db,
+            owner,
+            tx,
+            category_id=rule.category_id,
+            movement_class=rule.movement_class,
+            overwrite=overwrite,
+        )
+        if needs_change:
+            eligible.append((tx, stored_class))
+    changed = eligible[:cap]
+    for tx, stored_class in changed:
+        if rule.category_id and (
+            tx.category_id is None or (overwrite and tx.category_id != rule.category_id)
+        ):
+            tx.category_id = rule.category_id
+        if stored_class and (
+            tx.movement_class is None
+            or (overwrite and tx.movement_class != stored_class)
+        ):
+            tx.movement_class = stored_class
+    if commit:
+        db.commit()
+    return {
+        "rule_id": rule.id,
+        "matched": len(matches),
+        "eligible": len(eligible),
+        "changed": len(changed),
+        "remaining": max(0, len(eligible) - len(changed)),
+    }
+
+
+def test_rule_matches(
+    db: Session,
+    owner: str,
+    *,
+    pattern: str,
+    category_id: str | None = None,
+    movement_class: str | None = None,
+    overwrite: bool = False,
+) -> dict:
+    """Preview a proposed rule with distinct-payee collision samples."""
+    clean_pattern = (pattern or "").strip()
+    if not clean_pattern:
+        raise ValueError("Rule pattern is required")
+    if len(clean_pattern) > 200:
+        raise ValueError("Rule pattern must be at most 200 characters")
+    if movement_class:
+        from integrations.finance.services.transactions import validate_movement_class
+
+        movement_class = validate_movement_class(movement_class, allow_null=False)
+    rows = (
+        db.query(FinanceTransaction)
+        .filter(
+            FinanceTransaction.owner == owner,
+            (FinanceTransaction.status.is_(None)) | (FinanceTransaction.status != "void"),
+        )
+        .order_by(FinanceTransaction.date.asc(), FinanceTransaction.id.asc())
+        .all()
+    )
+    matches = [tx for tx in rows if rule_matches_payee(clean_pattern, tx.payee or "")]
+    fill_eligible = 0
+    overwrite_changes = 0
+    samples: list[dict] = []
+    seen: set[str] = set()
+    for tx in matches:
+        fill, _ = _rule_projection(
+            db,
+            owner,
+            tx,
+            category_id=category_id,
+            movement_class=movement_class,
+            overwrite=False,
+        )
+        replace, _ = _rule_projection(
+            db,
+            owner,
+            tx,
+            category_id=category_id,
+            movement_class=movement_class,
+            overwrite=True,
+        )
+        fill_eligible += int(fill)
+        overwrite_changes += int(replace)
+        payee_key = (tx.payee or "").strip().upper()
+        if payee_key not in seen and len(samples) < 10:
+            seen.add(payee_key)
+            samples.append({
+                "payee": tx.payee or "(no payee)",
+                "amount_cents": tx.amount_cents,
+                "category_id": tx.category_id,
+                "movement_class": tx.movement_class,
+            })
+    return {
+        "matched": len(matches),
+        "fill_eligible": fill_eligible,
+        "overwrite_changes": overwrite_changes,
+        "selected_changes": overwrite_changes if overwrite else fill_eligible,
+        "samples": samples,
+    }
 
 
 def create_category_for_owner(
@@ -312,12 +474,21 @@ def create_rule_for_owner(
     movement_class: str | None = None,
     priority: int = 100,
     apply_existing: bool = True,
+    overwrite: bool = False,
+    max_updates: int = 500,
+    commit: bool = True,
 ) -> FinanceCategorizationRule:
     clean_pattern = pattern.strip()
     if not clean_pattern:
         raise ValueError("Rule pattern is required")
+    if len(clean_pattern) > 200:
+        raise ValueError("Rule pattern must be at most 200 characters")
     if not category_id and not movement_class:
         raise ValueError("category_id or movement_class is required")
+    if movement_class:
+        from integrations.finance.services.transactions import validate_movement_class
+
+        movement_class = validate_movement_class(movement_class, allow_null=False)
     if category_id:
         cat = (
             db.query(FinanceCategory)
@@ -337,13 +508,17 @@ def create_rule_for_owner(
     db.add(rule)
     db.flush()
     if apply_existing:
-        existing = (
-            db.query(FinanceTransaction)
-            .filter(FinanceTransaction.owner == owner)
-            .all()
+        result = apply_rule_to_transactions(
+            db,
+            owner,
+            rule,
+            overwrite=overwrite,
+            max_updates=max_updates,
+            commit=False,
         )
-        apply_rules_to_transactions(db, owner, existing)
-    db.commit()
+        setattr(rule, "application_result", result)
+    if commit:
+        db.commit()
     return rule
 
 

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import re
 from datetime import date
 from typing import Any, Dict, Optional
 
@@ -19,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 
-_MAX_TX_LIMIT = 200
+_MAX_TX_LIMIT = 500
 _MAX_BULK_TX = 500
 
 
@@ -70,9 +72,10 @@ def _require_owner(owner: Optional[str]) -> str:
 
 def _resolve_category(db, user: str, category_ref: str):
 
-    """Resolve a category by full id, id prefix, or name (case-insensitive)."""
+    """Resolve a unique category id/prefix/name/path, or raise on ambiguity."""
 
     from integrations.finance.models import FinanceCategory
+    from integrations.finance.services.categories import format_category_path
 
 
 
@@ -90,13 +93,31 @@ def _resolve_category(db, user: str, category_ref: str):
 
         return cat
 
-    cat = q.filter(FinanceCategory.id.startswith(ref)).first()
+    prefix_matches = q.filter(FinanceCategory.id.startswith(ref)).all()
+    if len(prefix_matches) == 1:
+        return prefix_matches[0]
+    if len(prefix_matches) > 1:
+        raise ValueError(f"Category reference is ambiguous: {category_ref}")
 
-    if cat:
+    def _normal(value: str) -> str:
+        return re.sub(r"\s*(?:›|>|/)\s*", " > ", (value or "").strip()).casefold()
 
-        return cat
-
-    return q.filter(FinanceCategory.name.ilike(ref)).first()
+    cats = q.all()
+    cats_by_id = {candidate.id: candidate for candidate in cats}
+    wanted = _normal(ref)
+    matches = [
+        candidate
+        for candidate in cats
+        if wanted in {
+            _normal(candidate.name),
+            _normal(format_category_path(candidate, cats_by_id)),
+        }
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(f"Category reference is ambiguous: {category_ref}")
+    return None
 
 
 
@@ -290,7 +311,12 @@ def _execute_bulk_finance_updates(
     args: dict,
     action: str,
 ) -> Dict:
-    from integrations.finance.services.movements import bulk_classify_transactions
+    from integrations.finance.models import FinanceTransaction
+    from integrations.finance.services.movements import (
+        bulk_classify_transactions,
+        resolve_stored_class,
+    )
+    from integrations.finance.services.parsers import _normalize_payee
     from src.confirmation_gates import consume_confirmation, require_confirmed_action
 
     groups, parse_err = _parse_bulk_groups(args)
@@ -318,7 +344,10 @@ def _execute_bulk_finance_updates(
         category_id = None
         cat_label = None
         if group.get("category_id"):
-            cat = _resolve_category(db, user, str(group["category_id"]))
+            try:
+                cat = _resolve_category(db, user, str(group["category_id"]))
+            except ValueError as exc:
+                return {"error": str(exc), "exit_code": 1}
             if not cat:
                 return {
                     "error": f"Category not found: {group['category_id']}",
@@ -330,11 +359,19 @@ def _execute_bulk_finance_updates(
             continue
         prepared.append({
             "refs": [tx.id for tx in txs],
+            "txs": txs,
             "movement_class": group.get("movement_class"),
             "category_id": category_id,
             "cat_label": cat_label,
             "apply_to_payee": bool(group.get("apply_to_payee")),
         })
+    if missing or ambiguous:
+        detail = []
+        if missing:
+            detail.append("not found: " + ", ".join(missing[:20]))
+        if ambiguous:
+            detail.append("ambiguous: " + ", ".join(ambiguous[:20]))
+        return {"error": "; ".join(detail), "exit_code": 1}
     if not prepared:
         detail = []
         if missing:
@@ -346,6 +383,103 @@ def _execute_bulk_finance_updates(
             "exit_code": 1,
         }
 
+    owner_rows = None
+    if any(group["apply_to_payee"] for group in prepared):
+        owner_rows = (
+            db.query(FinanceTransaction)
+            .filter(FinanceTransaction.owner == user)
+            .order_by(FinanceTransaction.date.asc(), FinanceTransaction.id.asc())
+            .all()
+        )
+
+    assignments: dict[str, dict] = {}
+    for group in prepared:
+        candidates = list(group["txs"])
+        if group["apply_to_payee"]:
+            payees = {
+                _normalize_payee(tx.payee or "")
+                for tx in candidates
+                if _normalize_payee(tx.payee or "")
+            }
+            candidates = [
+                tx for tx in (owner_rows or [])
+                if _normalize_payee(tx.payee or "") in payees
+            ]
+        for tx in candidates:
+            target = assignments.setdefault(tx.id, {
+                "tx": tx,
+                "movement_class": None,
+                "category_id": None,
+                "cat_label": None,
+            })
+            new_class = group.get("movement_class")
+            new_category = group.get("category_id")
+            if (
+                new_class
+                and target["movement_class"]
+                and target["movement_class"] != new_class
+            ):
+                return {
+                    "error": f"Conflicting movement classes for transaction {tx.id[:8]}",
+                    "exit_code": 1,
+                }
+            if (
+                new_category
+                and target["category_id"]
+                and target["category_id"] != new_category
+            ):
+                return {
+                    "error": f"Conflicting categories for transaction {tx.id[:8]}",
+                    "exit_code": 1,
+                }
+            if new_class:
+                target["movement_class"] = new_class
+            if new_category:
+                target["category_id"] = new_category
+                target["cat_label"] = group.get("cat_label")
+
+    ordered = sorted(
+        assignments.values(),
+        key=lambda item: (
+            item["tx"].date,
+            item["tx"].id,
+        ),
+    )
+    eligible: list[dict] = []
+    for item in ordered:
+        tx = item["tx"]
+        class_needs_change = False
+        if item["movement_class"]:
+            stored = resolve_stored_class(db, user, tx, item["movement_class"])
+            class_needs_change = tx.movement_class != stored
+            item["stored_class"] = stored
+        category_needs_change = bool(
+            item["category_id"] and tx.category_id != item["category_id"]
+        )
+        if class_needs_change or category_needs_change:
+            eligible.append(item)
+
+    payee_samples: list[str] = []
+    seen_payees: set[str] = set()
+    for item in ordered:
+        payee = (item["tx"].payee or "(no payee)").strip()
+        key = _normalize_payee(payee)
+        if key in seen_payees:
+            continue
+        seen_payees.add(key)
+        payee_samples.append(payee)
+        if len(payee_samples) >= 10:
+            break
+
+    prepared_for_gate = [
+        {
+            "refs": group["refs"],
+            "movement_class": group["movement_class"],
+            "category_id": group["category_id"],
+            "apply_to_payee": group["apply_to_payee"],
+        }
+        for group in prepared
+    ]
     gate_action = action
     if action in {"classify_transactions", "bulk_classify"}:
         gate_action = "classify_transaction"
@@ -354,7 +488,13 @@ def _execute_bulk_finance_updates(
     elif action in {"bulk_update", "bulk_update_transactions"}:
         gate_action = "bulk_update_transactions"
 
-    gate_args = _bulk_gate_args(gate_action, prepared)
+    gate_args = _bulk_gate_args(gate_action, prepared_for_gate)
+    gate_args.update({
+        "matched_count": len(ordered),
+        "eligible_count": len(eligible),
+        "payee_samples": payee_samples,
+        "max_uses": max(1, math.ceil(len(eligible) / _MAX_BULK_TX)),
+    })
     gate_err = require_confirmed_action(
         session_id=session_id,
         owner=user,
@@ -365,43 +505,61 @@ def _execute_bulk_finance_updates(
         confirmation_token=args.get("confirmation_token"),
     )
     if gate_err:
-        return {"error": gate_err, "exit_code": 1}
+        preview = (
+            f"Preview: matched={len(ordered)} eligible={len(eligible)} "
+            f"payees={payee_samples}."
+        )
+        return {
+            "error": f"{preview} {gate_err}",
+            "confirmation_payload": gate_args,
+            "exit_code": 1,
+        }
 
-    summaries: list[str] = []
-    for group in prepared:
-        count = bulk_classify_transactions(
+    page = eligible[:_MAX_BULK_TX]
+    grouped: dict[tuple, list[str]] = {}
+    for item in page:
+        key = (
+            item.get("movement_class"),
+            item.get("category_id"),
+        )
+        grouped.setdefault(key, []).append(item["tx"].id)
+
+    for (movement_class, category_id), tx_ids in grouped.items():
+        bulk_classify_transactions(
             db,
             user,
-            tx_ids=list(group["refs"]),
-            movement_class=group.get("movement_class"),
-            category_id=group.get("category_id"),
-            apply_to_payee=bool(group.get("apply_to_payee")),
+            tx_ids=tx_ids,
+            movement_class=movement_class,
+            category_id=category_id,
+            apply_to_payee=False,
             commit=False,
         )
-        bits = []
-        if group.get("movement_class"):
-            bits.append(group["movement_class"])
-        if group.get("cat_label"):
-            bits.append(group["cat_label"])
-        payee_note = " including same-payee rows" if group.get("apply_to_payee") else ""
-        summaries.append(f"{count}{payee_note} -> {', '.join(bits) or 'updated'}")
 
     db.commit()
 
+    remaining = max(0, len(eligible) - len(page))
     token = str(args.get("confirmation_token") or "").strip()
     if token and session_id:
-        consume_confirmation(token=token, session_id=session_id, owner=user, consume_all=True)
-
-    lines = ["Updated " + "; ".join(summaries) + "."]
-    if missing:
-        lines.append("Not found: " + ", ".join(missing[:20]) + ("..." if len(missing) > 20 else ""))
-    if ambiguous:
-        lines.append(
-            "Ambiguous prefixes (skipped): "
-            + ", ".join(ambiguous[:20])
-            + ("..." if len(ambiguous) > 20 else "")
+        consume_confirmation(
+            token=token,
+            session_id=session_id,
+            owner=user,
+            consume_all=remaining == 0,
         )
-    return {"response": "\n".join(lines), "exit_code": 0}
+
+    stored_counts: dict[str, int] = {}
+    for item in page:
+        if item.get("movement_class"):
+            stored = item["tx"].movement_class or "unclassified"
+            stored_counts[stored] = stored_counts.get(stored, 0) + 1
+    return {
+        "response": (
+            f"matched={len(ordered)} eligible={len(eligible)} "
+            f"updated={len(page)} remaining={remaining} "
+            f"payees={payee_samples} stored_classes={stored_counts}"
+        ),
+        "exit_code": 0,
+    }
 
 
 def _invalid_arg_error(action: str, exc: Exception) -> Dict:
@@ -430,6 +588,81 @@ def _invalid_arg_error(action: str, exc: Exception) -> Dict:
 
 
 
+
+
+def _resolve_rule(db, user: str, rule_ref: str):
+    from integrations.finance.models import FinanceCategorizationRule
+
+    ref = str(rule_ref or "").strip()
+    if not ref:
+        return None
+    q = db.query(FinanceCategorizationRule).filter(
+        FinanceCategorizationRule.owner == user
+    )
+    exact = q.filter(FinanceCategorizationRule.id == ref).first()
+    if exact:
+        return exact
+    matches = q.filter(FinanceCategorizationRule.id.startswith(ref)).all()
+    if len(matches) > 1:
+        raise ValueError(f"Rule reference is ambiguous: {rule_ref}")
+    return matches[0] if matches else None
+
+
+def _max_updates(args: dict) -> int:
+    return min(max(int(args.get("max_updates") or _MAX_BULK_TX), 1), _MAX_BULK_TX)
+
+
+def _format_set_result(label: str, result: dict) -> str:
+    return (
+        f"{label}: matched={result.get('matched', 0)} "
+        f"eligible={result.get('eligible', 0)} "
+        f"updated={result.get('updated', result.get('changed', 0))} "
+        f"remaining={result.get('remaining', 0)} "
+        f"requested_class={result.get('requested_class')} "
+        f"stored_classes={result.get('stored_classes', {})} "
+        f"skipped={result.get('skipped', {})}"
+    )
+
+
+def _canonical_filter_args(db, user: str, args: dict) -> dict:
+    from integrations.finance.services.transactions import tokenize_transaction_search
+
+    filters: dict[str, Any] = {}
+    for key in (
+        "account_id",
+        "start_date",
+        "end_date",
+        "min_amount_cents",
+        "max_amount_cents",
+        "amount_sign",
+    ):
+        value = args.get(key)
+        if value not in (None, ""):
+            filters[key] = value
+    if args.get("category_id"):
+        category = _resolve_category(db, user, str(args["category_id"]))
+        if not category:
+            raise ValueError("Category not found")
+        filters["category_id"] = category.id
+    search = str(args.get("search") or "").strip()
+    terms = tokenize_transaction_search(search)
+    if terms:
+        filters["search"] = search
+        filters["search_scope"] = str(
+            args.get("search_scope") or "payee_or_memo"
+        ).strip().lower()
+    non_search_filters = {
+        key for key in filters
+        if key not in {"search", "search_scope"}
+    }
+    if not filters:
+        raise ValueError("classify_by_filter requires at least one narrowing filter")
+    if terms and len(terms) == 1 and not non_search_filters:
+        raise ValueError(
+            "A one-token search is not a safe write filter; add a date, account, "
+            "category, amount, or sign filter"
+        )
+    return filters
 
 
 async def do_manage_finance(content: str, owner: Optional[str] = None, session_id: Optional[str] = None) -> Dict:
@@ -521,6 +754,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
     from integrations.finance.services.categories import (
 
+        apply_rule_to_transactions,
         apply_rules_to_transactions,
 
         create_category_for_owner,
@@ -536,6 +770,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
         ordered_category_list,
 
         suggest_category_groups,
+        test_rule_matches,
 
     )
 
@@ -543,7 +778,16 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
     from integrations.finance.services.reports import month_bounds, month_key, monthly_trends, net_worth, spending_by_category
 
-    from integrations.finance.services.transactions import apply_transaction_filters
+    from integrations.finance.services.movements import (
+        classification_status_counts,
+        classify_transactions_by_category,
+        classify_transactions_by_filter,
+    )
+    from integrations.finance.services.transactions import (
+        apply_transaction_filters,
+        tokenize_transaction_search,
+        validate_movement_class,
+    )
 
 
 
@@ -595,7 +839,8 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
         if action == "list_transactions":
 
-            limit = min(int(args.get("limit") or 25), _MAX_TX_LIMIT)
+            raw_limit = 25 if args.get("limit") is None else int(args.get("limit"))
+            limit = min(max(raw_limit, 1), _MAX_TX_LIMIT)
             offset = max(int(args.get("offset") or 0), 0)
 
             q = apply_transaction_filters(
@@ -611,6 +856,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
                 month=args.get("month"),
 
                 search=(args.get("search") or args.get("payee") or ""),
+                search_scope=args.get("search_scope") or "payee_or_memo",
 
                 start_date=args.get("start_date"),
 
@@ -632,15 +878,16 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
                 if cat:
 
-                    q = q.filter(FinanceTransaction.category_id == cat.id)
+                    q = apply_transaction_filters(
+                        q,
+                        owner=user,
+                        category_id=cat.id,
+                        include_void=True,
+                    )
 
                 else:
 
-                    q = q.filter(
-
-                        FinanceTransaction.category_id.startswith(str(args["category_id"]).strip())
-
-                    )
+                    return {"error": "Category not found", "exit_code": 1}
 
             total = q.count()
 
@@ -690,9 +937,9 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
                 )
 
-            if total > limit:
+            next_offset = offset + len(txs)
+            if next_offset < total:
 
-                next_offset = offset + limit
                 lines.append(
                     f"(Capped at {limit}. Pass offset={next_offset} for the next page, "
                     f"or classify/categorize with transaction_ids in one bulk call.)"
@@ -1320,6 +1567,296 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
                 db, user, session_id=session_id, args=args, action=action,
             )
 
+        if action == "classification_status":
+            status = classification_status_counts(
+                db,
+                user,
+                account_id=args.get("account_id"),
+                start_date=args.get("start_date"),
+                end_date=args.get("end_date"),
+            )
+            return {
+                "response": (
+                    f"Classification status: total={status['total']} "
+                    f"by_class={status['by_class']} "
+                    f"unclassified_by_direction={status['unclassified_by_direction']} "
+                    f"uncategorized={status['uncategorized']} "
+                    f"categorized_unclassified={status['categorized_unclassified']} "
+                    f"accounts={status['accounts']} "
+                    f"omitted_accounts={status['omitted_accounts']} "
+                    f"omitted_account_rows={status['omitted_account_rows']}"
+                ),
+                "exit_code": 0,
+            }
+
+        if action == "classify_by_category":
+            category_ref = args.get("category_id")
+            if not category_ref:
+                return {
+                    "error": "classify_by_category requires category_id",
+                    "exit_code": 1,
+                }
+            category = _resolve_category(db, user, str(category_ref))
+            if not category:
+                return {"error": "Category not found", "exit_code": 1}
+            target = args.get("movement_class")
+            if target:
+                target = validate_movement_class(target, allow_null=False)
+            overwrite = bool(args.get("overwrite"))
+            max_updates = _max_updates(args)
+            preview = classify_transactions_by_category(
+                db,
+                user,
+                category_id=category.id,
+                movement_class=target,
+                overwrite=overwrite,
+                dry_run=True,
+                max_updates=max_updates,
+            )
+            if bool(args.get("dry_run")):
+                return {
+                    "response": (
+                        _format_set_result("Category classification preview", preview)
+                        + f" samples={preview['samples']}"
+                    ),
+                    "exit_code": 0,
+                }
+            payee_samples = [sample["payee"] for sample in preview["samples"]]
+            gate_args = {
+                "action": action,
+                "category_id": category.id,
+                "movement_class": preview["requested_class"],
+                "overwrite": overwrite,
+                "max_updates": max_updates,
+                "matched_count": preview["matched"],
+                "eligible_count": preview["eligible"],
+                "payee_samples": payee_samples,
+                "max_uses": max(
+                    1, math.ceil(preview["eligible"] / max_updates)
+                ),
+            }
+            from src.confirmation_gates import consume_confirmation, require_confirmed_action
+
+            gate_err = require_confirmed_action(
+                session_id=session_id,
+                owner=user,
+                domain="finance",
+                tool_name="manage_finance",
+                action=action,
+                tool_args=gate_args,
+                confirmation_token=args.get("confirmation_token"),
+            )
+            if gate_err:
+                return {
+                    "error": (
+                        _format_set_result("Category classification preview", preview)
+                        + f" samples={preview['samples']}. {gate_err}"
+                    ),
+                    "confirmation_payload": gate_args,
+                    "exit_code": 1,
+                }
+            result = classify_transactions_by_category(
+                db,
+                user,
+                category_id=category.id,
+                movement_class=target,
+                overwrite=overwrite,
+                max_updates=max_updates,
+            )
+            token = str(args.get("confirmation_token") or "").strip()
+            if token and session_id:
+                consume_confirmation(
+                    token=token,
+                    session_id=session_id,
+                    owner=user,
+                    consume_all=result["remaining"] == 0,
+                )
+            return {
+                "response": _format_set_result("Category classification", result),
+                "exit_code": 0,
+            }
+
+        if action == "classify_by_filter":
+            target = validate_movement_class(
+                args.get("movement_class"), allow_null=False
+            )
+            filters = _canonical_filter_args(db, user, args)
+            overwrite = bool(args.get("overwrite"))
+            max_updates = _max_updates(args)
+            preview = classify_transactions_by_filter(
+                db,
+                user,
+                movement_class=target,
+                filters=filters,
+                overwrite=overwrite,
+                dry_run=True,
+                max_updates=max_updates,
+            )
+            if bool(args.get("dry_run")):
+                return {
+                    "response": (
+                        _format_set_result("Filter classification preview", preview)
+                        + f" filters={filters} samples={preview['samples']}"
+                    ),
+                    "exit_code": 0,
+                }
+            payee_samples = [sample["payee"] for sample in preview["samples"]]
+            gate_args = {
+                "action": action,
+                "movement_class": target,
+                "filters": filters,
+                "overwrite": overwrite,
+                "max_updates": max_updates,
+                "matched_count": preview["matched"],
+                "eligible_count": preview["eligible"],
+                "payee_samples": payee_samples,
+                "max_uses": max(
+                    1, math.ceil(preview["eligible"] / max_updates)
+                ),
+            }
+            from src.confirmation_gates import consume_confirmation, require_confirmed_action
+
+            gate_err = require_confirmed_action(
+                session_id=session_id,
+                owner=user,
+                domain="finance",
+                tool_name="manage_finance",
+                action=action,
+                tool_args=gate_args,
+                confirmation_token=args.get("confirmation_token"),
+            )
+            if gate_err:
+                return {
+                    "error": (
+                        _format_set_result("Filter classification preview", preview)
+                        + f" filters={filters} samples={preview['samples']}. {gate_err}"
+                    ),
+                    "confirmation_payload": gate_args,
+                    "exit_code": 1,
+                }
+            result = classify_transactions_by_filter(
+                db,
+                user,
+                movement_class=target,
+                filters=filters,
+                overwrite=overwrite,
+                max_updates=max_updates,
+            )
+            token = str(args.get("confirmation_token") or "").strip()
+            if token and session_id:
+                consume_confirmation(
+                    token=token,
+                    session_id=session_id,
+                    owner=user,
+                    consume_all=result["remaining"] == 0,
+                )
+            return {
+                "response": _format_set_result("Filter classification", result),
+                "exit_code": 0,
+            }
+
+        if action == "test_rule":
+            pattern = str(args.get("pattern") or "").strip()
+            category_id = None
+            if args.get("category_id"):
+                category = _resolve_category(db, user, str(args["category_id"]))
+                if not category:
+                    return {"error": "Category not found", "exit_code": 1}
+                category_id = category.id
+            movement_class = args.get("movement_class")
+            if movement_class:
+                movement_class = validate_movement_class(
+                    movement_class, allow_null=False
+                )
+            result = test_rule_matches(
+                db,
+                user,
+                pattern=pattern,
+                category_id=category_id,
+                movement_class=movement_class,
+                overwrite=bool(args.get("overwrite")),
+            )
+            return {
+                "response": (
+                    f"Rule preview: matched={result['matched']} "
+                    f"fill_eligible={result['fill_eligible']} "
+                    f"overwrite_changes={result['overwrite_changes']} "
+                    f"samples={result['samples']}"
+                ),
+                "exit_code": 0,
+            }
+
+        if action == "apply_rule":
+            rule = _resolve_rule(db, user, str(args.get("rule_id") or ""))
+            if not rule:
+                return {"error": "Rule not found", "exit_code": 1}
+            overwrite = bool(args.get("overwrite"))
+            max_updates = _max_updates(args)
+            preview = test_rule_matches(
+                db,
+                user,
+                pattern=rule.pattern,
+                category_id=rule.category_id,
+                movement_class=rule.movement_class,
+                overwrite=overwrite,
+            )
+            eligible = preview["selected_changes"]
+            gate_args = {
+                "action": action,
+                "rule_id": rule.id,
+                "overwrite": overwrite,
+                "max_updates": max_updates,
+                "matched_count": preview["matched"],
+                "eligible_count": eligible,
+                "payee_samples": [
+                    sample["payee"] for sample in preview["samples"]
+                ],
+                "max_uses": max(1, math.ceil(eligible / max_updates)),
+            }
+            from src.confirmation_gates import consume_confirmation, require_confirmed_action
+
+            gate_err = require_confirmed_action(
+                session_id=session_id,
+                owner=user,
+                domain="finance",
+                tool_name="manage_finance",
+                action=action,
+                tool_args=gate_args,
+                confirmation_token=args.get("confirmation_token"),
+            )
+            if gate_err:
+                return {
+                    "error": (
+                        f"Rule preview: matched={preview['matched']} "
+                        f"eligible={eligible} samples={preview['samples']}. {gate_err}"
+                    ),
+                    "confirmation_payload": gate_args,
+                    "exit_code": 1,
+                }
+            result = apply_rule_to_transactions(
+                db,
+                user,
+                rule,
+                overwrite=overwrite,
+                max_updates=max_updates,
+            )
+            token = str(args.get("confirmation_token") or "").strip()
+            if token and session_id:
+                consume_confirmation(
+                    token=token,
+                    session_id=session_id,
+                    owner=user,
+                    consume_all=result["remaining"] == 0,
+                )
+            return {
+                "response": (
+                    f"Rule {rule.id}: matched={result['matched']} "
+                    f"eligible={result['eligible']} changed={result['changed']} "
+                    f"remaining={result['remaining']}"
+                ),
+                "exit_code": 0,
+            }
+
         if action == "set_budget":
 
             category_id = args.get("category_id")
@@ -1414,19 +1951,48 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
             pattern = (args.get("pattern") or "").strip()
 
-            category_id = args.get("category_id")
+            category_id = None
+            cat_label = None
 
-            if not pattern or not category_id:
+            if not pattern:
 
-                return {"error": "create_rule requires pattern and category_id", "exit_code": 1}
+                return {"error": "create_rule requires pattern", "exit_code": 1}
 
-            cat = _resolve_category(db, user, str(category_id))
+            if args.get("category_id"):
 
-            if not cat:
+                cat = _resolve_category(db, user, str(args["category_id"]))
 
-                return {"error": "Category not found", "exit_code": 1}
+                if not cat:
+
+                    return {"error": "Category not found", "exit_code": 1}
+
+                category_id = cat.id
+                cat_label = cat.name
+
+            movement_class = args.get("movement_class")
+            if movement_class:
+                movement_class = validate_movement_class(
+                    movement_class, allow_null=False
+                )
+            if not category_id and not movement_class:
+                return {
+                    "error": "create_rule requires category_id and/or movement_class",
+                    "exit_code": 1,
+                }
 
             priority = int(args["priority"]) if args.get("priority") is not None else 100
+            apply_existing = args.get("apply_existing", True) is not False
+            overwrite = bool(args.get("overwrite"))
+            max_updates = _max_updates(args)
+            preview = test_rule_matches(
+                db,
+                user,
+                pattern=pattern,
+                category_id=category_id,
+                movement_class=movement_class,
+                overwrite=overwrite,
+            )
+            eligible = preview["selected_changes"] if apply_existing else 0
 
 
 
@@ -1436,11 +2002,21 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
                 "pattern": pattern,
 
-                "category_id": cat.id,
-
                 "priority": priority,
+                "apply_existing": apply_existing,
+                "overwrite": overwrite,
+                "max_updates": max_updates,
+                "matched_count": preview["matched"],
+                "eligible_count": eligible,
+                "payee_samples": [
+                    sample["payee"] for sample in preview["samples"]
+                ],
 
             }
+            if category_id:
+                gate_args["category_id"] = category_id
+            if movement_class:
+                gate_args["movement_class"] = movement_class
 
             from src.confirmation_gates import consume_confirmation, require_confirmed_action
 
@@ -1466,43 +2042,34 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
             if gate_err:
 
-                return {"error": gate_err, "exit_code": 1}
+                return {
+                    "error": (
+                        f"Rule preview: matched={preview['matched']} "
+                        f"eligible={eligible} samples={preview['samples']}. {gate_err}"
+                    ),
+                    "confirmation_payload": gate_args,
+                    "exit_code": 1,
+                }
 
 
 
-            create_rule_for_owner(
-
-                db, user, pattern=pattern, category_id=cat.id, priority=priority,
-
-                apply_existing=False,
-
+            rule = create_rule_for_owner(
+                db,
+                user,
+                pattern=pattern,
+                category_id=category_id,
+                movement_class=movement_class,
+                priority=priority,
+                apply_existing=apply_existing,
+                overwrite=overwrite,
+                max_updates=max_updates,
             )
-
-
-
-            applied = 0
-
-            if args.get("apply_existing", True) is not False:
-
-                txs = (
-
-                    db.query(FinanceTransaction)
-
-                    .filter(
-
-                        FinanceTransaction.owner == user,
-
-                        FinanceTransaction.category_id.is_(None),
-
-                    )
-
-                    .all()
-
-                )
-
-                applied = apply_rules_to_transactions(db, user, txs)
-
-                db.commit()
+            result = getattr(rule, "application_result", {
+                "matched": preview["matched"],
+                "eligible": 0,
+                "changed": 0,
+                "remaining": 0,
+            })
 
 
 
@@ -1510,19 +2077,26 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
             if token and session_id:
 
-                consume_confirmation(token=token, session_id=session_id, owner=user)
+                consume_confirmation(
+                    token=token,
+                    session_id=session_id,
+                    owner=user,
+                    consume_all=True,
+                )
 
 
 
-            msg = f"Rule added: payee matching '{pattern}' → {cat.name} (priority {priority})."
-
-            if applied:
-
-                msg += f" Categorized {applied} existing transaction(s)."
-
-            else:
-
-                msg += " No existing uncategorized matches were updated."
+            targets = []
+            if cat_label:
+                targets.append(cat_label)
+            if movement_class:
+                targets.append(movement_class)
+            msg = (
+                f"Rule added id={rule.id} pattern={pattern!r} targets={targets} "
+                f"priority={priority} matched={result['matched']} "
+                f"eligible={result['eligible']} changed={result['changed']} "
+                f"remaining={result['remaining']}"
+            )
 
             return {
 
@@ -1659,6 +2233,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
                 "create_transaction, update_transaction, void_transaction, delete_transaction, "
 
+                "test_rule, apply_rule, classify_by_category, classify_by_filter, classification_status, "
                 "classify_transaction, bulk_update_transactions, link_transactions, pin_account, "
 
                 "mark_recurring_automatic."

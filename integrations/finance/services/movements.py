@@ -9,10 +9,16 @@ from collections import defaultdict
 from datetime import date, timedelta
 from typing import Any, Optional
 
+from sqlalchemy import and_, exists, func
 from sqlalchemy.orm import Session
 
 from integrations.finance.database import finance_config_path
-from integrations.finance.models import FinanceAccount, FinanceTransaction
+from integrations.finance.models import (
+    FinanceAccount,
+    FinanceCategory,
+    FinanceTransaction,
+    FinanceTransactionSplit,
+)
 from integrations.finance.services.balances import is_posted_row
 from integrations.finance.services.transactions import validate_movement_class
 
@@ -265,7 +271,10 @@ def bulk_classify_transactions(
             tx.movement_class = resolve_stored_class(db, owner, tx, cls)
         if category_id is not None:
             tx.category_id = category_id or None
-        maybe_class_from_transfers_category(db, owner, tx)
+        # An explicit class is authoritative. The legacy Transfers-label
+        # default only fills categorization-only updates.
+        if cls is None:
+            maybe_class_from_transfers_category(db, owner, tx)
     if commit:
         db.commit()
     return len(txs)
@@ -286,6 +295,269 @@ def maybe_class_from_transfers_category(db: Session, owner: str, tx: FinanceTran
     )
     if is_transfers_label_category(cat):
         tx.movement_class = resolve_stored_class(db, owner, tx, "transfer")
+
+
+def _stored_target(
+    accounts: dict[str, FinanceAccount],
+    tx: FinanceTransaction,
+    requested: str,
+) -> str:
+    target = validate_movement_class(requested, allow_null=False)
+    account = accounts.get(tx.account_id)
+    if target == "transfer" and account and (account.purpose or "") == "processor":
+        return "pass_through"
+    return target
+
+
+def _unique_payee_samples(
+    txs: list[FinanceTransaction],
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    samples: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for tx in txs:
+        key = (tx.payee or "").strip().upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        samples.append({
+            "payee": tx.payee or "(no payee)",
+            "amount_cents": tx.amount_cents,
+            "movement_class": tx.movement_class,
+            "category_id": tx.category_id,
+        })
+        if len(samples) >= limit:
+            break
+    return samples
+
+
+def infer_movement_class_for_category(category: FinanceCategory) -> str:
+    """Conservative inference from semantic category fields, never display names."""
+    return "income" if category.is_income else "spend"
+
+
+def classify_transactions_by_category(
+    db: Session,
+    owner: str,
+    *,
+    category_id: str,
+    movement_class: Optional[str] = None,
+    overwrite: bool = False,
+    dry_run: bool = False,
+    max_updates: int = 500,
+) -> dict[str, Any]:
+    """Classify a bounded direct-category set with sign and P2P safeguards."""
+    from integrations.finance.services.categories import is_transfers_label_category
+
+    category = (
+        db.query(FinanceCategory)
+        .filter(FinanceCategory.id == category_id, FinanceCategory.owner == owner)
+        .first()
+    )
+    if not category:
+        raise ValueError("Category not found")
+    cap = max(1, min(int(max_updates), 500))
+    explicit = movement_class not in (None, "")
+    requested = (
+        validate_movement_class(movement_class, allow_null=False)
+        if explicit
+        else infer_movement_class_for_category(category)
+    )
+    rows = (
+        db.query(FinanceTransaction)
+        .filter(
+            FinanceTransaction.owner == owner,
+            FinanceTransaction.category_id == category.id,
+            (FinanceTransaction.status.is_(None)) | (FinanceTransaction.status != "void"),
+        )
+        .order_by(FinanceTransaction.date.asc(), FinanceTransaction.id.asc())
+        .all()
+    )
+    skip_reasons: defaultdict[str, int] = defaultdict(int)
+    if is_transfers_label_category(category):
+        skip_reasons["transfers_label"] = len(rows)
+        return {
+            "category_id": category.id,
+            "category": category.name,
+            "requested_class": requested,
+            "matched": len(rows),
+            "eligible": 0,
+            "updated": 0,
+            "remaining": 0,
+            "skipped": dict(skip_reasons),
+            "samples": _unique_payee_samples(rows),
+            "stored_classes": {},
+        }
+
+    accounts = _accounts_by_id(db, owner)
+    eligible: list[tuple[FinanceTransaction, str]] = []
+    for tx in rows:
+        if not explicit and requested == "spend":
+            if (tx.amount_cents or 0) >= 0:
+                skip_reasons["non_outflow"] += 1
+                continue
+            if payee_looks_like_funding(tx.payee or "") or payee_looks_like_p2p(tx.payee or ""):
+                skip_reasons["funding_or_p2p"] += 1
+                continue
+            if overwrite and tx.movement_class in EXCLUDED_CLASSES:
+                skip_reasons["protected_class"] += 1
+                continue
+        stored = _stored_target(accounts, tx, requested)
+        if tx.movement_class is None or (overwrite and tx.movement_class != stored):
+            eligible.append((tx, stored))
+
+    changed = eligible[:cap]
+    if not dry_run:
+        for tx, stored in changed:
+            tx.movement_class = stored
+        db.commit()
+    stored_classes: defaultdict[str, int] = defaultdict(int)
+    for _, stored in changed:
+        stored_classes[stored] += 1
+    return {
+        "category_id": category.id,
+        "category": category.name,
+        "requested_class": requested,
+        "matched": len(rows),
+        "eligible": len(eligible),
+        "updated": 0 if dry_run else len(changed),
+        "remaining": len(eligible) if dry_run else max(0, len(eligible) - len(changed)),
+        "skipped": dict(skip_reasons),
+        "samples": _unique_payee_samples([tx for tx, _ in eligible]),
+        "stored_classes": dict(stored_classes),
+    }
+
+
+def classify_transactions_by_filter(
+    db: Session,
+    owner: str,
+    *,
+    movement_class: str,
+    filters: dict[str, Any],
+    overwrite: bool = False,
+    dry_run: bool = False,
+    max_updates: int = 500,
+) -> dict[str, Any]:
+    """Classify a bounded owner-scoped filter without exposing transaction ids."""
+    from integrations.finance.services.transactions import apply_transaction_filters
+
+    target = validate_movement_class(movement_class, allow_null=False)
+    cap = max(1, min(int(max_updates), 500))
+    q = apply_transaction_filters(
+        db.query(FinanceTransaction),
+        owner=owner,
+        account_id=filters.get("account_id"),
+        category_id=filters.get("category_id"),
+        start_date=filters.get("start_date"),
+        end_date=filters.get("end_date"),
+        min_amount_cents=filters.get("min_amount_cents"),
+        max_amount_cents=filters.get("max_amount_cents"),
+        amount_sign=filters.get("amount_sign"),
+        search=filters.get("search") or "",
+        search_scope=filters.get("search_scope") or "payee_or_memo",
+    )
+    rows = q.order_by(FinanceTransaction.date.asc(), FinanceTransaction.id.asc()).all()
+    accounts = _accounts_by_id(db, owner)
+    eligible: list[tuple[FinanceTransaction, str]] = []
+    for tx in rows:
+        stored = _stored_target(accounts, tx, target)
+        if tx.movement_class is None or (overwrite and tx.movement_class != stored):
+            eligible.append((tx, stored))
+    changed = eligible[:cap]
+    if not dry_run:
+        for tx, stored in changed:
+            tx.movement_class = stored
+        db.commit()
+    stored_classes: defaultdict[str, int] = defaultdict(int)
+    for _, stored in changed:
+        stored_classes[stored] += 1
+    return {
+        "requested_class": target,
+        "filters": dict(filters),
+        "matched": len(rows),
+        "eligible": len(eligible),
+        "updated": 0 if dry_run else len(changed),
+        "remaining": len(eligible) if dry_run else max(0, len(eligible) - len(changed)),
+        "samples": _unique_payee_samples([tx for tx, _ in eligible]),
+        "stored_classes": dict(stored_classes),
+    }
+
+
+def classification_status_counts(
+    db: Session,
+    owner: str,
+    *,
+    account_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict[str, Any]:
+    """Return compact aggregate classification progress without transaction rows."""
+    from integrations.finance.services.transactions import apply_transaction_filters
+
+    q = apply_transaction_filters(
+        db.query(FinanceTransaction),
+        owner=owner,
+        account_id=account_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    total = q.count()
+    base_ids = q.with_entities(FinanceTransaction.id).subquery()
+    scoped = db.query(FinanceTransaction).filter(FinanceTransaction.id.in_(base_ids))
+
+    by_class = {
+        (movement_class or "unclassified"): count
+        for movement_class, count in (
+            scoped.with_entities(
+                FinanceTransaction.movement_class,
+                func.count(FinanceTransaction.id),
+            )
+            .group_by(FinanceTransaction.movement_class)
+            .all()
+        )
+    }
+    null_q = scoped.filter(FinanceTransaction.movement_class.is_(None))
+    null_by_direction = {
+        "inflow": null_q.filter(FinanceTransaction.amount_cents > 0).count(),
+        "outflow": null_q.filter(FinanceTransaction.amount_cents < 0).count(),
+        "zero": null_q.filter(FinanceTransaction.amount_cents == 0).count(),
+    }
+    split_exists = exists().where(and_(
+        FinanceTransactionSplit.transaction_id == FinanceTransaction.id,
+        FinanceTransactionSplit.owner == owner,
+    ))
+    uncategorized = scoped.filter(
+        FinanceTransaction.category_id.is_(None),
+        ~split_exists,
+    ).count()
+    categorized_unclassified = scoped.filter(
+        FinanceTransaction.movement_class.is_(None),
+        (FinanceTransaction.category_id.is_not(None)) | split_exists,
+    ).count()
+    account_rows = (
+        scoped.with_entities(
+            FinanceTransaction.account_id,
+            func.count(FinanceTransaction.id),
+        )
+        .group_by(FinanceTransaction.account_id)
+        .order_by(func.count(FinanceTransaction.id).desc(), FinanceTransaction.account_id.asc())
+        .all()
+    )
+    top_accounts = [
+        {"account_id": account, "count": count}
+        for account, count in account_rows[:25]
+    ]
+    return {
+        "total": total,
+        "by_class": by_class,
+        "unclassified_by_direction": null_by_direction,
+        "uncategorized": uncategorized,
+        "categorized_unclassified": categorized_unclassified,
+        "accounts": top_accounts,
+        "omitted_accounts": max(0, len(account_rows) - len(top_accounts)),
+        "omitted_account_rows": sum(count for _, count in account_rows[25:]),
+    }
 
 
 def _infer_class_for_link(

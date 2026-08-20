@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from datetime import date, datetime
 from typing import Optional
@@ -74,6 +75,21 @@ def _owned_tx(db: Session, owner: str, tx_id: str) -> FinanceTransaction:
     return tx
 
 
+def tokenize_transaction_search(search: str) -> list[str]:
+    """Normalize punctuation-tolerant literal search into bounded tokens."""
+    raw = str(search or "").strip()
+    if not raw:
+        return []
+    terms = re.findall(r"[A-Za-z0-9]+", raw)
+    if not terms:
+        raise ValueError("search must contain at least one letter or number")
+    if len(terms) > 8:
+        raise ValueError("search supports at most 8 terms")
+    if any(len(term) > 64 for term in terms):
+        raise ValueError("search terms must be at most 64 characters")
+    return terms
+
+
 def apply_transaction_filters(
     q: Query,
     *,
@@ -82,6 +98,7 @@ def apply_transaction_filters(
     category_id: Optional[str] = None,
     month: Optional[str] = None,
     search: str = "",
+    search_scope: str = "payee",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     min_amount_cents: Optional[int] = None,
@@ -91,6 +108,7 @@ def apply_transaction_filters(
     unclassified: bool = False,
     include_void: bool = False,
     status: Optional[str] = None,
+    amount_sign: Optional[str] = None,
 ) -> Query:
     q = q.filter(FinanceTransaction.owner == owner)
     if account_id:
@@ -123,6 +141,16 @@ def apply_transaction_filters(
         q = q.filter(FinanceTransaction.amount_cents >= int(min_amount_cents))
     if max_amount_cents is not None:
         q = q.filter(FinanceTransaction.amount_cents <= int(max_amount_cents))
+    if amount_sign:
+        sign = str(amount_sign).strip().lower()
+        if sign == "inflow":
+            q = q.filter(FinanceTransaction.amount_cents > 0)
+        elif sign == "outflow":
+            q = q.filter(FinanceTransaction.amount_cents < 0)
+        elif sign == "zero":
+            q = q.filter(FinanceTransaction.amount_cents == 0)
+        else:
+            raise ValueError("amount_sign must be one of: inflow, outflow, zero")
     if uncategorized:
         q = q.filter(FinanceTransaction.category_id.is_(None))
     if unclassified:
@@ -136,9 +164,24 @@ def apply_transaction_filters(
             (FinanceTransaction.status.is_(None))
             | (FinanceTransaction.status != "void")
         )
-    if search.strip():
-        like = f"%{search.strip()}%"
-        q = q.filter(FinanceTransaction.payee.ilike(like))
+    terms = tokenize_transaction_search(search)
+    if terms:
+        scope = str(search_scope or "payee").strip().lower()
+        if scope not in {"payee", "memo", "payee_or_memo"}:
+            raise ValueError("search_scope must be one of: payee, memo, payee_or_memo")
+
+        def _all_terms(column):
+            return and_(*(column.ilike(f"%{term}%", escape="\\") for term in terms))
+
+        if scope == "payee":
+            q = q.filter(_all_terms(FinanceTransaction.payee))
+        elif scope == "memo":
+            q = q.filter(_all_terms(FinanceTransaction.memo))
+        else:
+            q = q.filter(or_(
+                _all_terms(FinanceTransaction.payee),
+                _all_terms(FinanceTransaction.memo),
+            ))
     return q
 
 
