@@ -1061,6 +1061,7 @@ async def test_classify_by_category_skips_p2p_sign_and_transfers(finance_tool_en
         json.dumps({
             "action": "classify_by_category",
             "category_id": "cat-subs",
+            "movement_class": "spend",
         }),
         owner=owner,
         session_id="sess-safe",

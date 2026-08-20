@@ -393,7 +393,7 @@ def classify_transactions_by_category(
     accounts = _accounts_by_id(db, owner)
     eligible: list[tuple[FinanceTransaction, str]] = []
     for tx in rows:
-        if not explicit and requested == "spend":
+        if requested == "spend":
             if (tx.amount_cents or 0) >= 0:
                 skip_reasons["non_outflow"] += 1
                 continue
