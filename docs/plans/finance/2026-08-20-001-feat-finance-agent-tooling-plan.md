@@ -753,12 +753,12 @@ U2 is a baseline-hardening unit, not a rewrite.
 
 | Gate | Command | Proves |
 |---|---|---|
-| Session pinning | `pytest -q tests/test_tool_pins.py tests/test_agent_loop.py tests/test_chat_helpers.py tests/test_context_compactor.py tests/test_history_routes.py` | Finance activation, chat isolation, allowlisting, low-signal survival, off-topic behavior, full-history pin computation, and pin preservation across both compaction paths |
+| Session pinning | `pytest -q tests/test_tool_pins.py tests/test_agent_loop.py tests/test_chat_helpers.py tests/test_context_compactor.py tests/test_history_compact_tool_calls.py` | Finance activation, chat isolation, allowlisting, low-signal survival, off-topic behavior, full-history pin computation, and pin preservation across both compaction paths |
 | Agent finance contract | `pytest -q tests/test_finance_agent_tools.py` | Action schemas, listing limits, batching, gates, auto-approve, rule overwrite, previews, status, and new actions |
 | Rule services | `pytest -q tests/test_finance_categories.py` | Matcher parity, fill-only behavior, overwrite, single-rule application, and bounded continuation |
 | Movement services | `pytest -q tests/test_finance_movements.py` | Category/filter classification, sign/P2P/Transfers-label skips, 500-row bounds, and processor resolution |
 | HTTP/shared filters | `pytest -q tests/test_finance_transactions.py tests/test_finance_routes.py` | Payee-or-memo token search, filter composition, totals, offsets, and bulk endpoint compatibility |
-| Focused finance regression | `pytest -q tests/test_finance_agent_tools.py tests/test_finance_categories.py tests/test_finance_movements.py tests/test_finance_transactions.py tests/test_finance_routes.py tests/test_tool_pins.py tests/test_agent_loop.py tests/test_chat_helpers.py tests/test_context_compactor.py tests/test_history_routes.py` | Cross-layer finance behavior on the final diff |
+| Focused finance regression | `pytest -q tests/test_finance_agent_tools.py tests/test_finance_categories.py tests/test_finance_movements.py tests/test_finance_transactions.py tests/test_finance_routes.py tests/test_tool_pins.py tests/test_agent_loop.py tests/test_chat_helpers.py tests/test_context_compactor.py tests/test_history_compact_tool_calls.py` | Cross-layer finance behavior on the final diff |
 | Live DeepSeek Pro | Production Odysseus app, or a local harness around `src.agent_loop.stream_agent_loop`, with `OPENROUTER_API_KEY="$OPENROUTER_API_KEY"`, base URL `https://openrouter.ai/api/v1`, and model `deepseek/deepseek-v4-pro-0813` | Real native tool selection, pin follow-ups, one bulk/list/unclassified path, and provider model lock |
 
 ### Review Gates
