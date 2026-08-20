@@ -950,6 +950,10 @@ def setup_session_routes(
         if len(history) < 6:
             raise HTTPException(400, "Not enough messages to compact")
 
+        from src.tool_pins import merge_pinned_tools, pinned_tools_from_history
+
+        compacted_pins = pinned_tools_from_history(history)
+
         # Keep a small recent tail verbatim. The prior half-chat/20-message
         # tail made manual compaction look like it did nothing on normal chats.
         recent_keep = min(8, max(4, len(history) // 4))
@@ -999,11 +1003,14 @@ def setup_session_routes(
         summary_msg = ChatMessage(
             role="system",
             content=f"[Conversation summary]\n{summary}",
-            metadata={
-                "compacted": True,
-                "summarized_count": len(older),
-                "timestamp": utcnow_naive().isoformat(),
-            },
+            metadata=merge_pinned_tools(
+                {
+                    "compacted": True,
+                    "summarized_count": len(older),
+                    "timestamp": utcnow_naive().isoformat(),
+                },
+                compacted_pins,
+            ),
         )
         new_history = [summary_msg] + recent
         if not session_manager.replace_messages(session_id, new_history):

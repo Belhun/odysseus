@@ -548,15 +548,20 @@ def _execute_bulk_finance_updates(
         )
 
     stored_counts: dict[str, int] = {}
+    category_labels: list[str] = []
     for item in page:
         if item.get("movement_class"):
             stored = item["tx"].movement_class or "unclassified"
             stored_counts[stored] = stored_counts.get(stored, 0) + 1
+        label = item.get("cat_label")
+        if label and label not in category_labels:
+            category_labels.append(label)
     return {
         "response": (
             f"matched={len(ordered)} eligible={len(eligible)} "
             f"updated={len(page)} remaining={remaining} "
-            f"payees={payee_samples} stored_classes={stored_counts}"
+            f"payees={payee_samples} categories={category_labels} "
+            f"stored_classes={stored_counts}"
         ),
         "exit_code": 0,
     }

@@ -503,8 +503,7 @@ def classification_status_counts(
         end_date=end_date,
     )
     total = q.count()
-    base_ids = q.with_entities(FinanceTransaction.id).subquery()
-    scoped = db.query(FinanceTransaction).filter(FinanceTransaction.id.in_(base_ids))
+    scoped = q
 
     by_class = {
         (movement_class or "unclassified"): count
