@@ -627,3 +627,100 @@ def test_enrich_does_not_overwrite_existing_values(finance_client):
     merchant = next(row for row in listed if row["amount_cents"] == -985)
     assert merchant["daily_balance_cents"] == 9015
     assert merchant["payee"].startswith("Purchase authorized")
+
+
+@pytest.mark.area_routes
+def test_list_filters_by_category_payee_and_month(finance_client):
+    acct = finance_client.post("/api/finance/accounts", json={"name": "Wells"}).json()
+    groc_res = finance_client.post("/api/finance/categories", json={"name": "Filter Groceries"})
+    gas_res = finance_client.post("/api/finance/categories", json={"name": "Filter Gas"})
+    assert groc_res.status_code == 200, groc_res.text
+    assert gas_res.status_code == 200, gas_res.text
+    groc = groc_res.json()
+    gas = gas_res.json()
+    costco = finance_client.post("/api/finance/transactions", json={
+        "account_id": acct["id"],
+        "date": "2026-07-02",
+        "amount_cents": -5000,
+        "payee": "COSTCO",
+        "category_id": groc["id"],
+    }).json()
+    safeway = finance_client.post("/api/finance/transactions", json={
+        "account_id": acct["id"],
+        "date": "2026-07-03",
+        "amount_cents": -1200,
+        "payee": "SAFEWAY",
+        "category_id": groc["id"],
+    }).json()
+    finance_client.post("/api/finance/transactions", json={
+        "account_id": acct["id"],
+        "date": "2026-07-04",
+        "amount_cents": -4000,
+        "payee": "SHELL",
+        "category_id": gas["id"],
+    })
+    uncat = finance_client.post("/api/finance/transactions", json={
+        "account_id": acct["id"],
+        "date": "2026-07-05",
+        "amount_cents": -300,
+        "payee": "COSTCO",
+    }).json()
+    june = finance_client.post("/api/finance/transactions", json={
+        "account_id": acct["id"],
+        "date": "2026-06-15",
+        "amount_cents": -800,
+        "payee": "COSTCO",
+        "category_id": groc["id"],
+    }).json()
+    split_parent = finance_client.post("/api/finance/transactions", json={
+        "account_id": acct["id"],
+        "date": "2026-07-10",
+        "amount_cents": -8000,
+        "payee": "TARGET",
+    }).json()
+    splits = finance_client.put(
+        f"/api/finance/transactions/{split_parent['id']}/splits",
+        json={
+            "splits": [
+                {"category_id": groc["id"], "amount_cents": -5000, "memo": "food"},
+                {"category_id": gas["id"], "amount_cents": -3000, "memo": "fuel"},
+            ]
+        },
+    )
+    assert splits.status_code == 200, splits.text
+
+    by_cat = finance_client.get("/api/finance/transactions", params={
+        "account_id": acct["id"],
+        "category_id": groc["id"],
+    }).json()
+    assert {tx["id"] for tx in by_cat["transactions"]} == {
+        costco["id"],
+        safeway["id"],
+        june["id"],
+        split_parent["id"],
+    }
+
+    payee_in_cat = finance_client.get("/api/finance/transactions", params={
+        "account_id": acct["id"],
+        "category_id": groc["id"],
+        "search": "COSTCO",
+    }).json()
+    assert {tx["id"] for tx in payee_in_cat["transactions"]} == {costco["id"], june["id"]}
+
+    month_cat = finance_client.get("/api/finance/transactions", params={
+        "account_id": acct["id"],
+        "category_id": groc["id"],
+        "month": "2026-07",
+    }).json()
+    assert {tx["id"] for tx in month_cat["transactions"]} == {
+        costco["id"],
+        safeway["id"],
+        split_parent["id"],
+    }
+
+    uncategorized = finance_client.get("/api/finance/transactions", params={
+        "account_id": acct["id"],
+        "uncategorized": True,
+        "search": "COSTCO",
+    }).json()
+    assert {tx["id"] for tx in uncategorized["transactions"]} == {uncat["id"]}

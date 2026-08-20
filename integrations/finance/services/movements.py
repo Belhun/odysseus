@@ -232,6 +232,7 @@ def bulk_classify_transactions(
     movement_class: Optional[str] = None,
     category_id: Optional[str] = None,
     apply_to_payee: bool = False,
+    commit: bool = True,
 ) -> int:
     ids = [str(i) for i in tx_ids if i]
     if not ids:
@@ -265,7 +266,8 @@ def bulk_classify_transactions(
         if category_id is not None:
             tx.category_id = category_id or None
         maybe_class_from_transfers_category(db, owner, tx)
-    db.commit()
+    if commit:
+        db.commit()
     return len(txs)
 
 

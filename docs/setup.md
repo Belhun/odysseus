@@ -25,7 +25,7 @@ cd odysseus
 cp .env.example .env       # optional, but recommended for explicit defaults
 docker compose up -d --build
 ```
-To include optional extras in the image (PDF viewer, Office extraction; includes AGPL PyMuPDF), build with `docker compose build --build-arg INSTALL_OPTIONAL=true` before `up`.
+To include optional extras in the image (PDF viewer, Office extraction; includes AGPL PyMuPDF), set `INSTALL_OPTIONAL=true` in `.env` and run `docker compose up -d --build`. That setting lives in host `.env`, so a later git pull of Compose/app code does not turn extras off. To skip local-AI optional packages (for example `faster-whisper`) while still installing PDF/Office extras, set `OPTIONAL_EXCLUDE=faster-whisper`. You can still pass `--build-arg INSTALL_OPTIONAL=true` instead of `.env` if you prefer.
 
 Open `http://localhost:7000` when the containers are healthy. Docker Compose
 binds the web UI to `127.0.0.1` by default. If the port is taken, set

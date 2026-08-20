@@ -4,13 +4,10 @@
 
 from __future__ import annotations
 
-
-
+import json
 import logging
-
 from datetime import date
-
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 
 
@@ -22,7 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 
-_MAX_TX_LIMIT = 50
+_MAX_TX_LIMIT = 200
+_MAX_BULK_TX = 500
 
 
 
@@ -130,6 +128,282 @@ def _resolve_transaction(db, user: str, tx_ref: str):
 
 
 
+def _as_str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                parsed = None
+            if parsed is not None:
+                return _as_str_list(parsed)
+        return [part.strip() for part in text.replace(";", ",").split(",") if part.strip()]
+    if isinstance(value, (list, tuple, set)):
+        out: list[str] = []
+        for item in value:
+            out.extend(_as_str_list(item))
+        return out
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _collect_tx_refs(args: dict) -> list[str]:
+    refs: list[str] = []
+    for key in ("transaction_ids", "tx_ids"):
+        refs.extend(_as_str_list(args.get(key)))
+    single = args.get("transaction_id") or args.get("id")
+    if single not in (None, ""):
+        refs.extend(_as_str_list(single))
+    seen: set[str] = set()
+    out: list[str] = []
+    for ref in refs:
+        key = ref.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(ref)
+    return out
+
+
+def _resolve_transactions(db, user: str, refs: list[str]):
+    """Match full ids or unique prefixes. Returns (txs, missing, ambiguous, error)."""
+    from integrations.finance.models import FinanceTransaction
+
+    cleaned = [str(ref).strip() for ref in refs if str(ref).strip()]
+    if not cleaned:
+        return [], [], [], None
+    if len(cleaned) > _MAX_BULK_TX:
+        return [], cleaned, [], (
+            f"Max {_MAX_BULK_TX} transaction ids per call. Split into chunks."
+        )
+
+    owner_ids = [
+        row[0]
+        for row in db.query(FinanceTransaction.id).filter(FinanceTransaction.owner == user).all()
+    ]
+    matched_ids: list[str] = []
+    missing: list[str] = []
+    ambiguous: list[str] = []
+    seen: set[str] = set()
+    for ref in cleaned:
+        exact = [tid for tid in owner_ids if tid == ref]
+        picks = exact or [tid for tid in owner_ids if tid.startswith(ref)]
+        if not picks:
+            missing.append(ref)
+        elif len(picks) > 1:
+            ambiguous.append(ref)
+        else:
+            tid = picks[0]
+            if tid not in seen:
+                seen.add(tid)
+                matched_ids.append(tid)
+    if not matched_ids:
+        return [], missing, ambiguous, None
+    rows = (
+        db.query(FinanceTransaction)
+        .filter(FinanceTransaction.owner == user, FinanceTransaction.id.in_(matched_ids))
+        .all()
+    )
+    by_id = {tx.id: tx for tx in rows}
+    ordered = [by_id[tid] for tid in matched_ids if tid in by_id]
+    return ordered, missing, ambiguous, None
+
+
+def _parse_bulk_groups(args: dict) -> tuple[list[dict], Optional[str]]:
+    raw_updates = args.get("updates") or args.get("groups")
+    if isinstance(raw_updates, list) and raw_updates:
+        sources = []
+        for entry in raw_updates:
+            if not isinstance(entry, dict):
+                return [], "Each updates item must be an object with transaction_ids"
+            sources.append(entry)
+    else:
+        sources = [args]
+
+    groups: list[dict] = []
+    for entry in sources:
+        refs = _collect_tx_refs(entry)
+        movement_class = entry.get("movement_class")
+        if movement_class in ("", None):
+            movement_class = None
+        else:
+            movement_class = str(movement_class).strip().lower()
+        category_id = entry.get("category_id")
+        apply_to_payee = bool(entry.get("apply_to_payee", args.get("apply_to_payee")))
+        if not refs:
+            continue
+        if movement_class is None and not category_id:
+            return [], "Each update needs movement_class and/or category_id"
+        groups.append({
+            "refs": refs,
+            "movement_class": movement_class,
+            "category_id": category_id,
+            "apply_to_payee": apply_to_payee,
+        })
+    if not groups:
+        return [], "transaction_ids (or updates[].transaction_ids) are required"
+    total = sum(len(group["refs"]) for group in groups)
+    if total > _MAX_BULK_TX:
+        return [], f"Max {_MAX_BULK_TX} transaction ids per call. Split into chunks."
+    return groups, None
+
+
+def _bulk_gate_args(action: str, groups: list[dict]) -> dict:
+    if len(groups) == 1:
+        group = groups[0]
+        payload = {
+            "action": action,
+            "transaction_ids": list(group["refs"]),
+        }
+        if group.get("movement_class"):
+            payload["movement_class"] = group["movement_class"]
+        if group.get("category_id"):
+            payload["category_id"] = str(group["category_id"])
+        if group.get("apply_to_payee"):
+            payload["apply_to_payee"] = True
+        if len(group["refs"]) == 1:
+            payload["transaction_id"] = group["refs"][0]
+        return payload
+    updates = []
+    for group in groups:
+        item: dict[str, Any] = {"transaction_ids": list(group["refs"])}
+        if group.get("movement_class"):
+            item["movement_class"] = group["movement_class"]
+        if group.get("category_id"):
+            item["category_id"] = str(group["category_id"])
+        if group.get("apply_to_payee"):
+            item["apply_to_payee"] = True
+        updates.append(item)
+    return {"action": action, "updates": updates}
+
+
+def _execute_bulk_finance_updates(
+    db,
+    user: str,
+    *,
+    session_id: Optional[str],
+    args: dict,
+    action: str,
+) -> Dict:
+    from integrations.finance.services.movements import bulk_classify_transactions
+    from src.confirmation_gates import consume_confirmation, require_confirmed_action
+
+    groups, parse_err = _parse_bulk_groups(args)
+    if parse_err:
+        return {"error": parse_err, "exit_code": 1}
+
+    classify_actions = {"classify_transaction", "classify_transactions", "bulk_classify"}
+    categorize_actions = {"categorize_transaction", "categorize_transactions", "bulk_categorize"}
+    if action in classify_actions and any(not group.get("movement_class") for group in groups):
+        return {"error": "classify_transaction requires movement_class", "exit_code": 1}
+    if action in categorize_actions and any(not group.get("category_id") for group in groups):
+        return {"error": "categorize_transaction requires category_id", "exit_code": 1}
+
+    prepared: list[dict] = []
+    missing: list[str] = []
+    ambiguous: list[str] = []
+    for group in groups:
+        txs, group_missing, group_ambiguous, resolve_err = _resolve_transactions(
+            db, user, group["refs"]
+        )
+        if resolve_err:
+            return {"error": resolve_err, "exit_code": 1}
+        missing.extend(group_missing)
+        ambiguous.extend(group_ambiguous)
+        category_id = None
+        cat_label = None
+        if group.get("category_id"):
+            cat = _resolve_category(db, user, str(group["category_id"]))
+            if not cat:
+                return {
+                    "error": f"Category not found: {group['category_id']}",
+                    "exit_code": 1,
+                }
+            category_id = cat.id
+            cat_label = cat.name
+        if not txs:
+            continue
+        prepared.append({
+            "refs": [tx.id for tx in txs],
+            "movement_class": group.get("movement_class"),
+            "category_id": category_id,
+            "cat_label": cat_label,
+            "apply_to_payee": bool(group.get("apply_to_payee")),
+        })
+    if not prepared:
+        detail = []
+        if missing:
+            detail.append("missing " + ", ".join(missing[:8]))
+        if ambiguous:
+            detail.append("ambiguous " + ", ".join(ambiguous[:8]))
+        return {
+            "error": "No matching transactions. " + "; ".join(detail),
+            "exit_code": 1,
+        }
+
+    gate_action = action
+    if action in {"classify_transactions", "bulk_classify"}:
+        gate_action = "classify_transaction"
+    elif action in {"categorize_transactions", "bulk_categorize"}:
+        gate_action = "categorize_transaction"
+    elif action in {"bulk_update", "bulk_update_transactions"}:
+        gate_action = "bulk_update_transactions"
+
+    gate_args = _bulk_gate_args(gate_action, prepared)
+    gate_err = require_confirmed_action(
+        session_id=session_id,
+        owner=user,
+        domain="finance",
+        tool_name="manage_finance",
+        action=gate_action,
+        tool_args=gate_args,
+        confirmation_token=args.get("confirmation_token"),
+    )
+    if gate_err:
+        return {"error": gate_err, "exit_code": 1}
+
+    summaries: list[str] = []
+    for group in prepared:
+        count = bulk_classify_transactions(
+            db,
+            user,
+            tx_ids=list(group["refs"]),
+            movement_class=group.get("movement_class"),
+            category_id=group.get("category_id"),
+            apply_to_payee=bool(group.get("apply_to_payee")),
+            commit=False,
+        )
+        bits = []
+        if group.get("movement_class"):
+            bits.append(group["movement_class"])
+        if group.get("cat_label"):
+            bits.append(group["cat_label"])
+        payee_note = " including same-payee rows" if group.get("apply_to_payee") else ""
+        summaries.append(f"{count}{payee_note} -> {', '.join(bits) or 'updated'}")
+
+    db.commit()
+
+    token = str(args.get("confirmation_token") or "").strip()
+    if token and session_id:
+        consume_confirmation(token=token, session_id=session_id, owner=user, consume_all=True)
+
+    lines = ["Updated " + "; ".join(summaries) + "."]
+    if missing:
+        lines.append("Not found: " + ", ".join(missing[:20]) + ("..." if len(missing) > 20 else ""))
+    if ambiguous:
+        lines.append(
+            "Ambiguous prefixes (skipped): "
+            + ", ".join(ambiguous[:20])
+            + ("..." if len(ambiguous) > 20 else "")
+        )
+    return {"response": "\n".join(lines), "exit_code": 0}
+
+
 def _invalid_arg_error(action: str, exc: Exception) -> Dict:
 
     numeric_fields = (
@@ -215,6 +489,13 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
         "networth": "net_worth",
 
         "suggest": "suggest_categories",
+        "classify": "classify_transaction",
+        "classify_transactions": "classify_transaction",
+        "bulk_classify": "classify_transaction",
+        "categorize_transactions": "categorize_transaction",
+        "bulk_categorize": "categorize_transaction",
+        "bulk_update": "bulk_update_transactions",
+
 
     }
 
@@ -304,7 +585,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
                 lines.append(
 
-                    f"- [{acct.id[:8]}] {acct.name}{mask}{inst} — {_fmt_cents(bal)} ({acct.account_type}, {purpose}){pin_bit}"
+                    f"- [{acct.id[:8]}] {acct.name}{mask}{inst} - {_fmt_cents(bal)} ({acct.account_type}, {purpose}){pin_bit}"
 
                 )
 
@@ -315,6 +596,7 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
         if action == "list_transactions":
 
             limit = min(int(args.get("limit") or 25), _MAX_TX_LIMIT)
+            offset = max(int(args.get("offset") or 0), 0)
 
             q = apply_transaction_filters(
 
@@ -339,6 +621,8 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
                 max_amount_cents=args.get("max_amount_cents"),
 
                 uncategorized=bool(args.get("uncategorized")),
+                unclassified=bool(args.get("unclassified")),
+                movement_class=args.get("movement_class"),
 
             )
 
@@ -363,6 +647,8 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
             txs = (
 
                 q.order_by(FinanceTransaction.date.desc(), FinanceTransaction.created_at.desc())
+
+                .offset(offset)
 
                 .limit(limit)
 
@@ -400,13 +686,17 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
                     f"- {tx.date} | {_fmt_cents(tx.amount_cents)} | {tx.payee or '(no payee)'} | "
 
-                    f"{cat} | acct={acct} [{tx.id[:8]}]"
+                    f"{cat} | {tx.movement_class or 'unclassified'} | acct={acct} [{tx.id[:8]}]"
 
                 )
 
             if total > limit:
 
-                lines.append(f"(Capped at {limit}. Use search/month filters to narrow.)")
+                next_offset = offset + limit
+                lines.append(
+                    f"(Capped at {limit}. Pass offset={next_offset} for the next page, "
+                    f"or classify/categorize with transaction_ids in one bulk call.)"
+                )
 
             return {"response": "\n".join(lines), "exit_code": 0}
 
@@ -1019,91 +1309,16 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
 
 
-        if action == "categorize_transaction":
-
-            tx_id = (args.get("transaction_id") or args.get("id") or "").strip()
-
-            category_id = args.get("category_id")
-
-            if not tx_id or not category_id:
-
-                return {"error": "categorize_transaction requires transaction_id and category_id", "exit_code": 1}
-
-            tx = _resolve_transaction(db, user, tx_id)
-
-            if not tx:
-
-                return {"error": "Transaction not found", "exit_code": 1}
-
-            cat = _resolve_category(db, user, str(category_id))
-
-            if not cat:
-
-                return {"error": "Category not found", "exit_code": 1}
-
-
-
-            gate_args = {
-
-                "action": "categorize_transaction",
-
-                "transaction_id": tx.id,
-
-                "category_id": cat.id,
-
-            }
-
-            from src.confirmation_gates import consume_confirmation, require_confirmed_action
-
-
-
-            gate_err = require_confirmed_action(
-
-                session_id=session_id,
-
-                owner=user,
-
-                domain="finance",
-
-                tool_name="manage_finance",
-
-                action="categorize_transaction",
-
-                tool_args=gate_args,
-
-                confirmation_token=args.get("confirmation_token"),
-
+        if action in {
+            "categorize_transaction",
+            "categorize_transactions",
+            "classify_transaction",
+            "classify_transactions",
+            "bulk_update_transactions",
+        }:
+            return _execute_bulk_finance_updates(
+                db, user, session_id=session_id, args=args, action=action,
             )
-
-            if gate_err:
-
-                return {"error": gate_err, "exit_code": 1}
-
-
-
-            tx.category_id = cat.id
-
-            db.commit()
-
-
-
-            token = str(args.get("confirmation_token") or "").strip()
-
-            if token and session_id:
-
-                consume_confirmation(token=token, session_id=session_id, owner=user)
-
-
-
-            return {
-
-                "response": f"Categorized {tx.payee or tx.id[:8]} as {cat.name}.",
-
-                "exit_code": 0,
-
-            }
-
-
 
         if action == "set_budget":
 
@@ -1321,12 +1536,12 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
         if action in {
             "create_transaction", "update_transaction", "void_transaction",
-            "unvoid_transaction", "delete_transaction", "classify_transaction",
+            "unvoid_transaction", "delete_transaction",
             "link_transactions", "pin_account",
         }:
             from src.confirmation_gates import consume_confirmation, require_confirmed_action
             from integrations.finance.services.accounts import pin_account_balances
-            from integrations.finance.services.movements import classify_transaction, link_movements
+            from integrations.finance.services.movements import link_movements
             from integrations.finance.services.transactions import (
                 ImportedTransactionError,
                 create_manual_transaction,
@@ -1401,12 +1616,6 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
                         return {"error": "Transaction not found", "exit_code": 1}
                     delete_manual_transaction(db, user, tx_ref.id, actor="agent")
                     msg = f"Deleted transaction {tx_ref.id[:8]}."
-                elif action == "classify_transaction":
-                    tx_ref = _resolve_transaction(db, user, str(args.get("transaction_id") or ""))
-                    if not tx_ref:
-                        return {"error": "Transaction not found", "exit_code": 1}
-                    tx = classify_transaction(db, user, tx_ref.id, str(args.get("movement_class") or ""))
-                    msg = f"Classed transaction {tx.id[:8]} as {tx.movement_class}."
                 elif action == "link_transactions":
                     group = link_movements(db, user, list(args.get("tx_ids") or []))
                     msg = f"Linked {len(args.get('tx_ids') or [])} transactions."
@@ -1450,7 +1659,9 @@ async def do_manage_finance(content: str, owner: Optional[str] = None, session_i
 
                 "create_transaction, update_transaction, void_transaction, delete_transaction, "
 
-                "classify_transaction, link_transactions, pin_account, mark_recurring_automatic."
+                "classify_transaction, bulk_update_transactions, link_transactions, pin_account, "
+
+                "mark_recurring_automatic."
 
             ),
 

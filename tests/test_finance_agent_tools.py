@@ -634,6 +634,270 @@ async def test_manage_finance_create_rule_auto_applies_existing(finance_tool_env
         db.close()
 
 
+def _seed_tx(db, owner, *, acct_id, tx_id, payee, amount_cents=-1000, category_id=None, movement_class=None):
+    db.add(FinanceTransaction(
+        id=tx_id,
+        owner=owner,
+        account_id=acct_id,
+        date=__import__("datetime").date(2026, 6, 1),
+        amount_cents=amount_cents,
+        payee=payee,
+        dedup_hash=tx_id,
+        category_id=category_id,
+        movement_class=movement_class,
+    ))
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_batch_classify_transaction_ids(finance_tool_env, monkeypatch):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(id="acct-bulk", owner=owner, name="Checking", account_type="checking"))
+        for i in range(4):
+            _seed_tx(db, owner, acct_id="acct-bulk", tx_id=f"tx-pass-{i:04d}-aaaa-bbbb-cccc-ddddeeeeffff", payee=f"VENMO {i}")
+        _seed_tx(db, owner, acct_id="acct-bulk", tx_id="tx-keep-0001-aaaa-bbbb-cccc-ddddeeeeffff", payee="COSTCO")
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "src.confirmation_gates.core.auto_approve_finance_enabled",
+        lambda user: user == owner,
+    )
+    ids = [f"tx-pass-{i:04d}" for i in range(4)]
+    result = await do_manage_finance(
+        json.dumps({
+            "action": "classify_transaction",
+            "transaction_ids": ids,
+            "movement_class": "pass_through",
+        }),
+        owner=owner,
+        session_id="sess-bulk-class",
+    )
+    assert result.get("exit_code") == 0, result
+    assert "4" in (result.get("response") or "")
+    assert "pass_through" in (result.get("response") or "")
+
+    db = finance_tool_env["session_factory"]()
+    try:
+        rows = db.query(FinanceTransaction).filter(FinanceTransaction.owner == owner).all()
+        by_id = {tx.id: tx for tx in rows}
+        for i in range(4):
+            assert by_id[f"tx-pass-{i:04d}-aaaa-bbbb-cccc-ddddeeeeffff"].movement_class == "pass_through"
+        assert by_id["tx-keep-0001-aaaa-bbbb-cccc-ddddeeeeffff"].movement_class is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_batch_categorize_transaction_ids(finance_tool_env, monkeypatch):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(id="acct-cat", owner=owner, name="Checking", account_type="checking"))
+        db.add(FinanceCategory(id="cat-groc-1111-2222-3333-444455556666", owner=owner, name="Groceries", is_income=False))
+        for i in range(3):
+            _seed_tx(db, owner, acct_id="acct-cat", tx_id=f"tx-groc-{i:04d}-aaaa-bbbb-cccc-ddddeeeeffff", payee=f"SAFEWAY {i}")
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "src.confirmation_gates.core.auto_approve_finance_enabled",
+        lambda user: user == owner,
+    )
+    result = await do_manage_finance(
+        json.dumps({
+            "action": "categorize_transaction",
+            "transaction_ids": ["tx-groc-0000", "tx-groc-0001", "tx-groc-0002"],
+            "category_id": "Groceries",
+        }),
+        owner=owner,
+        session_id="sess-bulk-cat",
+    )
+    assert result.get("exit_code") == 0, result
+    assert "Groceries" in (result.get("response") or "")
+
+    db = finance_tool_env["session_factory"]()
+    try:
+        rows = db.query(FinanceTransaction).filter(FinanceTransaction.owner == owner).all()
+        assert {tx.category_id for tx in rows} == {"cat-groc-1111-2222-3333-444455556666"}
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_mixed_bulk_updates(finance_tool_env, monkeypatch):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(id="acct-mix", owner=owner, name="Checking", account_type="checking"))
+        db.add(FinanceCategory(id="cat-dine-1111-2222-3333-444455556666", owner=owner, name="Dining", is_income=False))
+        _seed_tx(db, owner, acct_id="acct-mix", tx_id="tx-mix-pass-aaaa-bbbb-cccc-ddddeeeeffff", payee="PAYPAL INST XFER")
+        _seed_tx(db, owner, acct_id="acct-mix", tx_id="tx-mix-inc-aaaa-bbbb-cccc-ddddeeeeffff", payee="PAYROLL", amount_cents=50000)
+        _seed_tx(db, owner, acct_id="acct-mix", tx_id="tx-mix-dine-aaaa-bbbb-cccc-ddddeeeeffff", payee="PIZZA")
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "src.confirmation_gates.core.auto_approve_finance_enabled",
+        lambda user: user == owner,
+    )
+    result = await do_manage_finance(
+        json.dumps({
+            "action": "bulk_update_transactions",
+            "updates": [
+                {"transaction_ids": ["tx-mix-pass"], "movement_class": "pass_through"},
+                {"transaction_ids": ["tx-mix-inc"], "movement_class": "income"},
+                {"transaction_ids": ["tx-mix-dine"], "category_id": "Dining", "movement_class": "spend"},
+            ],
+        }),
+        owner=owner,
+        session_id="sess-bulk-mix",
+    )
+    assert result.get("exit_code") == 0, result
+    assert "pass_through" in (result.get("response") or "")
+    assert "income" in (result.get("response") or "")
+    assert "Dining" in (result.get("response") or "")
+
+    db = finance_tool_env["session_factory"]()
+    try:
+        rows = {tx.id: tx for tx in db.query(FinanceTransaction).filter_by(owner=owner).all()}
+        assert rows["tx-mix-pass-aaaa-bbbb-cccc-ddddeeeeffff"].movement_class == "pass_through"
+        assert rows["tx-mix-inc-aaaa-bbbb-cccc-ddddeeeeffff"].movement_class == "income"
+        dine = rows["tx-mix-dine-aaaa-bbbb-cccc-ddddeeeeffff"]
+        assert dine.movement_class == "spend"
+        assert dine.category_id == "cat-dine-1111-2222-3333-444455556666"
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_classify_apply_to_payee(finance_tool_env, monkeypatch):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(id="acct-payee", owner=owner, name="Checking", account_type="checking"))
+        _seed_tx(db, owner, acct_id="acct-payee", tx_id="tx-sbx-1-aaaa-bbbb-cccc-ddddeeeeffff", payee="STARBUCKS")
+        _seed_tx(db, owner, acct_id="acct-payee", tx_id="tx-sbx-2-aaaa-bbbb-cccc-ddddeeeeffff", payee="STARBUCKS")
+        _seed_tx(db, owner, acct_id="acct-payee", tx_id="tx-other-aaaa-bbbb-cccc-ddddeeeeffff", payee="COSTCO")
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "src.confirmation_gates.core.auto_approve_finance_enabled",
+        lambda user: user == owner,
+    )
+    result = await do_manage_finance(
+        json.dumps({
+            "action": "classify_transaction",
+            "transaction_ids": ["tx-sbx-1"],
+            "movement_class": "spend",
+            "apply_to_payee": True,
+        }),
+        owner=owner,
+        session_id="sess-payee",
+    )
+    assert result.get("exit_code") == 0, result
+    db = finance_tool_env["session_factory"]()
+    try:
+        rows = {tx.id: tx for tx in db.query(FinanceTransaction).filter_by(owner=owner).all()}
+        assert rows["tx-sbx-1-aaaa-bbbb-cccc-ddddeeeeffff"].movement_class == "spend"
+        assert rows["tx-sbx-2-aaaa-bbbb-cccc-ddddeeeeffff"].movement_class == "spend"
+        assert rows["tx-other-aaaa-bbbb-cccc-ddddeeeeffff"].movement_class is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_bulk_classify_requires_confirmation(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(id="acct-gate", owner=owner, name="Checking", account_type="checking"))
+        _seed_tx(db, owner, acct_id="acct-gate", tx_id="tx-gate-aaaa-bbbb-cccc-ddddeeeeffff", payee="VENMO")
+        db.commit()
+    finally:
+        db.close()
+
+    blocked = await do_manage_finance(
+        json.dumps({
+            "action": "classify_transaction",
+            "transaction_ids": ["tx-gate"],
+            "movement_class": "transfer",
+        }),
+        owner=owner,
+        session_id="sess-gate",
+    )
+    assert blocked.get("exit_code") == 1
+    assert "confirmation" in (blocked.get("error") or "").lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_bulk_rejects_over_limit(finance_tool_env, monkeypatch):
+    owner = finance_tool_env["owner"]
+    monkeypatch.setattr(
+        "src.confirmation_gates.core.auto_approve_finance_enabled",
+        lambda user: user == owner,
+    )
+    result = await do_manage_finance(
+        json.dumps({
+            "action": "classify_transaction",
+            "transaction_ids": [f"tx-{i:04d}" for i in range(501)],
+            "movement_class": "spend",
+        }),
+        owner=owner,
+        session_id="sess-limit",
+    )
+    assert result.get("exit_code") == 1
+    assert "500" in (result.get("error") or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.area_routes
+async def test_manage_finance_list_shows_class_and_unclassified_filter(finance_tool_env):
+    owner = finance_tool_env["owner"]
+    db = finance_tool_env["session_factory"]()
+    try:
+        db.add(FinanceAccount(id="acct-list", owner=owner, name="Checking", account_type="checking"))
+        _seed_tx(
+            db, owner, acct_id="acct-list", tx_id="tx-listed-aaaa-bbbb-cccc-ddddeeeeffff",
+            payee="WHOLE FOODS", movement_class="spend",
+        )
+        _seed_tx(
+            db, owner, acct_id="acct-list", tx_id="tx-nullcl-aaaa-bbbb-cccc-ddddeeeeffff",
+            payee="MYSTERY",
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    listed = await do_manage_finance(
+        json.dumps({"action": "list_transactions", "limit": 10}),
+        owner=owner,
+    )
+    assert listed.get("exit_code") == 0
+    assert "spend" in (listed.get("response") or "")
+    assert "unclassified" in (listed.get("response") or "")
+
+    only_null = await do_manage_finance(
+        json.dumps({"action": "list_transactions", "unclassified": True, "limit": 10}),
+        owner=owner,
+    )
+    assert only_null.get("exit_code") == 0
+    assert "MYSTERY" in (only_null.get("response") or "")
+    assert "WHOLE FOODS" not in (only_null.get("response") or "")
+
+
 FINANCE_READ_ACTIONS = {
     "list_accounts",
     "list_transactions",

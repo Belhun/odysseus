@@ -303,8 +303,9 @@ _DOMAIN_RULES = {
 ## Finance rules
 - Accounts, balances, transactions, budgets, spending reports, and categorization all use `manage_finance`; start with `action=list_accounts` when the user names an account.
 - Do not claim there is no bank/finance integration — the local finance plugin holds imported transactions.
-- Prefer `spending_report` for category totals; use `list_transactions` only when specific rows are needed.
-- Writes (set_budget, create_rule, categorize_transaction, create_category) need a confirmation flow: propose via `ask_user`, then repeat the call with `confirmation_token`.
+- Prefer `spending_report` for category totals; use `list_transactions` only when specific rows are needed (max 200; use `offset` to page).
+- BULK classify/categorize: NEVER loop `classify_transaction` / `categorize_transaction` one row at a time. Pass `transaction_ids` (all ids that share the same class or category, max 500) in ONE call. For mixed classes/categories, use `bulk_update_transactions` once with an `updates` array. Optional `apply_to_payee: true` applies the same class/category to other rows with that payee.
+- Writes (set_budget, create_rule, categorize_transaction, classify_transaction, bulk_update_transactions, create_category) need a confirmation flow: propose via `ask_user`, then repeat the call with `confirmation_token`.
 - If the user enabled Finance AI auto-approve in Settings → Integrations, skip confirmation and call those actions directly.
 - CSV/OFX bank import is UI-only — direct the user to the Finance panel (`ui_control open_panel finance`).""",
     "ui": """\
@@ -593,9 +594,10 @@ If the user asks for a reminder/alarm before the event, pass `reminder_minutes` 
 {"action": "spending_report", "month": "2026-06"}
 ```
 Local finance plugin: accounts, spending by category, budgets, trends, transaction search. \
-Actions: `list_accounts`, `list_transactions`, `spending_report`, `budget_status`, `trends`, `list_categories`, `create_category`, `list_import_batches`, `categorize_transaction`, `set_budget`, `create_rule`. \
+Actions: `list_accounts`, `list_transactions`, `spending_report`, `budget_status`, `trends`, `list_categories`, `create_category`, `list_import_batches`, `categorize_transaction`, `classify_transaction`, `bulk_update_transactions`, `set_budget`, `create_rule`. \
 For "how much did I spend on groceries" use `spending_report` (defaults to current month). \
-For specific payees use `list_transactions` with `search` (max 50 rows). \
+For specific payees use `list_transactions` with `search` (max 200 rows; page with `offset`). Filter with `unclassified=true` or `uncategorized=true`. \
+NEVER loop classify/categorize one transaction at a time. Pass `transaction_ids` on `classify_transaction` or `categorize_transaction` (same class or category, max 500 ids). For mixed groups use one `bulk_update_transactions` call with `updates`: [{transaction_ids, movement_class and/or category_id}, ...]. Set `apply_to_payee: true` to also update other rows with the same payee. \
 New categories: use ask_user with a `confirmation` block. For multiple categories, include an `items` array in `confirmation.payload` (each item: name, optional parent_id/color). After approval, either call `create_categories` once with the full `categories` array, or call `create_category` repeatedly with the same `confirmation_token` until every approved item is created. Use `parent_id` for subcategories (one level under a top-level category). \
 Bank CSV/OFX import has no tool path — `ui_control open_panel finance` opens the Import UI.""",
     "manage_sysforge": """\
@@ -2324,8 +2326,10 @@ def _build_base_prompt(
                 agent_prompt += (
                     "\n## Finance auto-approve\n"
                     "This user enabled auto-approve for finance mutations. Call "
-                    "categorize_transaction, create_rule, set_budget, create_category, and "
-                    "create_categories directly without ask_user confirmation blocks.\n"
+                    "categorize_transaction, classify_transaction, bulk_update_transactions, "
+                    "create_rule, set_budget, create_category, and "
+                    "create_categories directly without ask_user confirmation blocks. "
+                    "Batch classify/categorize with transaction_ids or updates; do not loop one id.\n"
                 )
         except Exception:
             pass

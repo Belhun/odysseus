@@ -290,18 +290,99 @@ def _validate_create_rule(payload: dict[str, Any], tool_args: dict[str, Any]) ->
 
 
 
+def _collect_tx_refs_from(data: dict[str, Any]) -> list[str]:
+    refs: list[str] = []
+    for key in ("transaction_ids", "tx_ids"):
+        raw = data.get(key)
+        if isinstance(raw, list):
+            refs.extend(str(x).strip() for x in raw if str(x).strip())
+        elif isinstance(raw, str) and raw.strip():
+            refs.extend(part.strip() for part in raw.split(",") if part.strip())
+    for key in ("transaction_id", "id"):
+        val = str(data.get(key) or "").strip()
+        if val:
+            refs.append(val)
+    seen: set[str] = set()
+    out: list[str] = []
+    for ref in refs:
+        key = ref.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(ref)
+    return out
+
+
+def _tx_prefix_set(refs: list[str]) -> set[str]:
+    return {ref.strip().lower()[:8] for ref in refs if str(ref).strip()}
+
+
+def _validate_tx_id_list(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
+    expected = _collect_tx_refs_from(payload)
+    actual = _collect_tx_refs_from(tool_args)
+    if not expected:
+        return "transaction_id is required on the confirmation payload"
+    if not actual:
+        return "transaction_id is required"
+    if _tx_prefix_set(expected) != _tx_prefix_set(actual):
+        return "Confirmed transaction_ids do not match tool call"
+    return None
+
+
 def _validate_categorize_transaction(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
+    err = _validate_tx_id_list(payload, tool_args)
+    if err:
+        return err
+    expected = str(payload.get("category_id") or "").strip()
+    actual = str(tool_args.get("category_id") or "").strip()
+    if expected and actual and not _id_prefix_matches(expected, actual):
+        return "Confirmed category_id does not match tool call"
+    if bool(payload.get("apply_to_payee")) != bool(tool_args.get("apply_to_payee")):
+        return "Confirmed apply_to_payee does not match tool call"
+    return None
 
-    for key, arg_key in (("transaction_id", "transaction_id"), ("category_id", "category_id")):
 
-        expected = str(payload.get(key) or payload.get("id") or "").strip()
+def _validate_classify_transaction(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
+    err = _validate_tx_id_list(payload, tool_args)
+    if err:
+        return err
+    expected_cls = str(payload.get("movement_class") or "").strip().lower()
+    actual_cls = str(tool_args.get("movement_class") or "").strip().lower()
+    if expected_cls and actual_cls and expected_cls != actual_cls:
+        return "Confirmed movement_class does not match tool call"
+    if bool(payload.get("apply_to_payee")) != bool(tool_args.get("apply_to_payee")):
+        return "Confirmed apply_to_payee does not match tool call"
+    return None
 
-        actual = str(tool_args.get(arg_key) or tool_args.get("id") or "").strip()
 
-        if expected and actual and not _id_prefix_matches(expected, actual):
+def _normalize_bulk_updates(data: dict[str, Any]) -> list[tuple]:
+    raw = data.get("updates")
+    groups: list[tuple] = []
+    sources = raw if isinstance(raw, list) and raw else None
+    if sources is not None:
+        entries = [entry for entry in sources if isinstance(entry, dict)]
+    else:
+        entries = [data]
+    for entry in entries:
+        ids = _tx_prefix_set(_collect_tx_refs_from(entry))
+        if not ids:
+            continue
+        groups.append((
+            tuple(sorted(ids)),
+            str(entry.get("movement_class") or "").strip().lower(),
+            str(entry.get("category_id") or "").strip().lower()[:8],
+            bool(entry.get("apply_to_payee")),
+        ))
+    return groups
 
-            return f"Confirmed {key} does not match tool call"
 
+def _validate_bulk_update_transactions(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
+    expected = _normalize_bulk_updates(payload)
+    actual = _normalize_bulk_updates(tool_args)
+    if not expected:
+        return "updates or transaction_ids are required on the confirmation payload"
+    if expected != actual:
+        return "Confirmed bulk updates do not match tool call"
     return None
 
 
@@ -342,13 +423,7 @@ def _validate_update_transaction(payload: dict[str, Any], tool_args: dict[str, A
 
 
 def _validate_tx_id_action(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
-    expected = str(payload.get("transaction_id") or payload.get("id") or "").strip()
-    actual = str(tool_args.get("transaction_id") or tool_args.get("id") or "").strip()
-    if expected and actual and not _id_prefix_matches(expected, actual):
-        return "Confirmed transaction_id does not match tool call"
-    if not expected:
-        return "transaction_id is required on the confirmation payload"
-    return None
+    return _validate_tx_id_list(payload, tool_args)
 
 
 def _validate_link_transactions(payload: dict[str, Any], tool_args: dict[str, Any]) -> Optional[str]:
@@ -425,7 +500,9 @@ def register_finance_confirmation_gate() -> None:
 
                 "delete_transaction": _validate_tx_id_action,
 
-                "classify_transaction": _validate_tx_id_action,
+                "classify_transaction": _validate_classify_transaction,
+
+                "bulk_update_transactions": _validate_bulk_update_transactions,
 
                 "link_transactions": _validate_link_transactions,
 

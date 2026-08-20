@@ -1,6 +1,13 @@
 services:
   odysseus:
-    build: .
+    build:
+      context: .
+      args:
+        # Host .env / compose override. Default false keeps the MIT-core image.
+        INSTALL_OPTIONAL: ${INSTALL_OPTIONAL:-false}
+        # Comma-separated names to skip from requirements-optional.txt when
+        # INSTALL_OPTIONAL=true (e.g. faster-whisper on API-only hosts).
+        OPTIONAL_EXCLUDE: ${OPTIONAL_EXCLUDE:-}
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-7000}:7000"
     volumes:

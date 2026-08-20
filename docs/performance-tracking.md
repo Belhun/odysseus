@@ -34,11 +34,10 @@ Chat message metrics (tok/s, time-to-first-token, agent prep breakdown) are sepa
 docker compose up -d --build
 ```
 
-To include optional packages (including `psutil`) in the image:
+To include optional packages (including `psutil`) in the image, set `INSTALL_OPTIONAL=true` in `.env` then:
 
 ```bash
-docker compose build --build-arg INSTALL_OPTIONAL=true
-docker compose up -d
+docker compose up -d --build
 ```
 
 **Native (Linux / macOS / Windows):**

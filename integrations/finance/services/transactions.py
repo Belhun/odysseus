@@ -7,6 +7,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
+from sqlalchemy import and_, exists, or_
 from sqlalchemy.orm import Query, Session
 
 from integrations.finance.models import (
@@ -96,7 +97,19 @@ def apply_transaction_filters(
         account_ref = str(account_id).strip()
         q = q.filter(FinanceTransaction.account_id.startswith(account_ref))
     if category_id:
-        q = q.filter(FinanceTransaction.category_id == category_id)
+        split_in_category = exists().where(
+            and_(
+                FinanceTransactionSplit.transaction_id == FinanceTransaction.id,
+                FinanceTransactionSplit.owner == owner,
+                FinanceTransactionSplit.category_id == category_id,
+            )
+        )
+        q = q.filter(
+            or_(
+                FinanceTransaction.category_id == category_id,
+                split_in_category,
+            )
+        )
     if month:
         from integrations.finance.services.reports import month_bounds
 

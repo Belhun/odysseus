@@ -31,6 +31,8 @@ let _txSearchTimer = null;
 let _txShellBuiltForForm = null;
 let _txUnclassified = false;
 let _txUncategorized = false;
+let _txCategoryId = '';
+let _txMonth = '';
 let _selectedTxIds = new Set();
 let _showAccountForm = false;
 let _editingAccountId = null;
@@ -649,6 +651,98 @@ function _txPagerHtml(total, { border = 'top' } = {}) {
     </div>`;
 }
 
+function _txCategorySelectValue() {
+  if (_txUncategorized) return '__uncategorized__';
+  return _txCategoryId || '';
+}
+
+function _applyTxCategorySelect(value) {
+  if (value === '__uncategorized__') {
+    _txCategoryId = '';
+    _txUncategorized = true;
+    return;
+  }
+  _txCategoryId = value || '';
+  _txUncategorized = false;
+}
+
+function _txFiltersActive() {
+  return !!(
+    _txSearch
+    || _txCategoryId
+    || _txMonth
+    || _txUncategorized
+    || _txUnclassified
+  );
+}
+
+function _clearTxFilters() {
+  _txSearch = '';
+  _txCategoryId = '';
+  _txMonth = '';
+  _txUncategorized = false;
+  _txUnclassified = false;
+  _txPage = 0;
+}
+
+function _categoryLabel(categoryId) {
+  const cat = _categories.find((c) => c.id === categoryId);
+  if (!cat) return 'this category';
+  return (cat.display_name || cat.name || 'this category').trim();
+}
+
+function _txFilterStatusText() {
+  const parts = [];
+  if (_txUncategorized) parts.push('Uncategorized');
+  else if (_txCategoryId) parts.push(_categoryLabel(_txCategoryId));
+  if (_txMonth) parts.push(_txMonth);
+  if (_txSearch) parts.push(`payee matching "${_txSearch}"`);
+  if (_txUnclassified) parts.push('unclassified only');
+  return parts.join(' · ');
+}
+
+function _syncTxFilterControls() {
+  const searchInput = _el('finance-tx-search');
+  if (searchInput && searchInput.value !== _txSearch) searchInput.value = _txSearch;
+  const catSel = _el('finance-tx-category');
+  if (catSel) catSel.value = _txCategorySelectValue();
+  const monthInp = _el('finance-tx-month');
+  if (monthInp) monthInp.value = _txMonth;
+  const unclass = _el('finance-filter-unclassified');
+  if (unclass) unclass.checked = _txUnclassified;
+  const clearBtn = _el('finance-tx-clear');
+  if (clearBtn) clearBtn.style.display = _txFiltersActive() ? '' : 'none';
+}
+
+function _txListQuery() {
+  const offset = _txPage * TX_PAGE_SIZE;
+  let q = `/transactions?account_id=${encodeURIComponent(_activeAccountId)}`
+    + `&limit=${TX_PAGE_SIZE}&offset=${offset}&search=${encodeURIComponent(_txSearch)}`;
+  if (_txUnclassified) q += '&unclassified=true';
+  if (_txUncategorized) q += '&uncategorized=true';
+  else if (_txCategoryId) q += `&category_id=${encodeURIComponent(_txCategoryId)}`;
+  if (_txMonth) q += `&month=${encodeURIComponent(_txMonth)}`;
+  return q;
+}
+
+function _openBudgetCategory(categoryId, month, uncategorized) {
+  _txPage = 0;
+  _txSearch = '';
+  _txUnclassified = false;
+  _txMonth = month || '';
+  if (uncategorized) {
+    _txCategoryId = '';
+    _txUncategorized = true;
+  } else {
+    _txCategoryId = categoryId || '';
+    _txUncategorized = false;
+  }
+  _activeTab = 'transactions';
+  _txListAccountId = _activeAccountId;
+  _txShellBuiltForForm = null;
+  _renderPanel();
+}
+
 function _wireTxPagerButtons(root, pageCount) {
   root?.querySelectorAll('.finance-tx-prev').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -695,16 +789,11 @@ async function _fetchTransactionPage() {
   }
 
   try {
-    const offset = _txPage * TX_PAGE_SIZE;
-    const data = await _api(
-      `/transactions?account_id=${encodeURIComponent(_activeAccountId)}`
-      + `&limit=${TX_PAGE_SIZE}&offset=${offset}&search=${encodeURIComponent(_txSearch)}`
-      + `${_txUnclassified ? '&unclassified=true' : ''}`
-      + `${_txUncategorized ? '&uncategorized=true' : ''}`,
-    );
+    const data = await _api(_txListQuery());
     const txs = data.transactions || [];
     const total = Number(data.total) || 0;
-    if (status) status.textContent = _txSearch ? `Filtered by “${_txSearch}”` : '';
+    if (status) status.textContent = _txFilterStatusText();
+    _syncTxFilterControls();
     if (tbody) {
       tbody.innerHTML = txs.length
         ? txs.map(_txRowHtml).join('')
@@ -739,9 +828,15 @@ function _ensureTransactionsShell() {
   _panelSwap(panel, `
     <div id="finance-tx-root">
       <div style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <select id="finance-tx-category" style="min-width:170px;" title="Filter by category">
+          <option value="">All categories</option>
+          <option value="__uncategorized__">Uncategorized</option>
+          ${_categoryOptionsHtml(_txCategoryId)}
+        </select>
         <input id="finance-tx-search" type="search" placeholder="Search payee…" autocomplete="off" style="flex:1;min-width:160px;" />
+        <input id="finance-tx-month" type="month" value="${_escHtml(_txMonth)}" title="Filter by month" />
         <label style="font-size:0.85rem;"><input type="checkbox" id="finance-filter-unclassified" ${_txUnclassified ? 'checked' : ''} /> Unclassified</label>
-        <label style="font-size:0.85rem;"><input type="checkbox" id="finance-filter-uncategorized" ${_txUncategorized ? 'checked' : ''} /> Uncategorized</label>
+        <button type="button" id="finance-tx-clear" class="btn-secondary" style="${_txFiltersActive() ? '' : 'display:none;'}">Clear filters</button>
         <button type="button" id="finance-add-category-btn" class="btn-secondary">+ Category</button>
       </div>
       <div id="finance-bulk-bar" style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:0.85rem;">
@@ -771,17 +866,27 @@ function _ensureTransactionsShell() {
       _txSearchTimer = setTimeout(() => _fetchTransactionPage(), 300);
     });
   }
+  _el('finance-tx-category')?.addEventListener('change', (e) => {
+    _applyTxCategorySelect(e.target.value);
+    _txPage = 0;
+    _fetchTransactionPage();
+  });
+  _el('finance-tx-month')?.addEventListener('change', (e) => {
+    _txMonth = e.target.value || '';
+    _txPage = 0;
+    _fetchTransactionPage();
+  });
+  _el('finance-tx-clear')?.addEventListener('click', () => {
+    _clearTxFilters();
+    _syncTxFilterControls();
+    _fetchTransactionPage();
+  });
   _el('finance-add-category-btn')?.addEventListener('click', () => {
     _showCategoryForm = true;
     _renderTransactions();
   });
   _el('finance-filter-unclassified')?.addEventListener('change', (e) => {
     _txUnclassified = !!e.target.checked;
-    _txPage = 0;
-    _fetchTransactionPage();
-  });
-  _el('finance-filter-uncategorized')?.addEventListener('change', (e) => {
-    _txUncategorized = !!e.target.checked;
     _txPage = 0;
     _fetchTransactionPage();
   });
@@ -799,16 +904,12 @@ async function _renderTransactions() {
   }
   if (_txListAccountId !== _activeAccountId) {
     _txListAccountId = _activeAccountId;
-    _txPage = 0;
-    _txSearch = '';
+    _clearTxFilters();
     _selectedTxIds.clear();
     _txShellBuiltForForm = null;
   }
   _ensureTransactionsShell();
-  const searchInput = _el('finance-tx-search');
-  if (searchInput && searchInput.value !== _txSearch) {
-    searchInput.value = _txSearch;
-  }
+  _syncTxFilterControls();
   await _fetchTransactionPage();
 }
 
@@ -1200,14 +1301,21 @@ async function _renderBudget() {
   const month = _el('finance-budget-month')?.value || new Date().toISOString().slice(0, 7);
   const data = await _api(`/budgets?month=${month}`);
   if (seq !== _renderSeq) return;
-  const rows = (data.categories || []).map((c) => `
+  const rows = (data.categories || []).map((c) => {
+    const catId = c.category_id || '';
+    const uncategorized = catId ? '0' : '1';
+    return `
     <tr>
-      <td><span style="display:inline-block;width:10px;height:10px;background:${c.color};border-radius:2px;margin-right:6px;"></span>${c.category_name}</td>
+      <td>
+        <span style="display:inline-block;width:10px;height:10px;background:${_escHtml(c.color || '#888')};border-radius:2px;margin-right:6px;"></span>
+        <button type="button" class="finance-budget-cat" data-budget-open-cat="${_escHtml(catId)}" data-budget-uncategorized="${uncategorized}" title="Show transactions in this category" style="background:none;border:none;padding:0;color:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px;">${_escHtml(c.category_name)}</button>
+      </td>
       <td style="text-align:right;">${_fmtMoney(c.spent_cents)}</td>
       <td style="text-align:right;">${c.limit_cents != null ? _fmtMoney(c.limit_cents) : '—'}</td>
       <td style="text-align:right;">${c.remaining_cents != null ? _fmtMoney(c.remaining_cents) : '—'}</td>
-      <td><input type="number" min="0" step="1" data-budget-cat="${c.category_id}" placeholder="Set $" value="${c.limit_cents != null ? (c.limit_cents / 100).toFixed(0) : ''}" style="width:80px;" /></td>
-    </tr>`).join('');
+      <td><input type="number" min="0" step="1" data-budget-cat="${_escHtml(catId)}" placeholder="Set $" value="${c.limit_cents != null ? (c.limit_cents / 100).toFixed(0) : ''}" style="width:80px;" /></td>
+    </tr>`;
+  }).join('');
   _panelSwap(panel, `
     <h3 style="margin-top:0;">Budget — ${data.month}</h3>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
@@ -1218,7 +1326,7 @@ async function _renderBudget() {
         <input id="finance-income-target" type="number" step="1" value="${data.income_target_cents != null ? (data.income_target_cents / 100).toFixed(0) : ''}" style="width:90px;" />
       </label>
     </div>
-    <p style="opacity:0.8;font-size:0.85rem;">${_escHtml(_classifiedStat(data))} Category rows are gross; reimbursements offset below the table. Planned lines are not posted spend.</p>
+    <p style="opacity:0.8;font-size:0.85rem;">${_escHtml(_classifiedStat(data))} Click a category to open its transactions for this month. Category rows are gross; reimbursements offset below the table. Planned lines are not posted spend.</p>
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr><th>Category</th><th style="text-align:right;">Spent</th><th style="text-align:right;">Limit</th><th style="text-align:right;">Remaining</th><th>Set limit</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="5">No spending this month yet.</td></tr>'}</tbody>
@@ -1248,6 +1356,15 @@ async function _renderBudget() {
       });
     }
     _renderBudget();
+  });
+  panel.querySelectorAll('.finance-budget-cat').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      _openBudgetCategory(
+        btn.dataset.budgetOpenCat || '',
+        data.month,
+        btn.dataset.budgetUncategorized === '1',
+      );
+    });
   });
   _el('finance-budget-reload')?.addEventListener('click', _renderBudget);
   _el('finance-budget-copy')?.addEventListener('click', async () => {

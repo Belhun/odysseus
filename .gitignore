@@ -99,6 +99,11 @@ docs/windows-port/
 
 # Personal playground sync (belhun/playground only; see scripts/sync-playground.ps1)
 scripts/sync-playground.ps1
+# Personal Mini PC deploy wrapper (see scripts/deploy-compose-host.ps1)
+scripts/deploy-mini-pc.ps1
+
+# Host-local Compose overlay (optional extras, bind, etc.)
+docker-compose.override.yml
 
 # Local config
 compound.config.json

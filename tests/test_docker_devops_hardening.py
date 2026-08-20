@@ -48,6 +48,36 @@ def _cors_allow_methods() -> list[str]:
     raise AssertionError("CORS_ALLOW_METHODS not found")
 
 
+def test_compose_files_forward_optional_build_args():
+    for path in COMPOSE_FILES:
+        compose = yaml.safe_load(path.read_text(encoding="utf-8"))
+        args = compose["services"]["odysseus"]["build"]["args"]
+        assert args["INSTALL_OPTIONAL"] == "${INSTALL_OPTIONAL:-false}", path.name
+        assert args["OPTIONAL_EXCLUDE"] == "${OPTIONAL_EXCLUDE:-}", path.name
+
+
+def test_optional_requirements_filter_drops_named_packages():
+    import importlib.util
+
+    path = ROOT / "docker" / "filter_optional_requirements.py"
+    spec = importlib.util.spec_from_file_location("filter_optional_requirements", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    text = (
+        "# comment\n"
+        "faster-whisper\n"
+        "psutil\n"
+        "PyMuPDF\n"
+    )
+    filtered = module.filter_requirement_lines(text, "faster-whisper")
+    assert "faster-whisper\n" not in filtered
+    assert "psutil" in filtered
+    assert "PyMuPDF" in filtered
+    assert "# comment" in filtered
+
+
 def test_compose_files_forward_every_upload_limit_env_var():
     expected = _upload_limit_env_names()
     assert expected

@@ -21,7 +21,9 @@ secrets.env~
 **/#secrets.env#
 !secrets.env.example
 /data/
+data.before-restore*/
 /logs/
+docker-compose.override.yml
 .git/
 .claude/
 .playwright-mcp/
