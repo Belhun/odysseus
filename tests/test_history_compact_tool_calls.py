@@ -239,6 +239,35 @@ def test_registered_manual_compact_route_uses_session_owner(monkeypatch):
     assert ("utility", "session-owner") in captured["resolve_calls"]
 
 
+def test_manual_compact_preserves_finance_pin_metadata(monkeypatch):
+    response, _, manager = _registered_compact_response(
+        monkeypatch,
+        [
+            ChatMessage(
+                role="user",
+                content="show my transactions",
+                metadata={"pinned_tools": ["manage_finance"]},
+            ),
+            ChatMessage(role="assistant", content="tool call"),
+            ChatMessage(role="tool", content="tool result"),
+            ChatMessage(role="assistant", content="done"),
+            ChatMessage(role="user", content="How about now?"),
+            ChatMessage(role="assistant", content="final"),
+        ],
+    )
+
+    assert response.status_code == 200
+    summaries = [
+        message for message in manager.session.history
+        if (getattr(message, "metadata", None) or {}).get("compacted")
+    ]
+    assert summaries
+    assert all(
+        message.metadata.get("pinned_tools") == ["manage_finance"]
+        for message in summaries
+    )
+
+
 def test_registered_manual_compact_route_rejects_active_agent_run(monkeypatch):
     response, captured, manager = _registered_compact_response(
         monkeypatch,

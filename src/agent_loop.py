@@ -26,6 +26,7 @@ from src.prompt_security import untrusted_context_message
 from src.tool_security import blocked_tools_for_owner, plan_mode_disabled_tools
 from src.tool_policy import GUIDE_ONLY_DIRECTIVE, WEB_TOOL_NAMES, ToolPolicy
 from src.tool_utils import _truncate, get_mcp_manager, clip_tool_ui_display
+from src.tool_pins import finance_domain_matches, normalize_pinned_tools
 from src.agent_tools import (
     parse_tool_blocks,
     strip_tool_blocks,
@@ -303,9 +304,11 @@ _DOMAIN_RULES = {
 ## Finance rules
 - Accounts, balances, transactions, budgets, spending reports, and categorization all use `manage_finance`; start with `action=list_accounts` when the user names an account.
 - Do not claim there is no bank/finance integration — the local finance plugin holds imported transactions.
-- Prefer `spending_report` for category totals; use `list_transactions` only when specific rows are needed (max 200; use `offset` to page).
-- BULK classify/categorize: NEVER loop `classify_transaction` / `categorize_transaction` one row at a time. Pass `transaction_ids` (all ids that share the same class or category, max 500) in ONE call. For mixed classes/categories, use `bulk_update_transactions` once with an `updates` array. Optional `apply_to_payee: true` applies the same class/category to other rows with that payee.
-- Writes (set_budget, create_rule, categorize_transaction, classify_transaction, bulk_update_transactions, create_category) need a confirmation flow: propose via `ask_user`, then repeat the call with `confirmation_token`.
+- Prefer `spending_report` for category totals and `classification_status` for remaining class work. Use `list_transactions` only when specific rows are needed (default 25, max 500; page with real `offset`).
+- Prefer `classify_by_category` / `classify_by_filter` over harvesting hundreds of IDs. NEVER loop one row at a time. Use one bulk call, capped at 500 unique writes, and repeat with the same logical confirmation token while `remaining` is nonzero.
+- Before a set-based write, run its dry run or use the tool's returned preview. Disclose matched/eligible counts and unique-payee samples. `apply_to_payee` means exact normalized payee equality, not fuzzy search.
+- Rule writes default to fill-only. Run `test_rule` before overwrite, prefer longer/specific patterns and explicit priority, and use `apply_rule` for bounded continuation.
+- Writes need a confirmation flow: call once for the server-computed preview, propose that blast radius via `ask_user`, then repeat with `confirmation_token`.
 - If the user enabled Finance AI auto-approve in Settings → Integrations, skip confirmation and call those actions directly.
 - CSV/OFX bank import is UI-only — direct the user to the Finance panel (`ui_control open_panel finance`).""",
     "ui": """\
@@ -594,9 +597,9 @@ If the user asks for a reminder/alarm before the event, pass `reminder_minutes` 
 {"action": "spending_report", "month": "2026-06"}
 ```
 Local finance plugin: accounts, spending by category, budgets, trends, transaction search. \
-Actions: `list_accounts`, `list_transactions`, `spending_report`, `budget_status`, `trends`, `list_categories`, `create_category`, `list_import_batches`, `categorize_transaction`, `classify_transaction`, `bulk_update_transactions`, `set_budget`, `create_rule`. \
+Actions include `list_accounts`, `list_transactions`, `spending_report`, `classification_status`, `list_categories`, `categorize_transaction`, `classify_transaction`, `bulk_update_transactions`, `classify_by_category`, `classify_by_filter`, `test_rule`, `create_rule`, and `apply_rule`. \
 For "how much did I spend on groceries" use `spending_report` (defaults to current month). \
-For specific payees use `list_transactions` with `search` (max 200 rows; page with `offset`). Filter with `unclassified=true` or `uncategorized=true`. \
+For specific payees use `list_transactions` with tokenized payee-or-memo `search` (default 25, max 500; page with `offset`). Filter with `unclassified=true` or `uncategorized=true`. \
 NEVER loop classify/categorize one transaction at a time. Pass `transaction_ids` on `classify_transaction` or `categorize_transaction` (same class or category, max 500 ids). For mixed groups use one `bulk_update_transactions` call with `updates`: [{transaction_ids, movement_class and/or category_id}, ...]. Set `apply_to_payee: true` to also update other rows with the same payee. \
 New categories: use ask_user with a `confirmation` block. For multiple categories, include an `items` array in `confirmation.payload` (each item: name, optional parent_id/color). After approval, either call `create_categories` once with the full `categories` array, or call `create_category` repeatedly with the same `confirmation_token` until every approved item is created. Use `parent_id` for subcategories (one level under a top-level category). \
 Bank CSV/OFX import has no tool path — `ui_control open_panel finance` opens the Import UI.""",
@@ -1184,19 +1187,7 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
         domains.add("notes_calendar_tasks")
     if has(r"\b(calendar|event|meeting|appointment|schedule)\b"):
         domains.add("notes_calendar_tasks")
-    if has(
-        r"\bfinanc\w*",
-        r"\b(budgets?|budgeting)\b",
-        r"\b(spend|spends|spending|spent)\b",
-        r"\btransactions?\b",
-        r"\b(bank|banking)\b",
-        r"\b(expenses?|overspend|overspent)\b",
-        r"\b(checking|savings)\b",
-        r"\bnet worth\b",
-        r"\bbalances?\b",
-        r"\b(categ|catag|catgor|catr[iy]z|recategor)\w*",
-        r"\b(wells fargo|chase|citibank|capital one)\b",
-    ):
+    if finance_domain_matches(retrieval_query):
         domains.add("finance")
     if finance_continuation:
         domains.add("finance")
@@ -2745,6 +2736,39 @@ def _detect_runaway_call(call_freq, threshold=15):
     return sig.split(":", 1)[0] if sig else None
 
 
+def _should_direct_low_signal(
+    *,
+    low_signal: bool,
+    existing_conversation: bool,
+    continuation: bool,
+    plan_mode: bool,
+    approved_plan: Optional[str],
+    guide_only: bool,
+    casual_low_signal: bool,
+    active_document_relevant: bool,
+    active_email: Optional[Dict[str, str]],
+    workspace: Optional[str],
+    forced_tools: Optional[Set[str]],
+    relevant_tools: Optional[Set[str]],
+    pinned_tools: Optional[Set[str]],
+) -> bool:
+    """Whether the minimal no-tools reply is safe for this request."""
+    return bool(
+        low_signal
+        and not existing_conversation
+        and not continuation
+        and not plan_mode
+        and not approved_plan
+        and not guide_only
+        and (casual_low_signal or not active_document_relevant)
+        and (casual_low_signal or not active_email)
+        and (casual_low_signal or not workspace)
+        and not forced_tools
+        and not relevant_tools
+        and not pinned_tools
+    )
+
+
 async def stream_agent_loop(
     endpoint_url: str,
     model: str,
@@ -2769,6 +2793,7 @@ async def stream_agent_loop(
     workspace: Optional[str] = None,
     forced_tools: Optional[Set[str]] = None,
     uploaded_files: Optional[List[Dict]] = None,
+    pinned_tools: Optional[Set[str]] = None,
     workload: str = "foreground",
     _is_teacher_run: bool = False,
 ) -> AsyncGenerator[str, None]:
@@ -2791,6 +2816,7 @@ async def stream_agent_loop(
         if tool_policy.disable_mcp:
             mcp_mgr = None
     guide_only = bool(tool_policy and tool_policy.mode == "guide_only")
+    _session_pinned_tools = normalize_pinned_tools(pinned_tools)
     public_blocked_tools = blocked_tools_for_owner(owner)
     if public_blocked_tools:
         disabled_tools.update(public_blocked_tools)
@@ -2830,18 +2856,20 @@ async def stream_agent_loop(
             "mcp__email__list_emails", "mcp__email__read_email",
         })
     _prompt_active_document = active_document if _active_document_relevant else None
-    _direct_low_signal = (
-        _low_signal_turn
-        and not _existing_conversation
-        and not bool(_intent.get("continuation"))
-        and not plan_mode
-        and not approved_plan
-        and not guide_only
-        and (_casual_low_signal_turn or not _active_document_relevant)
-        and (_casual_low_signal_turn or not active_email)
-        and (_casual_low_signal_turn or not workspace)
-        and not forced_tools
-        and not relevant_tools
+    _direct_low_signal = _should_direct_low_signal(
+        low_signal=_low_signal_turn,
+        existing_conversation=_existing_conversation,
+        continuation=bool(_intent.get("continuation")),
+        plan_mode=plan_mode,
+        approved_plan=approved_plan,
+        guide_only=guide_only,
+        casual_low_signal=_casual_low_signal_turn,
+        active_document_relevant=_active_document_relevant,
+        active_email=active_email,
+        workspace=workspace,
+        forced_tools=forced_tools,
+        relevant_tools=relevant_tools,
+        pinned_tools=_session_pinned_tools,
     )
     # Tool retrieval uses the latest message by default. It may inherit recent
     # user turns only for explicit continuations ("yes", "do it", "1").
@@ -3205,6 +3233,20 @@ async def stream_agent_loop(
     elif _ody_notes_finetune_mode and _relevant_tools is not None:
         _relevant_tools = {"manage_notes", "ask_user", "update_plan"}
         logger.info("[agent-intent] odysseus notes finetune tool clamp=%s", sorted(_relevant_tools))
+
+    # Session pins are availability, not current-turn intent. Apply them after
+    # retrieval and model-specific clamps so compacted/elliptical follow-ups
+    # cannot lose finance. Explicit disabled/public/guide-only policy still wins.
+    if not guide_only and _session_pinned_tools:
+        if _relevant_tools is None:
+            from src.tool_index import ALWAYS_AVAILABLE
+            _relevant_tools = set(ALWAYS_AVAILABLE)
+        _relevant_tools.update(_session_pinned_tools - disabled_tools)
+        logger.info(
+            "[agent-intent] session_pins=%s selected=%s",
+            sorted(_session_pinned_tools),
+            sorted(_relevant_tools),
+        )
 
     if (
         _relevant_tools is not None

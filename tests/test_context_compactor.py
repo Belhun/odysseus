@@ -193,6 +193,20 @@ class TestMaybeCompactFourthMessage:
         result = self._run(messages)
         assert len(result) == 3 and result[2] is True
 
+    def test_returned_summary_preserves_finance_pin(self):
+        messages = self._four_turn_history_with_tool_call()
+        messages[1]["metadata"] = {"pinned_tools": ["manage_finance"]}
+
+        compacted_messages, _, was_compacted = self._run(messages)
+
+        assert was_compacted is True
+        summaries = [
+            message for message in compacted_messages
+            if "[Conversation summary" in str(message.get("content") or "")
+        ]
+        assert summaries
+        assert summaries[-1]["metadata"]["pinned_tools"] == ["manage_finance"]
+
 
 class TestResearchPrimerPreserved:
     """A research-spinoff primer (metadata research_spinoff_from) must never be

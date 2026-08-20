@@ -358,6 +358,22 @@ def test_save_assistant_response_preserves_actual_and_requested_model():
     assert sess.history[-1].metadata["model"] == "actual-model"
 
 
+def test_save_assistant_response_persists_finance_tool_pin():
+    sess = _FakeSession("selected-model")
+
+    save_assistant_response(
+        sess,
+        session_manager=None,
+        session_id="s1",
+        full_response="done",
+        last_metrics=None,
+        tool_events=[{"tool": "manage_finance", "action": "list_transactions"}],
+        incognito=True,
+    )
+
+    assert sess.history[-1].metadata["pinned_tools"] == ["manage_finance"]
+
+
 class _SpinMsg:
     def __init__(self, role, metadata=None):
         self.role = role
@@ -473,7 +489,13 @@ async def _build_context_owner_probe(monkeypatch, request_state):
             character_name=None,
         )
 
-    def fake_add_user_message(sess, chat_handler, preprocessed, incognito=False):
+    def fake_add_user_message(
+        sess,
+        chat_handler,
+        preprocessed,
+        incognito=False,
+        agent_mode=False,
+    ):
         sess.messages.append({"role": "user", "content": preprocessed.user_content})
 
     def fake_load_prefs(owner):

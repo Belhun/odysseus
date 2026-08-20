@@ -686,6 +686,9 @@ def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
             keep_count = 4
             older = session.history[:-keep_count]
             recent = session.history[-keep_count:]
+            from src.tool_pins import merge_pinned_tools, pinned_tools_from_history
+
+            compacted_pins = pinned_tools_from_history(session.history)
 
             # Build text to summarize
             convo_text = "\n".join(
@@ -718,13 +721,19 @@ def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
             system_summary = ChatMessage(
                 role="system",
                 content=f"[Conversation summary — {len(older)} earlier messages were compacted]\n\n{summary}",
-                metadata={"compacted": True, "hidden": True},
+                metadata=merge_pinned_tools(
+                    {"compacted": True, "hidden": True},
+                    compacted_pins,
+                ),
             )
             # Visible assistant message just shows stats
             summary_msg = ChatMessage(
                 role="assistant",
                 content=f"**Conversation compacted** — {len(older)} messages summarized, {len(recent)} kept.",
-                metadata={"compacted": True, "messages_removed": len(older)},
+                metadata=merge_pinned_tools(
+                    {"compacted": True, "messages_removed": len(older)},
+                    compacted_pins,
+                ),
             )
             new_history = [system_summary, summary_msg] + list(recent)
             session.history = new_history

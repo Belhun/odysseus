@@ -40,6 +40,7 @@ try:
         _compute_final_metrics,
         _append_tool_results,
         _insert_before_latest_user,
+        _should_direct_low_signal,
         _MCP_KEYWORDS,
     )
     _IMPORTED_AGENT_LOOP = sys.modules.get("src.agent_loop")
@@ -133,6 +134,31 @@ def test_finance_retry_after_fix_classifies_as_finance():
     intent = _classify_agent_request(messages, "try again, i think i fixed the issue")
 
     assert "finance" in intent["domains"]
+
+
+def test_finance_pin_disables_direct_low_signal_shortcut():
+    common = {
+        "low_signal": True,
+        "existing_conversation": False,
+        "continuation": False,
+        "plan_mode": False,
+        "approved_plan": None,
+        "guide_only": False,
+        "casual_low_signal": False,
+        "active_document_relevant": False,
+        "active_email": None,
+        "workspace": None,
+        "forced_tools": None,
+        "relevant_tools": None,
+    }
+    assert _should_direct_low_signal(**common, pinned_tools=None) is True
+    assert (
+        _should_direct_low_signal(
+            **common,
+            pinned_tools={"manage_finance"},
+        )
+        is False
+    )
 
 
 def test_insert_before_latest_user_places_context_before_last_user_turn():

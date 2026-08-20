@@ -18,6 +18,12 @@ from src.model_context import estimate_tokens
 from src.auth_helpers import effective_user
 from src.prompt_security import untrusted_context_message
 from src.attachment_refs import attachment_ref
+from src.tool_pins import (
+    finance_domain_matches,
+    merge_pinned_tools,
+    pinned_tools_from_history,
+    pins_from_tool_events,
+)
 from routes.prefs_routes import _load_for_user as load_prefs_for_user
 
 from fastapi import HTTPException
@@ -101,6 +107,7 @@ class ChatContext:
     uprefs: dict
     preset: PresetInfo
     preprocessed: PreprocessedMessage
+    pinned_tools: set[str] = field(default_factory=set)
     context_trimmed: bool = False
     context_messages_before_trim: int = 0
     context_messages_after_trim: int = 0
@@ -432,11 +439,19 @@ def build_uploaded_file_manifest(att_ids: list, upload_handler, owner: Optional[
     return manifest
 
 
-def add_user_message(sess, chat_handler, preprocessed: PreprocessedMessage, incognito: bool = False):
+def add_user_message(
+    sess,
+    chat_handler,
+    preprocessed: PreprocessedMessage,
+    incognito: bool = False,
+    agent_mode: bool = False,
+):
     """Add user message to session history and update session name.
     In incognito mode, still add to in-memory history (for conversation context)
     but skip session name update (which would persist)."""
-    user_meta = {"attachments": preprocessed.attachment_meta} if preprocessed.attachment_meta else None
+    user_meta = {"attachments": preprocessed.attachment_meta} if preprocessed.attachment_meta else {}
+    if agent_mode and finance_domain_matches(preprocessed.text_for_context):
+        user_meta = merge_pinned_tools(user_meta, {"manage_finance"})
     sess.add_message(ChatMessage("user", preprocessed.user_content, metadata=user_meta))
     if not incognito:
         chat_handler.update_session_name_if_needed(sess, preprocessed.text_for_context)
@@ -669,7 +684,16 @@ async def build_chat_context(
     )
 
     # Add user message to history
-    add_user_message(sess, chat_handler, preprocessed, incognito=incognito)
+    add_user_message(
+        sess,
+        chat_handler,
+        preprocessed,
+        incognito=incognito,
+        agent_mode=agent_mode,
+    )
+    # Read the full persisted history before compaction/trimming can remove the
+    # activation turn. The resulting set is request-scoped to this chat.
+    pinned_tools = pinned_tools_from_history(getattr(sess, "history", []))
 
     # Fire events
     if not incognito:
@@ -806,6 +830,7 @@ async def build_chat_context(
         uprefs=uprefs,
         preset=preset,
         preprocessed=preprocessed,
+        pinned_tools=pinned_tools,
         context_trimmed=_context_trimmed,
         context_messages_before_trim=_before_trim_messages,
         context_messages_after_trim=_after_trim_messages,
@@ -1054,8 +1079,12 @@ def save_assistant_response(
         md["memories_used"] = used_memories
     if do_research and not research_sources:
         md["research_clarification"] = True
-    if tool_events:
-        md["tool_events"] = tool_events
+    effective_tool_events = tool_events or md.get("tool_events") or []
+    if effective_tool_events:
+        md["tool_events"] = effective_tool_events
+    event_pins = pins_from_tool_events(effective_tool_events)
+    if event_pins:
+        md = merge_pinned_tools(md, event_pins)
 
     # Extract thinking into metadata (don't pollute message content with <think> tags)
     _think_info = _extract_thinking_meta(full_response)

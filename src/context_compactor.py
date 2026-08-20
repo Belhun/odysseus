@@ -394,9 +394,15 @@ async def maybe_compact(
         # caller nothing was summarized; trim_for_context handles length.
         return messages, context_length, False
 
+    from src.tool_pins import merge_pinned_tools, pinned_tools_from_history
+
+    compacted_pins = pinned_tools_from_history(
+        getattr(session, "history", None) or older
+    )
     summary_msg = {
         "role": "system",
         "content": f"[Conversation summary — earlier messages were compacted]\n{summary}",
+        "metadata": merge_pinned_tools({"compacted": True}, compacted_pins),
     }
 
     compacted = system_msgs + [summary_msg] + recent
@@ -406,7 +412,13 @@ async def maybe_compact(
     # offset — session.history INCLUDES the system messages, but
     # split_point is indexed against convo_msgs which does NOT. Without
     # this, the slice drops the leading system message(s).
-    _update_session_history(session, split_point, summary, system_msg_count=len(system_msgs))
+    _update_session_history(
+        session,
+        split_point,
+        summary,
+        system_msg_count=len(system_msgs),
+        pinned_tools=compacted_pins,
+    )
 
     new_used = estimate_tokens(compacted)
     logger.info(
@@ -418,7 +430,8 @@ async def maybe_compact(
 
 
 def _update_session_history(session, split_point: int, summary: str,
-                            system_msg_count: int = 0):
+                            system_msg_count: int = 0,
+                            pinned_tools: Optional[set[str]] = None):
     """Update the in-memory session history after compaction.
 
     `split_point` is the index in `convo_msgs` (system-stripped). The
@@ -439,10 +452,15 @@ def _update_session_history(session, split_point: int, summary: str,
     # messages so the system prompt survives compaction.
     system_prefix = list(session.history[:system_msg_count])
     recent_history = session.history[effective_split:]
+    from src.tool_pins import merge_pinned_tools
+
     summary_msg = ChatMessage(
         role="system",
         content=f"[Conversation summary]\n{summary}",
-        metadata={"compacted": True, "summarized_count": split_point},
+        metadata=merge_pinned_tools(
+            {"compacted": True, "summarized_count": split_point},
+            pinned_tools or set(),
+        ),
     )
     new_history = system_prefix + [summary_msg] + recent_history
     try:
