@@ -101,7 +101,8 @@ flutter run -d android   # only if `flutter devices` lists an emulator or phone
 ```
 
 This cloud VM had Chrome and no Android emulator. Native password+cookie login
-was verified with a Python `dart:io`-equivalent HTTP client (cookie jar) instead.
+was verified with `dart run tool/live_connect.dart` (dart:io cookie jar), the
+same stack Android would use.
 
 ## 4. Connect fields
 
@@ -261,3 +262,40 @@ export ODYSSEUS_PASSWORD='…'   # not a live secret; yours
 Unit coverage: `tests/test_finance_tokens.py`, `tests/test_api_token_routes.py`,
 `tests/test_cors_preflight.py`, `tests/test_phone_app_token_ui_static.py`,
 `tests/test_phoneapp_connect_static.py`, `PhoneApp/test/connect_logic_test.dart`.
+
+Native HTTP (same stack as Android `dart:io`):
+
+```bash
+ODY_URL=http://127.0.0.1:7000 \
+ODY_TOKEN='ody_…' \
+ODY_USER=belhun \
+ODY_PASSWORD='…' \
+dart run tool/live_connect.dart
+```
+
+`flutter test integration_test/connect_live_test.dart -d chrome` is **not supported**
+on Flutter 3.47 (`Web devices are not supported for integration tests yet`).
+Use the Dart live runner, or `flutter build web` + a browser on `:8088`.
+
+## Cloud VM results (2026-08-22)
+
+Isolated data dir `/tmp/odysseus-phone-test`, admin `belhun`, finance plugin
+installed, Odysseus on `127.0.0.1:7000`, PhoneApp web on `127.0.0.1:8088`.
+No Tailscale in this VM. No Android emulator (`flutter devices`: Linux + Chrome).
+
+| ID | Result | Evidence |
+|----|--------|----------|
+| A | PASS 200 | `{"ok":true,"username":"belhun"}` + `odysseus_session` |
+| A2 | PASS 401 | `Invalid credentials` |
+| B | PASS 401 | `POST /api/login` → `Not authenticated` |
+| C | PASS 200 | `phone_finance` = `finance:read`,`finance:write` |
+| C2 | PASS 200 | chat-only token |
+| D | PASS 200 | phone token `GET /api/finance/accounts` → `{"accounts":[]}` |
+| D2 | PASS 403 | chat token missing `finance:read` |
+| E | PASS 403 | token without finance scopes |
+| F | PASS | empty Bearer → 401; PhoneApp `Paste an ody_ API token` before network |
+| G | PASS | CORS preflight ACAO `http://127.0.0.1:8088`; Flutter web token Connect → Accounts |
+| H | PASS (expected web fail) | Password login 200 but Flutter web cannot see HttpOnly cookie; `dart:io` live runner **does** capture a 64-char session cookie |
+| I | PASS | companion ping 200 with chat token; finance still 403 |
+
+Remaining gaps: Android emulator, Tailscale Serve / MagicDNS / Private DNS (section 7).
