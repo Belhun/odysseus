@@ -2458,6 +2458,8 @@ const _TOKEN_SCOPES = [
   { key: 'memory:write',      label: 'Memory write',      detail: 'Write memory when enabled' },
   { key: 'cookbook:read',     label: 'Cookbook read',     detail: 'List cookbook tasks + tail their tmux output' },
   { key: 'cookbook:launch',   label: 'Cookbook launch',   detail: 'Launch and stop cookbook serve tasks' },
+  { key: 'finance:read',      label: 'Finance read',      detail: 'Read Banking & Budgeting accounts and transactions' },
+  { key: 'finance:write',     label: 'Finance write',     detail: 'Create and update finance accounts, imports, and budgets' },
 ];
 
 function _renderTokenScopeRows(t) {
