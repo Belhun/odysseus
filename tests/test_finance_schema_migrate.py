@@ -138,6 +138,9 @@ def test_fresh_create_all_has_new_tables_and_columns(monkeypatch, tmp_path):
         }
         acct_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(finance_accounts)")).fetchall()}
         tx_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(finance_transactions)")).fetchall()}
+        rule_cols = {
+            r[1] for r in conn.execute(text("PRAGMA table_info(finance_categorization_rules)")).fetchall()
+        }
     assert "finance_mutation_log" in tables
     assert "finance_csv_mappings" in tables
     assert "finance_month_settings" in tables
@@ -151,6 +154,8 @@ def test_fresh_create_all_has_new_tables_and_columns(monkeypatch, tmp_path):
     assert "daily_balance_cents" in tx_cols
     assert "statement_start" in tx_cols
     assert "source_statement" in tx_cols
+    assert "operator" in rule_cols
+    assert "match_field" in rule_cols
     finance_db.reset_engine_cache()
 
 
@@ -234,4 +239,35 @@ def test_run_install_twice_migrates_existing_v010_db(monkeypatch, tmp_path):
     assert "daily_balance_cents" in tx_cols
     assert "statement_start" in tx_cols
     assert "source_statement" in tx_cols
+    finance_db.reset_engine_cache()
+
+
+@pytest.mark.area_routes
+def test_migrate_adds_rule_operator_columns(monkeypatch, tmp_path):
+    finance_db.reset_engine_cache()
+    db_path = tmp_path / "rules-old.db"
+    monkeypatch.setattr(finance_db, "finance_db_path", lambda: db_path)
+    monkeypatch.setattr(finance_db, "finance_config_path", lambda: tmp_path / "config.json")
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=NullPool,
+    )
+    with engine.connect() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE finance_categorization_rules ("
+                "id VARCHAR NOT NULL, owner VARCHAR NOT NULL, pattern VARCHAR NOT NULL, "
+                "category_id VARCHAR, movement_class TEXT, priority INTEGER, "
+                "created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, "
+                "PRIMARY KEY (id))"
+            )
+        )
+        conn.commit()
+    engine.dispose()
+    init_finance_db()
+    with finance_db.get_engine().connect() as conn:
+        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(finance_categorization_rules)")).fetchall()}
+    assert "operator" in cols
+    assert "match_field" in cols
     finance_db.reset_engine_cache()
