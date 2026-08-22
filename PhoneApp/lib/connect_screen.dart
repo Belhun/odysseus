@@ -127,6 +127,7 @@ class _ConnectScreenState extends State<ConnectScreen>
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             TextField(
+              key: const Key('server-url'),
               controller: _url,
               decoration: const InputDecoration(
                 labelText: 'Server URL',
@@ -167,6 +168,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         ),
         const SizedBox(height: 12),
         TextField(
+          key: const Key('api-token'),
           controller: _token,
           decoration: const InputDecoration(
             labelText: 'API token',
@@ -184,6 +186,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         ),
         const SizedBox(height: 16),
         FilledButton(
+          key: const Key('connect-token'),
           onPressed: _busy ? null : _connectToken,
           child: Text(_busy ? 'Connecting…' : 'Connect with token'),
         ),
@@ -200,11 +203,13 @@ class _ConnectScreenState extends State<ConnectScreen>
         ),
         const SizedBox(height: 12),
         TextField(
+          key: const Key('password-username'),
           controller: _username,
           decoration: const InputDecoration(labelText: 'Username'),
           enabled: !_busy,
         ),
         TextField(
+          key: const Key('password-password'),
           controller: _password,
           decoration: const InputDecoration(labelText: 'Password'),
           obscureText: true,
@@ -220,6 +225,7 @@ class _ConnectScreenState extends State<ConnectScreen>
         ),
         const SizedBox(height: 16),
         FilledButton(
+          key: const Key('connect-password'),
           onPressed: _busy ? null : _connectPassword,
           child: Text(_busy ? 'Signing in…' : 'Sign in with password'),
         ),

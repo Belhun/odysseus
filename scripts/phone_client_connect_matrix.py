@@ -47,10 +47,12 @@ def _request(method: str, path: str, *, json_body=None, headers=None, cookie=Non
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             body = resp.read().decode("utf-8", "replace")
             set_cookie = resp.headers.get("Set-Cookie", "")
-            return resp.status, body, set_cookie
+            acao = resp.headers.get("Access-Control-Allow-Origin", "")
+            return resp.status, body, set_cookie, acao
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")
-        return exc.code, body, exc.headers.get("Set-Cookie", "") if exc.headers else ""
+        acao = exc.headers.get("Access-Control-Allow-Origin", "") if exc.headers else ""
+        return exc.code, body, exc.headers.get("Set-Cookie", "") if exc.headers else "", acao
 
 
 def record(letter: str, name: str, ok: bool, status: int, snippet: str, extra: str = ""):
@@ -76,7 +78,7 @@ def main() -> int:
         print("Set ODYSSEUS_PASSWORD", file=sys.stderr)
         return 2
 
-    status, body, cookie = _request(
+    status, body, cookie, _ = _request(
         "POST",
         "/api/auth/login",
         json_body={"username": USER, "password": PASSWORD, "remember": True},
@@ -97,7 +99,7 @@ def main() -> int:
                 session = part
                 break
 
-    status, body, _ = _request(
+    status, body, _, _ = _request(
         "POST",
         "/api/auth/login",
         json_body={"username": USER, "password": "wrong-password-xxxx", "remember": True},
@@ -110,7 +112,7 @@ def main() -> int:
         body,
     )
 
-    status, body, _ = _request(
+    status, body, _, _ = _request(
         "POST",
         "/api/login",
         json_body={"username": USER, "password": PASSWORD},
@@ -183,17 +185,19 @@ def main() -> int:
     def bearer(token: str, path: str):
         return _request("GET", path, headers={"Authorization": f"Bearer {token}"})
 
-    status, body, _ = bearer(phone_token, "/api/finance/accounts")
+    flutter_origin = os.environ.get("PHONEAPP_ORIGIN", "http://127.0.0.1:8088")
+
+    status, body, _, _ = bearer(phone_token, "/api/finance/accounts")
     record("D", "Finance GET with phone token", status == 200 and "accounts" in body, status, body)
 
-    status, body, _ = bearer(chat_token, "/api/finance/accounts")
+    status, body, _, _ = bearer(chat_token, "/api/finance/accounts")
     record("D2", "Finance GET with chat token → 403", status == 403, status, body)
 
-    status, body, _ = bearer(weak_token, "/api/finance/accounts")
+    status, body, _, _ = bearer(weak_token, "/api/finance/accounts")
     record("E", "Token missing finance scopes → 403", status == 403, status, body)
 
     # F is a client-side PhoneApp rule; prove server still 401s on empty bearer.
-    status, body, _ = _request(
+    status, body, _, _ = _request(
         "GET",
         "/api/finance/accounts",
         headers={"Authorization": "Bearer "},
@@ -206,7 +210,43 @@ def main() -> int:
         body,
     )
 
-    status, body, _ = bearer(chat_token, "/api/companion/ping")
+    # G: CORS as Flutter web would send it (token tab). Browser still has to
+    # originate from PHONEAPP_ORIGIN; this proves ACAO + Authorization work.
+    pre_status, pre_body, _, pre_acao = _request(
+        "OPTIONS",
+        "/api/finance/accounts",
+        headers={
+            "Origin": flutter_origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    record(
+        "G",
+        f"CORS preflight from {flutter_origin}",
+        pre_status == 200 and pre_acao == flutter_origin,
+        pre_status,
+        pre_body or "(empty OPTIONS body)",
+        extra=f"ACAO={pre_acao or '(missing)'}",
+    )
+    status, body, _, acao = _request(
+        "GET",
+        "/api/finance/accounts",
+        headers={
+            "Authorization": f"Bearer {phone_token}",
+            "Origin": flutter_origin,
+        },
+    )
+    record(
+        "G2",
+        "Finance GET with phone token + Flutter Origin",
+        status == 200 and "accounts" in body and acao == flutter_origin,
+        status,
+        body,
+        extra=f"ACAO={acao or '(missing)'}",
+    )
+
+    status, body, _, _ = bearer(chat_token, "/api/companion/ping")
     record(
         "I",
         "Companion ping with chat token",
@@ -214,7 +254,7 @@ def main() -> int:
         status,
         body,
     )
-    status, body, _ = bearer(chat_token, "/api/finance/accounts")
+    status, body, _, _ = bearer(chat_token, "/api/finance/accounts")
     record(
         "I2",
         "Companion/chat token still 403 on finance",

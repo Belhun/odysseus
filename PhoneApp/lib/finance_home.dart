@@ -10,7 +10,7 @@ class FinanceHome extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Accounts')),
+      appBar: AppBar(title: const Text('Accounts'), key: const Key('accounts-appbar')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
