@@ -80,6 +80,8 @@ from integrations.finance.services.movements import (
     unlink_movement,
 )
 from integrations.finance.services.reports import (
+    AVERAGE_LOOKBACK_MONTHS,
+    category_spend_averages,
     month_cashflow,
     month_key,
     month_review,
@@ -89,16 +91,21 @@ from integrations.finance.services.reports import (
     spending_by_category,
 )
 from integrations.finance.services.transactions import (
+    MAX_TRANSACTION_SPLITS,
     ImportedTransactionError,
     apply_transaction_filters,
+    clear_transaction_splits,
     create_manual_transaction,
     delete_manual_transaction,
+    list_payees_for_owner,
+    list_transaction_splits,
     patch_ledger_transaction,
     set_transaction_splits,
+    split_counts_for_transactions,
     unvoid_transaction,
     void_transaction,
 )
-from src.auth_helpers import require_user
+from src.auth_helpers import effective_user, require_user
 from src.plugins.registry import is_plugin_active, is_plugin_installed
 from src.upload_limits import (
     FINANCE_IMPORT_MAX_BYTES,
@@ -122,6 +129,27 @@ def _optional_month(month: Optional[str]) -> Optional[str]:
         return validate_month(month)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+def require_finance_user(request: Request) -> str:
+    """Cookie sessions use require_user. Bearer ody_ tokens need finance scopes.
+
+    Reads accept finance:read or finance:write. Writes require finance:write.
+    Tests that patch require_user keep working for the non-token path.
+    """
+    if getattr(request.state, "api_token", False):
+        scopes = set(getattr(request.state, "api_token_scopes", []) or [])
+        write = request.method not in ("GET", "HEAD", "OPTIONS")
+        if write:
+            if "finance:write" not in scopes:
+                raise HTTPException(403, "API token missing required scope: finance:write")
+        elif "finance:read" not in scopes and "finance:write" not in scopes:
+            raise HTTPException(403, "API token missing required scope: finance:read")
+        owner = effective_user(request)
+        if not owner:
+            raise HTTPException(401, "Not authenticated")
+        return owner
+    return require_user(request)
 
 
 class AccountCreate(BaseModel):
@@ -181,6 +209,8 @@ class RuleCreate(BaseModel):
     movement_class: Optional[str] = None
     priority: int = 100
     apply_existing: bool = True
+    operator: str = ""
+    match_field: str = "payee"
 
 
 class BudgetSet(BaseModel):
@@ -220,6 +250,16 @@ class ImportCommitBody(BaseModel):
     apply_opening: bool = False
 
 
+class ImportPreviewTextBody(BaseModel):
+    account_id: str
+    text: str
+    filename: str = "clipboard.csv"
+    preset: Optional[str] = None
+    mapping: Optional[dict] = None
+    options: Optional[dict] = None
+    mapping_id: Optional[str] = None
+
+
 class MappingSaveBody(BaseModel):
     name: str
     fingerprint: str
@@ -234,7 +274,7 @@ class SplitEntry(BaseModel):
 
 
 class SplitsBody(BaseModel):
-    splits: list[SplitEntry]
+    splits: list[SplitEntry] = Field(..., min_length=1, max_length=MAX_TRANSACTION_SPLITS)
 
 
 class RecurringPatch(BaseModel):
@@ -314,7 +354,12 @@ def _require_owned_category(db, user: str, category_id: str | None) -> None:
         raise HTTPException(404, "Category not found")
 
 
-def _transaction_dict(tx: FinanceTransaction, category_name: str | None = None) -> dict[str, Any]:
+def _transaction_dict(
+    tx: FinanceTransaction,
+    category_name: str | None = None,
+    *,
+    split_count: int = 0,
+) -> dict[str, Any]:
     return {
         "id": tx.id,
         "account_id": tx.account_id,
@@ -329,6 +374,8 @@ def _transaction_dict(tx: FinanceTransaction, category_name: str | None = None) 
         "source": tx.source or "import",
         "is_manual": (tx.source or "import") == "manual" and not tx.import_batch_id,
         "is_linked": bool(tx.movement_group_id),
+        "is_split": int(split_count or 0) > 0,
+        "split_count": int(split_count or 0),
         "bank_category": tx.bank_category,
         "import_batch_id": tx.import_batch_id,
         "movement_class": tx.movement_class,
@@ -355,7 +402,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.get("/accounts")
     def list_accounts(request: Request, include_closed: bool = False):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             ensure_default_categories(db, user)
@@ -366,7 +413,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/accounts")
     def create_account(request: Request, body: AccountCreate):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -396,7 +443,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.patch("/accounts/{account_id}")
     def patch_account(request: Request, account_id: str, body: AccountPatch):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -430,7 +477,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.delete("/accounts/{account_id}")
     def delete_account(request: Request, account_id: str, purge_transactions: bool = False):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -446,7 +493,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/accounts/{account_id}/pins")
     def pin_account(request: Request, account_id: str, body: AccountPins):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -471,7 +518,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.get("/categories")
     def list_categories(request: Request):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             ensure_default_categories(db, user)
@@ -495,7 +542,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/categories")
     def create_category(request: Request, body: CategoryCreate):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             _require_owned_category(db, user, body.parent_id)
@@ -516,7 +563,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.get("/rules")
     def list_rules(request: Request):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             rules = list_rules_for_owner(db, user)
@@ -528,6 +575,8 @@ def setup_finance_routes() -> APIRouter:
                         "category_id": r.category_id,
                         "movement_class": r.movement_class,
                         "priority": r.priority,
+                        "operator": getattr(r, "operator", None) or "",
+                        "match_field": getattr(r, "match_field", None) or "payee",
                     }
                     for r in rules
                 ]
@@ -537,7 +586,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/rules")
     def create_rule(request: Request, body: RuleCreate):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             if body.category_id:
@@ -551,6 +600,8 @@ def setup_finance_routes() -> APIRouter:
                     movement_class=body.movement_class,
                     priority=body.priority,
                     apply_existing=body.apply_existing,
+                    operator=body.operator,
+                    match_field=body.match_field,
                 )
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
@@ -560,7 +611,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.delete("/rules/{rule_id}")
     def delete_rule(request: Request, rule_id: str):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -591,7 +642,7 @@ def setup_finance_routes() -> APIRouter:
         limit: int = Query(100, ge=1, le=500),
         offset: int = Query(0, ge=0),
     ):
-        user = require_user(request)
+        user = require_finance_user(request)
         month = _optional_month(month)
         db = get_session_factory()()
         try:
@@ -623,9 +674,17 @@ def setup_finance_routes() -> APIRouter:
             cats = db.query(FinanceCategory).filter(FinanceCategory.owner == user).all()
             cats_by_id = {c.id: c for c in cats}
             cat_map = {c.id: format_category_path(c, cats_by_id) for c in cats}
+            split_counts = split_counts_for_transactions(db, user, [tx.id for tx in txs])
             return {
                 "total": total,
-                "transactions": [_transaction_dict(tx, cat_map.get(tx.category_id)) for tx in txs],
+                "transactions": [
+                    _transaction_dict(
+                        tx,
+                        cat_map.get(tx.category_id),
+                        split_count=split_counts.get(tx.id, 0),
+                    )
+                    for tx in txs
+                ],
             }
         finally:
             db.close()
@@ -643,7 +702,7 @@ def setup_finance_routes() -> APIRouter:
         max_amount_cents: Optional[int] = None,
         uncategorized: bool = False,
     ):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             q = apply_transaction_filters(
@@ -700,7 +759,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/transactions")
     def create_transaction(request: Request, body: TransactionCreate):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             _require_owned_category(db, user, body.category_id)
@@ -725,7 +784,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.patch("/transactions/{tx_id}")
     def patch_transaction(request: Request, tx_id: str, body: TransactionPatch):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             if body.category_id:
@@ -754,7 +813,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/transactions/{tx_id}/void")
     def void_tx(request: Request, tx_id: str):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -767,7 +826,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/transactions/{tx_id}/unvoid")
     def unvoid_tx(request: Request, tx_id: str):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -780,7 +839,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.delete("/transactions/{tx_id}")
     def delete_transaction(request: Request, tx_id: str):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -795,7 +854,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.put("/transactions/{tx_id}/splits")
     def put_transaction_splits(request: Request, tx_id: str, body: SplitsBody):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             for entry in body.splits:
@@ -824,9 +883,58 @@ def setup_finance_routes() -> APIRouter:
         finally:
             db.close()
 
+    @router.get("/transactions/{tx_id}/splits")
+    def get_transaction_splits(request: Request, tx_id: str):
+        user = require_finance_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                splits = list_transaction_splits(db, user, tx_id)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            return {
+                "splits": [
+                    {
+                        "id": s.id,
+                        "category_id": s.category_id,
+                        "amount_cents": s.amount_cents,
+                        "memo": s.memo,
+                    }
+                    for s in splits
+                ]
+            }
+        finally:
+            db.close()
+
+    @router.delete("/transactions/{tx_id}/splits")
+    def delete_transaction_splits(request: Request, tx_id: str):
+        user = require_finance_user(request)
+        db = get_session_factory()()
+        try:
+            try:
+                deleted = clear_transaction_splits(db, user, tx_id)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            return {"ok": True, "deleted": deleted}
+        finally:
+            db.close()
+
+    @router.get("/payees")
+    def list_payees(
+        request: Request,
+        q: str = "",
+        limit: int = Query(20, ge=1, le=50),
+    ):
+        user = require_finance_user(request)
+        db = get_session_factory()()
+        try:
+            return {"payees": list_payees_for_owner(db, user, q=q, limit=limit)}
+        finally:
+            db.close()
+
     @router.get("/import/mappings")
     def list_import_mappings(request: Request):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             return {"mappings": [mapping_dict(m) for m in list_mappings_for_owner(db, user)]}
@@ -835,7 +943,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/import/mappings")
     def save_import_mapping(request: Request, body: MappingSaveBody):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             row = save_mapping_for_owner(
@@ -860,7 +968,7 @@ def setup_finance_routes() -> APIRouter:
         options: str = Form(""),
         mapping_id: str = Form(""),
     ):
-        user = require_user(request)
+        user = require_finance_user(request)
         content = await read_upload_limited(file, FINANCE_IMPORT_MAX_BYTES, "Finance import")
         try:
             mapping_obj = parse_json_object(mapping or None)
@@ -890,13 +998,48 @@ def setup_finance_routes() -> APIRouter:
         except ValueError as err:
             raise HTTPException(400, str(err))
 
+    @router.post("/import/preview-text")
+    async def import_preview_text(request: Request, body: ImportPreviewTextBody):
+        user = require_finance_user(request)
+        if not (body.text or "").strip():
+            raise HTTPException(400, "text is required")
+        content = body.text.encode("utf-8")
+        if len(content) > FINANCE_IMPORT_MAX_BYTES:
+            raise HTTPException(
+                413,
+                f"Finance import exceeds {format_byte_limit(FINANCE_IMPORT_MAX_BYTES)} limit",
+            )
+        filename = (body.filename or "").strip() or "clipboard.csv"
+
+        def _run_preview_text():
+            db = get_session_factory()()
+            try:
+                return build_import_preview(
+                    db,
+                    user,
+                    body.account_id,
+                    filename,
+                    content,
+                    preset=body.preset or None,
+                    mapping=body.mapping or None,
+                    options=body.options or None,
+                    mapping_id=body.mapping_id or None,
+                )
+            finally:
+                db.close()
+
+        try:
+            return await asyncio.to_thread(_run_preview_text)
+        except ValueError as err:
+            raise HTTPException(400, str(err))
+
     @router.post("/statements/convert")
     async def convert_statement_pdfs(
         request: Request,
         files: list[UploadFile] = File(...),
         csv_files: list[UploadFile] | None = File(None),
     ):
-        require_user(request)
+        require_finance_user(request)
         if not files:
             raise HTTPException(400, "Choose one or more Wells Fargo statement PDFs")
         if len(files) > FINANCE_STATEMENT_MAX_FILES:
@@ -964,7 +1107,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/import/commit")
     def import_commit(request: Request, body: ImportCommitBody):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             result = commit_import_preview(
@@ -979,7 +1122,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.get("/import/batches")
     def list_batches(request: Request, account_id: Optional[str] = None):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             q = db.query(FinanceImportBatch).filter(FinanceImportBatch.owner == user)
@@ -1006,7 +1149,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.delete("/import/batches/{batch_id}")
     def rollback_batch(request: Request, batch_id: str):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -1024,7 +1167,7 @@ def setup_finance_routes() -> APIRouter:
         account_id: Optional[str] = None,
         include_transfers: bool = False,
     ):
-        user = require_user(request)
+        user = require_finance_user(request)
         month = _optional_month(month) or month_key(date.today())
         db = get_session_factory()()
         try:
@@ -1032,15 +1175,29 @@ def setup_finance_routes() -> APIRouter:
             cashflow = month_cashflow(
                 db, user, month, account_id=account_id, include_transfers=include_transfers
             )
+            lookback = AVERAGE_LOOKBACK_MONTHS
+            source_months, averages = category_spend_averages(
+                db,
+                user,
+                month,
+                lookback=lookback,
+                account_id=account_id,
+                include_transfers=include_transfers,
+            )
+            categories = spending_by_category(
+                db,
+                user,
+                month,
+                account_id=account_id,
+                include_transfers=include_transfers,
+            )
+            for row in categories:
+                avg = int(averages.get(row.get("category_id"), 0))
+                row["average_spend_cents"] = avg
+                row["suggested_limit_cents"] = avg
             return {
                 "month": month,
-                "categories": spending_by_category(
-                    db,
-                    user,
-                    month,
-                    account_id=account_id,
-                    include_transfers=include_transfers,
-                ),
+                "categories": categories,
                 **{k: cashflow[k] for k in (
                     "income_cents",
                     "gross_spend_cents",
@@ -1052,13 +1209,15 @@ def setup_finance_routes() -> APIRouter:
                     "incomplete",
                 )},
                 "income_target_cents": get_income_target(db, user, month),
+                "average_lookback_months": lookback,
+                "average_source_months": source_months,
             }
         finally:
             db.close()
 
     @router.put("/budgets")
     def set_budget(request: Request, body: BudgetSet):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             _require_owned_category(db, user, body.category_id)
@@ -1075,7 +1234,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/budgets/copy")
     def copy_budgets(request: Request, body: BudgetCopyBody):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             return copy_budgets_for_owner(db, user, body.from_month, body.to_month)
@@ -1084,7 +1243,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.put("/budgets/income-target")
     def put_income_target(request: Request, body: IncomeTargetBody):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             row = set_income_target(db, user, body.month, body.income_target_cents)
@@ -1094,7 +1253,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.get("/planned")
     def list_planned(request: Request):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             return {"planned": [planned_dict(p) for p in list_planned_for_owner(db, user)]}
@@ -1103,7 +1262,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/planned")
     def create_planned(request: Request, body: PlannedCreate):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             row = create_planned_for_owner(
@@ -1125,7 +1284,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.delete("/planned/{planned_id}")
     def delete_planned(request: Request, planned_id: str):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -1138,7 +1297,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.get("/job-scenario")
     def get_job(request: Request, include_business: bool = True, month: Optional[str] = None):
-        user = require_user(request)
+        user = require_finance_user(request)
         month = _optional_month(month)
         db = get_session_factory()()
         try:
@@ -1154,7 +1313,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.put("/job-scenario")
     def put_job(request: Request, body: JobScenarioBody):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             row = upsert_job_scenario(db, user, take_home_cents=body.take_home_cents, label=body.label)
@@ -1175,7 +1334,7 @@ def setup_finance_routes() -> APIRouter:
         account_id: Optional[str] = None,
         include_transfers: bool = False,
     ):
-        user = require_user(request)
+        user = require_finance_user(request)
         month = _optional_month(month) or month_key(date.today())
         db = get_session_factory()()
         try:
@@ -1204,7 +1363,7 @@ def setup_finance_routes() -> APIRouter:
         include_transfers: bool = False,
         account_id: Optional[str] = None,
     ):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             return {
@@ -1222,7 +1381,7 @@ def setup_finance_routes() -> APIRouter:
         account_id: Optional[str] = None,
         include_transfers: bool = False,
     ):
-        user = require_user(request)
+        user = require_finance_user(request)
         month = _optional_month(month) or month_key(date.today())
         db = get_session_factory()()
         try:
@@ -1234,7 +1393,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.get("/reports/spend-by-account")
     def report_spend_by_account(request: Request, month: Optional[str] = None):
-        user = require_user(request)
+        user = require_finance_user(request)
         month = _optional_month(month) or month_key(date.today())
         db = get_session_factory()()
         try:
@@ -1244,7 +1403,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.get("/reports/net-worth")
     def report_net_worth(request: Request):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             return net_worth(db, user)
@@ -1253,7 +1412,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.get("/recurring")
     def list_recurring(request: Request):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             return {"series": list_recurring_series(db, user)}
@@ -1262,7 +1421,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.patch("/recurring/{series_id}")
     def patch_recurring(request: Request, series_id: str, body: RecurringPatch):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -1286,7 +1445,7 @@ def setup_finance_routes() -> APIRouter:
         tx_id: str,
         day_gap: Optional[int] = None,
     ):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -1298,7 +1457,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/movements/detect")
     def post_detect_movements(request: Request, body: MovementDetectBody):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             from_date = date.fromisoformat(body.from_date) if body.from_date else None
@@ -1317,7 +1476,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/movements/link")
     def post_link_movements(request: Request, body: MovementLinkBody):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -1330,7 +1489,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/movements/unlink")
     def post_unlink_movements(request: Request, body: MovementUnlinkBody):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:
@@ -1345,7 +1504,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/transactions/bulk")
     def bulk_classify(request: Request, body: BulkClassifyBody):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             if body.category_id:
@@ -1367,7 +1526,7 @@ def setup_finance_routes() -> APIRouter:
 
     @router.post("/transactions/{tx_id}/classify")
     def classify_tx(request: Request, tx_id: str, body: MovementClassifyBody):
-        user = require_user(request)
+        user = require_finance_user(request)
         db = get_session_factory()()
         try:
             try:

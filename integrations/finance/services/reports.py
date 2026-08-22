@@ -65,6 +65,52 @@ def previous_complete_month(today: date | None = None) -> str:
     return f"{y:04d}-{m:02d}"
 
 
+def previous_months(month: str, count: int) -> list[str]:
+    """Return `count` calendar months immediately before `month` (YYYY-MM)."""
+    month = validate_month(month)
+    remaining = max(0, int(count))
+    y, m = int(month[:4]), int(month[5:7])
+    out: list[str] = []
+    for _ in range(remaining):
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+        out.append(f"{y:04d}-{m:02d}")
+    return out
+
+
+AVERAGE_LOOKBACK_MONTHS = 3
+
+
+def category_spend_averages(
+    db: Session,
+    owner: str,
+    month: str,
+    *,
+    lookback: int = AVERAGE_LOOKBACK_MONTHS,
+    account_id: Optional[str] = None,
+    include_transfers: bool = False,
+) -> tuple[list[str], dict[str | None, int]]:
+    """True-spend averages over prior months, zeros included, requested month excluded."""
+    source_months = previous_months(month, lookback)
+    totals: dict[str | None, int] = {}
+    for src in source_months:
+        for row in spending_by_category(
+            db,
+            owner,
+            src,
+            account_id=account_id,
+            include_transfers=include_transfers,
+            include_zero_limits=False,
+        ):
+            cid = row.get("category_id")
+            totals[cid] = totals.get(cid, 0) + int(row.get("spent_cents") or 0)
+    divisor = lookback if lookback else 1
+    averages = {cid: int(round(total / divisor)) for cid, total in totals.items()}
+    return source_months, averages
+
+
 def _split_parent_ids(db: Session, owner: str) -> set[str]:
     rows = (
         db.query(FinanceTransactionSplit.transaction_id)

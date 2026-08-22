@@ -136,6 +136,77 @@ def rule_matches_payee(pattern: str, payee: str) -> bool:
         return clean_pattern.upper() in (payee or "").upper()
 
 
+RULE_OPERATORS = ("", "contains", "not_contains", "equals", "starts_with", "ends_with", "regex")
+RULE_MATCH_FIELDS = ("payee", "memo", "both")
+
+
+def normalize_rule_operator(operator: str | None) -> str:
+    value = (operator or "").strip().lower()
+    if value not in RULE_OPERATORS:
+        raise ValueError(
+            "operator must be empty (legacy) or one of: "
+            "contains, not_contains, equals, starts_with, ends_with, regex"
+        )
+    return value
+
+
+def normalize_rule_match_field(match_field: str | None) -> str:
+    value = (match_field or "payee").strip().lower() or "payee"
+    if value not in RULE_MATCH_FIELDS:
+        raise ValueError("match_field must be payee, memo, or both")
+    return value
+
+
+def _rule_haystacks(tx: FinanceTransaction, match_field: str) -> list[str]:
+    payee = tx.payee or ""
+    memo = tx.memo or ""
+    if match_field == "memo":
+        return [memo]
+    if match_field == "both":
+        return [payee, memo]
+    return [payee]
+
+
+def _operator_matches(operator: str, pattern: str, text: str) -> bool:
+    needle = pattern or ""
+    hay = text or ""
+    if operator == "contains":
+        return needle.lower() in hay.lower()
+    if operator == "not_contains":
+        return needle.lower() not in hay.lower()
+    if operator == "equals":
+        return hay.lower() == needle.lower()
+    if operator == "starts_with":
+        return hay.lower().startswith(needle.lower())
+    if operator == "ends_with":
+        return hay.lower().endswith(needle.lower())
+    if operator == "regex":
+        try:
+            return re.search(needle, hay, re.IGNORECASE) is not None
+        except re.error:
+            return False
+    return False
+
+
+def rule_matches_transaction(rule: FinanceCategorizationRule, tx: FinanceTransaction) -> bool:
+    """Match a rule against a transaction using operator + match_field.
+
+    Empty operator keeps the legacy payee regex / substring matcher.
+    """
+    operator = (getattr(rule, "operator", None) or "").strip().lower()
+    if operator not in RULE_OPERATORS:
+        operator = ""
+    match_field = (getattr(rule, "match_field", None) or "payee").strip().lower() or "payee"
+    if match_field not in RULE_MATCH_FIELDS:
+        match_field = "payee"
+    texts = _rule_haystacks(tx, match_field)
+    if not operator:
+        return any(rule_matches_payee(rule.pattern or "", text) for text in texts)
+    if operator == "not_contains":
+        return all(_operator_matches(operator, rule.pattern or "", text) for text in texts)
+    return any(_operator_matches(operator, rule.pattern or "", text) for text in texts)
+
+
 def ensure_default_categories(db: Session, owner: str) -> None:
     renamed = False
     for cat in (
@@ -220,7 +291,7 @@ def apply_rules_to_transactions(db: Session, owner: str, transactions: list[Fina
         if tx.category_id and tx.movement_class:
             continue
         for rule in rules:
-            if not rule_matches_payee(rule.pattern or "", tx.payee or ""):
+            if not rule_matches_transaction(rule, tx):
                 continue
             if rule.category_id and rule.category_id in categories and not tx.category_id:
                 tx.category_id = rule.category_id
@@ -286,10 +357,7 @@ def apply_rule_to_transactions(
         .order_by(FinanceTransaction.date.asc(), FinanceTransaction.id.asc())
         .all()
     )
-    matches = [
-        tx for tx in rows
-        if rule_matches_payee(rule.pattern or "", tx.payee or "")
-    ]
+    matches = [tx for tx in rows if rule_matches_transaction(rule, tx)]
     eligible: list[tuple[FinanceTransaction, str | None]] = []
     for tx in matches:
         needs_change, stored_class = _rule_projection(
@@ -332,6 +400,8 @@ def test_rule_matches(
     category_id: str | None = None,
     movement_class: str | None = None,
     overwrite: bool = False,
+    operator: str = "",
+    match_field: str = "payee",
 ) -> dict:
     """Preview a proposed rule with distinct-payee collision samples."""
     clean_pattern = (pattern or "").strip()
@@ -352,7 +422,14 @@ def test_rule_matches(
         .order_by(FinanceTransaction.date.asc(), FinanceTransaction.id.asc())
         .all()
     )
-    matches = [tx for tx in rows if rule_matches_payee(clean_pattern, tx.payee or "")]
+    from types import SimpleNamespace
+
+    probe = SimpleNamespace(
+        pattern=clean_pattern,
+        operator=normalize_rule_operator(operator),
+        match_field=normalize_rule_match_field(match_field),
+    )
+    matches = [tx for tx in rows if rule_matches_transaction(probe, tx)]
     fill_eligible = 0
     overwrite_changes = 0
     samples: list[dict] = []
@@ -477,12 +554,21 @@ def create_rule_for_owner(
     overwrite: bool = False,
     max_updates: int = 500,
     commit: bool = True,
+    operator: str = "",
+    match_field: str = "payee",
 ) -> FinanceCategorizationRule:
     clean_pattern = pattern.strip()
     if not clean_pattern:
         raise ValueError("Rule pattern is required")
     if len(clean_pattern) > 200:
         raise ValueError("Rule pattern must be at most 200 characters")
+    operator = normalize_rule_operator(operator)
+    match_field = normalize_rule_match_field(match_field)
+    if operator == "regex":
+        try:
+            re.compile(clean_pattern)
+        except re.error as exc:
+            raise ValueError(f"Invalid regex: {exc}") from exc
     if not category_id and not movement_class:
         raise ValueError("category_id or movement_class is required")
     if movement_class:
@@ -504,6 +590,8 @@ def create_rule_for_owner(
         category_id=category_id,
         movement_class=movement_class,
         priority=int(priority),
+        operator=operator,
+        match_field=match_field,
     )
     db.add(rule)
     db.flush()

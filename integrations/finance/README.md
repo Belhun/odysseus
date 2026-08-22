@@ -16,6 +16,21 @@ Finance ships as an **optional Odysseus plugin** (same pattern as the planned Sy
 - Unclassified rows still count by sign. Reports say "true spend" only when the month is fully classified.
 - Planned rent and the hypothetical job overlay never write ledger rows. Overlay surplus is withheld when unclassified outflows or thin coverage would print a confident wrong number.
 
+## Web panel v1
+
+`/finance` is this plugin's SPA. Install the plugin if that path 404s.
+
+- Paste CSV/OFX into Import (`POST /api/finance/import/preview-text`). File upload (`POST /import/preview`) is unchanged.
+- Rules live under More. Operators: contains, not contains, equals, starts with, ends with, regex. Empty operator keeps the old payee matcher. Lower priority number wins. Rules fill empty category/class only.
+- Split a transaction from Edit. Lines must sum to the parent amount. Parent amount does not change when you split or clear splits.
+- Budget shows a 3-month true-spend average (requested month excluded) and can fill limits from that average.
+- Reports open with net-worth and cashflow cards.
+- Hide amounts blurs money. Compact is the default density. Amount fields accept `12.50+3.20`.
+
+Companion tokens: add `finance:read` and `finance:write` when minting `ody_` tokens. Multipart import as PhoneApp sends it still works. Do not rebuild token auth.
+
+The idea-only steal notes under `docs/plans/finance/finance-steal/` were not checked into this tree.
+
 ## AI assistant
 
 The agent uses the `manage_finance` tool to read accounts, spending by category, budgets, trends, and transactions. Ask things like "how much did I spend on groceries this month?" or "show my Amazon transactions."

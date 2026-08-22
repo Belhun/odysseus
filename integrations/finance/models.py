@@ -145,6 +145,8 @@ class FinanceCategorizationRule(TimestampMixin, FinanceBase):
     category_id = Column(String, ForeignKey("finance_categories.id"), nullable=True)
     movement_class = Column(String, nullable=True)
     priority = Column(Integer, default=100)
+    match_field = Column(String, nullable=False, default="payee")
+    operator = Column(String, nullable=False, default="")
 
 
 class FinanceCategoryBudget(TimestampMixin, FinanceBase):

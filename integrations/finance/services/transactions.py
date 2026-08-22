@@ -8,7 +8,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import and_, exists, or_
+from sqlalchemy import and_, exists, func, or_
 from sqlalchemy.orm import Query, Session
 
 from integrations.finance.models import (
@@ -25,6 +25,9 @@ from integrations.finance.services.parsers import _normalize_payee
 
 class ImportedTransactionError(ValueError):
     """Raised when a hard-delete is attempted on an imported row."""
+
+
+MAX_TRANSACTION_SPLITS = 62
 
 
 def parse_optional_date(raw: Optional[str]) -> Optional[date]:
@@ -221,6 +224,77 @@ def delete_splits_for_transactions(db: Session, owner: str, tx_ids: list[str]) -
     )
 
 
+def split_counts_for_transactions(db: Session, owner: str, tx_ids: list[str]) -> dict[str, int]:
+    if not tx_ids:
+        return {}
+    rows = (
+        db.query(FinanceTransactionSplit.transaction_id, func.count())
+        .filter(
+            FinanceTransactionSplit.owner == owner,
+            FinanceTransactionSplit.transaction_id.in_(tx_ids),
+        )
+        .group_by(FinanceTransactionSplit.transaction_id)
+        .all()
+    )
+    return {str(tx_id): int(count) for tx_id, count in rows}
+
+
+def list_transaction_splits(db: Session, owner: str, transaction_id: str) -> list[FinanceTransactionSplit]:
+    _owned_tx(db, owner, transaction_id)
+    return (
+        db.query(FinanceTransactionSplit)
+        .filter(
+            FinanceTransactionSplit.owner == owner,
+            FinanceTransactionSplit.transaction_id == transaction_id,
+        )
+        .order_by(FinanceTransactionSplit.created_at.asc(), FinanceTransactionSplit.id.asc())
+        .all()
+    )
+
+
+def clear_transaction_splits(db: Session, owner: str, transaction_id: str) -> int:
+    _owned_tx(db, owner, transaction_id)
+    deleted = delete_splits_for_transactions(db, owner, [transaction_id])
+    db.commit()
+    return int(deleted or 0)
+
+
+def list_payees_for_owner(
+    db: Session,
+    owner: str,
+    *,
+    q: str = "",
+    limit: int = 20,
+) -> list[dict]:
+    cap = max(1, min(int(limit or 20), 50))
+    query = db.query(
+        FinanceTransaction.payee,
+        func.max(FinanceTransaction.date).label("last_date"),
+        func.count().label("hit_count"),
+    ).filter(
+        FinanceTransaction.owner == owner,
+        FinanceTransaction.payee.isnot(None),
+        FinanceTransaction.payee != "",
+    )
+    needle = (q or "").strip()
+    if needle:
+        query = query.filter(FinanceTransaction.payee.ilike(f"%{needle}%"))
+    rows = (
+        query.group_by(FinanceTransaction.payee)
+        .order_by(func.count().desc(), func.max(FinanceTransaction.date).desc())
+        .limit(cap)
+        .all()
+    )
+    return [
+        {
+            "payee": payee or "",
+            "count": int(count or 0),
+            "last_date": last_date.isoformat() if last_date else None,
+        }
+        for payee, last_date, count in rows
+    ]
+
+
 def _tx_snapshot(tx: FinanceTransaction) -> dict:
     return {
         "id": tx.id,
@@ -321,6 +395,16 @@ def patch_ledger_transaction(
     if memo is not None:
         tx.memo = memo[:1000]
     if category_id is not None:
+        split_exists = (
+            db.query(FinanceTransactionSplit.id)
+            .filter(
+                FinanceTransactionSplit.owner == owner,
+                FinanceTransactionSplit.transaction_id == tx.id,
+            )
+            .first()
+        )
+        if split_exists:
+            raise ValueError("Clear splits before setting a parent category")
         tx.category_id = category_id or None
     if status is not None:
         tx.status = validate_status(status)
@@ -445,6 +529,8 @@ def set_transaction_splits(
     tx = _owned_tx(db, owner, transaction_id)
     if not splits:
         raise ValueError("At least one split is required")
+    if len(splits) > MAX_TRANSACTION_SPLITS:
+        raise ValueError(f"At most {MAX_TRANSACTION_SPLITS} split lines")
 
     total = sum(int(s.get("amount_cents") or 0) for s in splits)
     if total != tx.amount_cents:
