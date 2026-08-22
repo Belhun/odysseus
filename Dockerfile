@@ -9,6 +9,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 COPY docker/build-realesrgan-wheels.sh /usr/local/bin/build-realesrgan-wheels.sh
 RUN bash /usr/local/bin/build-realesrgan-wheels.sh /wheels
 
+# Google Messages bridge (optional at runtime via PHONEPI_ENABLED).
+# CGO_ENABLED=0: modernc.org/sqlite is pure Go, so this binary runs in the
+# python slim image with no libsqlite. Pairing writes qr-url.txt into
+# PHONEPI_GMESSAGES_DATA_DIR so Settings → Phone can show a QR without a TTY.
+FROM golang:1.24-bookworm AS phonepi-gmessages
+WORKDIR /src
+COPY mcp_servers/phonepi/messages-bridge ./messages-bridge
+COPY mcp_servers/phonepi/vendor/openmessage ./vendor/openmessage
+WORKDIR /src/messages-bridge
+ENV CGO_ENABLED=0 GOPROXY=https://proxy.golang.org,direct
+RUN go build -o /phonepi-gmessages .
+
 FROM python:3.14-slim
 
 # System deps. tmux is required by Cookbook for background downloads/serves.
@@ -19,6 +31,8 @@ FROM python:3.14-slim
 # nodejs/npm provide npx for the optional built-in Browser MCP server.
 # gosu lets the entrypoint drop privileges cleanly so signals still reach
 # uvicorn directly (no extra shell layer like `su`/`sudo` would add).
+# procps (pkill) lets the Phone settings tab stop phonepi-gmessages before
+# a re-pair; slim images omit it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
@@ -29,6 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tmux \
     openssh-client \
     gosu \
+    procps \
     libgl1 \
     libglib2.0-0t64 \
     libxcb1 \
@@ -99,6 +114,21 @@ RUN pip install --no-cache-dir --no-deps /tmp/odysseus-wheels/*.whl \
 
 # Copy app code
 COPY . .
+
+# PhonePi MCP (optional at runtime via PHONEPI_ENABLED). dist/ is dockerignored,
+# so build it here so git pull + image rebuild ships the companion server.
+RUN if [ -f mcp_servers/phonepi/package.json ]; then \
+      cd mcp_servers/phonepi \
+      && npm ci \
+      && npm run build \
+      && npm prune --omit=dev; \
+    fi
+
+# 11042 stays inside the container (not published). Python + Node talk to it
+# on 127.0.0.1; the phone never reaches this port.
+RUN mkdir -p /app/mcp_servers/phonepi/messages-bridge
+COPY --from=phonepi-gmessages /phonepi-gmessages /app/mcp_servers/phonepi/messages-bridge/phonepi-gmessages
+RUN chmod +x /app/mcp_servers/phonepi/messages-bridge/phonepi-gmessages
 
 # Create data directory (mount a volume here for persistence)
 RUN mkdir -p data logs services/cache/search

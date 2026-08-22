@@ -14,6 +14,12 @@ import subprocess
 import sys
 
 from core.platform_compat import IS_WINDOWS, which_tool
+from src.phonepi import (
+    PHONEPI_DISPLAY_NAME,
+    PHONEPI_SERVER_ID,
+    phonepi_connect_hint,
+    phonepi_enabled,
+)
 from src.runtime_paths import get_app_root
 
 logger = logging.getLogger(__name__)
@@ -155,6 +161,8 @@ async def register_builtin_servers(mcp_manager):
             continue
         _spawn_bg(_connect_python_server(server_id, script_path, name))
 
+    _spawn_bg(_connect_phonepi(mcp_manager, base_dir))
+
     # NPX-based servers take longer to start; run after Python builtins.
     npx_path = _find_npx()
     logger.info(f"NPX binary resolved to: {npx_path}")
@@ -206,6 +214,87 @@ async def register_builtin_servers(mcp_manager):
                 logger.warning(f"Built-in NPX server {cfg['name']} error: {type(e).__name__}: {e}")
 
     _spawn_bg(_start_npx_servers())
+
+
+def phonepi_dist_script(base_dir: str) -> str:
+    return os.path.join(base_dir, "mcp_servers", "phonepi", "dist", "index.js")
+
+
+def _find_node() -> str:
+    node = which_tool("node") or shutil.which("node")
+    return node or "node"
+
+
+def phonepi_stdio_kwargs(base_dir: str) -> dict | None:
+    """Args for connect_server when PhonePi is enabled and built. None to skip.
+
+    Force PHONEPI_WS_HOST=127.0.0.1 so the phone uses wss://<UI>/phonepi
+    instead of a published :11041 port.
+    """
+    if not phonepi_enabled():
+        return None
+    script = phonepi_dist_script(base_dir)
+    if not os.path.isfile(script):
+        logger.warning(
+            "PHONEPI_ENABLED is set but %s is missing. "
+            "Rebuild the Docker image, or run npm ci && npm run build in mcp_servers/phonepi.",
+            script,
+        )
+        return None
+    return {
+        "server_id": PHONEPI_SERVER_ID,
+        "name": PHONEPI_DISPLAY_NAME,
+        "transport": "stdio",
+        "command": _find_node(),
+        "args": [script, "--stdio"],
+        "env": {"PHONEPI_WS_HOST": os.environ.get("PHONEPI_WS_HOST", "127.0.0.1")},
+    }
+
+
+async def _connect_phonepi(mcp_manager, base_dir: str) -> None:
+    kwargs = phonepi_stdio_kwargs(base_dir)
+    if not kwargs:
+        return
+    try:
+        ok = await mcp_manager.connect_server(**kwargs)
+        if ok:
+            hint = phonepi_connect_hint()
+            logger.info(
+                "Built-in MCP server registered: %s; phone app host %s port %s "
+                "(path %s, %s)",
+                PHONEPI_DISPLAY_NAME,
+                hint["host"],
+                hint["port"],
+                hint["path"],
+                hint["url"],
+            )
+        else:
+            logger.warning("Built-in MCP server failed to connect: %s", PHONEPI_DISPLAY_NAME)
+    except asyncio.CancelledError:
+        raise
+    except BaseException as e:
+        logger.warning(
+            "Built-in MCP server %s error: %s: %s",
+            PHONEPI_DISPLAY_NAME,
+            type(e).__name__,
+            e,
+        )
+
+
+async def reconnect_phonepi(mcp_manager) -> bool:
+    """Tear down and reconnect the Node PhonePi builtin."""
+    kwargs = phonepi_stdio_kwargs(get_app_root())
+    if not kwargs:
+        return False
+    await mcp_manager.disconnect_server(PHONEPI_SERVER_ID)
+    try:
+        ok = await mcp_manager.connect_server(**kwargs)
+        if ok:
+            logger.info("Reconnected builtin MCP server: %s", PHONEPI_DISPLAY_NAME)
+        return bool(ok)
+    except Exception as e:
+        logger.error("Failed to reconnect builtin MCP server %s: %s", PHONEPI_DISPLAY_NAME, e)
+        return False
 
 
 def _npx_package_from_args(args):

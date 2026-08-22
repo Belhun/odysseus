@@ -121,3 +121,21 @@ Verified on both hosts. Did not `git pull`. Did not delete `E:\odysseus`. Did no
 
 - PhonePi / Fantasia Archive / foundry-mcp: Mini PC `app.db` still has `node` + `F:/Codeing Project/...` args. Need per-machine paths if you want them on Linux. Windows `E:\odysseus` MCP rows stay Windows.
 - Keep Windows Odysseus stopped while Mini PC is the live IMAP writer.
+
+---
+
+## 2026-08-21 — PhonePi native optional builtin
+
+- **Symptom:** Mini PC PhonePi MCP row still used Windows `F:\Codeing Project\phonepi-mcp\...`. Port 11041 was not listening. Phone could not connect.
+- **Likely cause:** User MCP paths copied from Windows `app.db`.
+- **Status:** fixed (playground): PhonePi server vendored at `mcp_servers/phonepi`, image `npm ci && npm run build`, runtime `PHONEPI_ENABLED=true`. Odysseus proxies `wss://<UI-host>/phonepi` to loopback 11041. Disable the old Settings MCP row (`332defb9`) so it does not fight the builtin.
+- **Phone address:** Host `dell-mini-pc.tailcbcc46.ts.net`, Port `443` (same host as the UI). Needs an updated companion APK that speaks `wss` + `/phonepi`. Tailscale on the phone must be on. Do not Funnel.
+
+---
+
+## 2026-08-21 — Google Messages pairing in Settings → Phone
+
+- **What:** Vendored `messages-bridge` + openmessage. Docker builds `phonepi-gmessages`. Settings → Phone shows a scannable QR, Repair pairing, Restart PhonePi / Restart sync.
+- **Session:** `/app/.local/share/phonepi-gmessages/` on the Mini PC volume (`data/local`).
+- **Status:** image rebuilt; binary present; PhonePi 33 tools; 11042 waits until a phone scans the QR. Pairing is independent of the Android companion app.
+

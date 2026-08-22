@@ -39,7 +39,10 @@ caldav
 cryptography
 bcrypt
 mcp>=1.9,<2
+# PhonePi: FastAPI proxies /phonepi to the Node WS on loopback 11041.
+websockets>=12,<16
 pyotp
+# Settings → Phone QR for PhonePi connect + Google Messages pairing.
 qrcode[pil]
 croniter
 ofxparse

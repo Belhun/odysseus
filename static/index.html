@@ -1414,6 +1414,10 @@
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
             <span>Email</span>
           </button>
+          <button class="settings-nav-item admin-only" data-settings-tab="phone">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+            <span>Phone</span>
+          </button>
           <button class="settings-nav-item" data-settings-tab="reminders">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
             <span>Reminders</span>
@@ -2060,6 +2064,56 @@
                 <button class="admin-btn-add" id="set-local-email-rules-save" style="margin-left:auto;">Save</button>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- Phone tab (admin): PhonePi host/port copy + Google Messages QR pair/repair. -->
+        <div data-settings-panel="phone" class="hidden admin-only">
+          <div class="admin-card">
+            <h2 style="display:flex;align-items:center;gap:8px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.6"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+              PhonePi companion
+              <span id="phonepi-enabled-pill" style="margin-left:auto;font-size:11px;font-weight:normal;opacity:0.7"></span>
+            </h2>
+            <div class="admin-toggle-sub" style="margin-bottom:10px">Same host as this Odysseus UI. Paste it into the PhonePi app, port 443 on Tailscale Serve.</div>
+            <div class="settings-col" style="gap:8px">
+              <div class="settings-row">
+                <label class="settings-label">Host</label>
+                <input id="phonepi-host" class="settings-select" readonly>
+                <button type="button" class="admin-btn-sm" id="phonepi-copy-host">Copy</button>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">Port</label>
+                <input id="phonepi-port" class="settings-select" readonly style="max-width:120px">
+                <button type="button" class="admin-btn-sm" id="phonepi-copy-both">Copy both</button>
+              </div>
+              <div id="phonepi-connect-qr-wrap" style="display:none;margin:8px 0">
+                <img id="phonepi-connect-qr" alt="PhonePi connect QR" width="180" height="180" style="background:#fff;border-radius:8px;padding:8px">
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button type="button" class="admin-btn-add" id="phonepi-restart-btn">Restart PhonePi</button>
+              </div>
+              <div id="phonepi-msg" style="font-size:11px"></div>
+            </div>
+          </div>
+          <div class="admin-card">
+            <h2 style="display:flex;align-items:center;gap:8px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.6"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              Google Messages
+              <span id="gmessages-status-pill" style="margin-left:auto;font-size:11px;font-weight:normal;opacity:0.7"></span>
+            </h2>
+            <div class="admin-toggle-sub" style="margin-bottom:10px">On the phone: Google Messages → Settings → Device pairing → Pair a device, then scan this QR. Repair replaces the pairing if sync breaks.</div>
+            <div id="gmessages-qr-wrap" style="display:none;margin:8px 0 12px">
+              <img id="gmessages-qr" alt="Google Messages pairing QR" width="220" height="220" style="background:#fff;border-radius:8px;padding:8px">
+              <div id="gmessages-qr-hint" style="font-size:11px;opacity:0.7;margin-top:6px">Waiting for you to scan...</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button type="button" class="admin-btn-add" id="gmessages-pair-btn">Show pairing QR</button>
+              <button type="button" class="admin-btn-add" id="gmessages-repair-btn">Repair pairing</button>
+              <button type="button" class="admin-btn-sm" id="gmessages-cancel-btn" style="display:none">Cancel</button>
+              <button type="button" class="admin-btn-sm" id="gmessages-serve-btn">Restart sync</button>
+            </div>
+            <div id="gmessages-msg" style="font-size:11px;margin-top:8px"></div>
           </div>
         </div>
 

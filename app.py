@@ -900,6 +900,9 @@ app.include_router(setup_sysforge_routes())
 
 from companion import setup_companion_routes
 app.include_router(setup_companion_routes())
+# PhonePi WS proxy (/phonepi) + Settings → Phone APIs. Off unless PHONEPI_ENABLED.
+from routes.phonepi_routes import setup_phonepi_routes
+app.include_router(setup_phonepi_routes())
 
 # ========= ROUTES (kept in app.py) =========
 

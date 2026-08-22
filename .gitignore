@@ -37,6 +37,9 @@ logs/
 # Finance dev fixtures (real bank exports — never commit)
 tests/fixtures/finance/private/
 services/node_modules/
+mcp_servers/phonepi/node_modules/
+mcp_servers/phonepi/messages-bridge/phonepi-gmessages
+mcp_servers/phonepi/messages-bridge/phonepi-gmessages.exe
 services/data/
 
 # IDE / Editor
@@ -104,6 +107,20 @@ scripts/deploy-mini-pc.ps1
 
 # Host-local Compose overlay (optional extras, bind, etc.)
 docker-compose.override.yml
+
+# Flutter PhoneApp
+PhoneApp/.dart_tool/
+PhoneApp/.flutter-plugins
+PhoneApp/.flutter-plugins-dependencies
+PhoneApp/.packages
+PhoneApp/build/
+PhoneApp/.pub-cache/
+PhoneApp/.pub/
+PhoneApp/android/.gradle/
+PhoneApp/android/local.properties
+PhoneApp/**/*.iml
+!PhoneApp/**/*.png
+
 
 # Local config
 compound.config.json

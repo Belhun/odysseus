@@ -537,7 +537,11 @@ class McpManager:
     async def _reconnect_builtin(self, server_id: str) -> bool:
         """Tear down and reconnect a crashed builtin MCP server."""
         import sys
-        from src.builtin_mcp import _BUILTIN_SERVERS, builtin_python_env
+        from src.builtin_mcp import _BUILTIN_SERVERS, builtin_python_env, reconnect_phonepi
+        from src.phonepi import PHONEPI_SERVER_ID
+
+        if server_id == PHONEPI_SERVER_ID:
+            return await reconnect_phonepi(self)
 
         if server_id not in _BUILTIN_SERVERS:
             return False
@@ -575,7 +579,7 @@ class McpManager:
         for server_id, tools in self._tools.items():
             # Skip builtin Python servers — they use the code-block tool format
             # But include NPX-based builtins (like browser) which need function calling
-            if self.is_builtin(server_id) and server_id != "builtin_browser":
+            if self._hide_from_mcp_prompt(server_id):
                 continue
             conn = self._connections.get(server_id, {})
             server_name = conn.get("name", server_id)
@@ -643,6 +647,19 @@ class McpManager:
             "memory",
             "rag",
             "email",
+            "phonepi",
+        }
+
+    def _hide_from_mcp_prompt(self, server_id: str) -> bool:
+        """Python builtins have native agent tools; keep them out of MCP schemas.
+
+        PhonePi is a Node builtin like browser: tools must appear as mcp__phonepi__*.
+        """
+        return server_id in {
+            "image_gen",
+            "memory",
+            "rag",
+            "email",
         }
 
     def get_server_status(self, server_id: str) -> Dict:
@@ -674,7 +691,7 @@ class McpManager:
         for t in tools:
             # Skip builtin Python servers — they're already in the agent prompt
             # But include NPX-based builtins (like browser) which aren't hardcoded
-            if self.is_builtin(t["server_id"]) and t["server_id"] != "builtin_browser":
+            if self._hide_from_mcp_prompt(t["server_id"]):
                 continue
             if t.get("is_disabled"):
                 continue

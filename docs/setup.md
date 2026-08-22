@@ -501,6 +501,23 @@ npx -y @playwright/mcp@latest --version
 
 That installs `@playwright/mcp` plus Playwright (~300MB total). Restart Odysseus and the server will register at startup.
 
+### PhonePi (optional phone companion)
+
+PhonePi is a Node MCP server vendored at `mcp_servers/phonepi`. The Docker image builds it. It stays off until you set `PHONEPI_ENABLED=true` in the host `.env` and recreate the container.
+
+The phone talks to the **same host as the Odysseus UI**, path `/phonepi`:
+
+| You open the UI at | PhonePi app Host | Port |
+|---|---|---|
+| `https://dell-mini-pc.tailcbcc46.ts.net` | `dell-mini-pc.tailcbcc46.ts.net` (or paste the full https URL) | `443` |
+| `http://127.0.0.1:7000` (USB / adb reverse) | `127.0.0.1` | `7000` |
+
+Do not use a separate `:11041` port. Odysseus proxies that socket internally. Do not enable Tailscale Funnel; `/phonepi` is not cookie-auth'd (the tailnet is the gate, same as the old PhonePi port).
+
+Open **Settings → Phone** in the Odysseus UI for the host/port to copy, a PhonePi restart button, and Google Messages pairing. Click **Show pairing QR**, then on the phone: Google Messages → Settings → Device pairing → Pair a device. **Repair pairing** drops the session and shows a new QR if sync breaks.
+
+Disable any leftover Settings → MCP row that still points at a Windows `F:\Codeing Project\phonepi-mcp\...` path, or two servers will fight over the loopback socket.
+
 ## Architecture
 ```
 app.py                   # FastAPI entry point
