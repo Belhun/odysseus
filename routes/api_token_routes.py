@@ -35,6 +35,10 @@ TOKEN_PROFILES = {
     "codex_todos": ["todos:read", "todos:write"],
     "codex_documents": ["documents:read", "documents:write"],
     "codex_email_drafts": ["email:read", "email:draft", "documents:read", "documents:write"],
+    # PhoneApp finance client. Intentionally omits chat so a phone finance
+    # token is not a companion/chat credential, and Codex/Claude "Create token"
+    # (chat profile) still 403s /api/finance.
+    "phone_finance": ["finance:read", "finance:write"],
 }
 
 
