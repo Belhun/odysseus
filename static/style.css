@@ -5378,6 +5378,157 @@ body.bg-pattern-sparkles {
       flex: 1 1 auto;
       min-height: 0;
     }
+    #finance-modal .finance-toolbar {
+      display: flex;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    #finance-modal .finance-toolbar-tabs {
+      display: flex;
+      gap: 6px;
+      flex-wrap: nowrap;
+      align-items: center;
+      min-width: 0;
+      overflow: hidden;
+    }
+    #finance-modal .finance-tab-more-wrap {
+      position: relative;
+      flex: 0 0 auto;
+    }
+    #finance-modal .finance-overflow-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 4px);
+      z-index: 20;
+      min-width: 160px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      padding: 4px;
+    }
+    #finance-modal .finance-overflow-menu.hidden { display: none; }
+    #finance-modal .finance-overflow-menu button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      color: var(--fg);
+      padding: 6px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    #finance-modal .finance-overflow-menu button:hover,
+    #finance-modal .finance-overflow-menu button[aria-current="true"] {
+      background: var(--bg);
+    }
+    #finance-modal .finance-chrome-actions {
+      display: flex;
+      gap: 6px;
+      margin-left: auto;
+      align-items: center;
+    }
+    #finance-modal .finance-modal-content.finance-privacy-on .finance-money {
+      filter: blur(8px);
+      user-select: none;
+    }
+    #finance-modal .finance-modal-content.finance-density-compact .finance-toolbar {
+      padding: 4px 8px;
+      gap: 6px;
+    }
+    #finance-modal .finance-modal-content.finance-density-compact #finance-panel {
+      padding: 8px;
+    }
+    #finance-modal .finance-modal-content.finance-density-compact table {
+      font-size: 0.8rem;
+    }
+    #finance-modal .finance-modal-content.finance-density-compact td,
+    #finance-modal .finance-modal-content.finance-density-compact th {
+      padding: 2px 6px;
+    }
+    #finance-modal .finance-table th,
+    #finance-modal .finance-table td {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #finance-modal .finance-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    #finance-modal .finance-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 30;
+      background: rgba(0,0,0,0.45);
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 24px 12px;
+      overflow: auto;
+    }
+    #finance-modal .finance-overlay.hidden { display: none; }
+    #finance-modal .finance-overlay-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      width: min(560px, 100%);
+      padding: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+    }
+    #finance-modal .finance-overlay-card h3 { margin: 0 0 8px; font-size: 1rem; }
+    #finance-modal .finance-overlay-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    #finance-modal .finance-overlay-grid label,
+    #finance-modal .finance-overlay-card label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 0.85rem;
+    }
+    #finance-modal .finance-report-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      margin: 0 0 16px;
+    }
+    #finance-modal .finance-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: var(--bg);
+    }
+    #finance-modal .finance-card h4 {
+      margin: 0 0 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      opacity: 0.85;
+    }
+    #finance-modal .finance-card .finance-card-value {
+      font-size: 1.15rem;
+      font-weight: 600;
+    }
+    #finance-modal .finance-upcoming-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    #finance-modal .finance-upcoming-list li {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border);
+    }
     .modal-header h4 {
       margin:0;
       /* Push every header control (opacity slider, minimize, close) into one

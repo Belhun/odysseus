@@ -6,6 +6,16 @@ import { makeWindowDraggable } from '/static/js/windowDrag.js';
 // bindMenuDismiss reserved for future esc-menu wiring
 
 const API = `${window.location.origin}/api/finance`;
+const PRIVACY_KEY = 'odysseus-finance-privacy';
+const DENSITY_KEY = 'odysseus-finance-density';
+const FINANCE_TABS = [
+  { id: 'transactions', label: 'Transactions', overflow: false },
+  { id: 'import', label: 'Import', overflow: false },
+  { id: 'budget', label: 'Budget', overflow: false },
+  { id: 'reports', label: 'Reports', overflow: false },
+  { id: 'recurring', label: 'Recurring', overflow: true },
+  { id: 'rules', label: 'Rules', overflow: true },
+];
 let _open = false;
 
 function _escHtml(text) {
@@ -37,6 +47,12 @@ let _selectedTxIds = new Set();
 let _showAccountForm = false;
 let _editingAccountId = null;
 let _includeBusiness = true;
+let _txOverlay = null;
+let _splitDraft = [];
+let _payeeSuggestTimer = null;
+let _tabOverflowOpen = false;
+let _tabsNarrow = false;
+let _txById = new Map();
 const TX_PAGE_SIZE = 50;
 const CLASS_OPTIONS = [
   { value: '', label: '—' },
@@ -84,6 +100,63 @@ function _fmtMoney(cents) {
   return `${sign}$${Math.abs(n).toFixed(2)}`;
 }
 
+function _moneyHtml(cents) {
+  return `<span class="finance-money">${_fmtMoney(cents)}</span>`;
+}
+
+export function evalFinanceAmount(raw) {
+  const s = String(raw ?? '').trim().replace(/\$/g, '').replace(/,/g, '');
+  if (!s) return null;
+  if (/^-?\d+(\.\d+)?$/.test(s)) {
+    const n = Number(s);
+    if (!Number.isFinite(n)) return null;
+    return Math.round(n * 100);
+  }
+  if (!/^[0-9+\-*/().\s]+$/.test(s)) return null;
+  try {
+    const val = Function('"use strict"; return (' + s + ')')();
+    if (typeof val !== 'number' || !Number.isFinite(val)) return null;
+    return Math.round(val * 100);
+  } catch {
+    return null;
+  }
+}
+
+function _privacyOn() {
+  try { return localStorage.getItem(PRIVACY_KEY) === 'on'; } catch { return false; }
+}
+
+function _densityCompact() {
+  try { return localStorage.getItem(DENSITY_KEY) !== 'off'; } catch { return true; }
+}
+
+function _setPrivacy(on) {
+  try { localStorage.setItem(PRIVACY_KEY, on ? 'on' : 'off'); } catch { /* ignore */ }
+  _applyChromePrefs();
+}
+
+function _setDensity(compact) {
+  try { localStorage.setItem(DENSITY_KEY, compact ? 'on' : 'off'); } catch { /* ignore */ }
+  _applyChromePrefs();
+}
+
+function _applyChromePrefs() {
+  const content = _modal?.querySelector('.finance-modal-content');
+  if (!content) return;
+  content.classList.toggle('finance-privacy-on', _privacyOn());
+  content.classList.toggle('finance-density-compact', _densityCompact());
+  const privBtn = _el('finance-privacy-btn');
+  if (privBtn) {
+    privBtn.setAttribute('aria-pressed', _privacyOn() ? 'true' : 'false');
+    privBtn.textContent = _privacyOn() ? 'Show amounts' : 'Hide amounts';
+  }
+  const densBtn = _el('finance-density-btn');
+  if (densBtn) {
+    densBtn.setAttribute('aria-pressed', _densityCompact() ? 'true' : 'false');
+    densBtn.textContent = _densityCompact() ? 'Comfortable' : 'Compact';
+  }
+}
+
 async function _api(path, opts = {}) {
   const res = await fetch(`${API}${path}`, { credentials: 'same-origin', ...opts });
   const data = await res.json().catch(() => ({}));
@@ -102,18 +175,19 @@ function _getModal() {
         <h2 style="margin:0;font-size:1.1rem;">Finance</h2>
         <button type="button" class="modal-close" id="finance-close-btn" aria-label="Close">&times;</button>
       </div>
-      <div class="finance-toolbar" style="display:flex;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-color,#333);flex-wrap:wrap;align-items:center;">
-        <select id="finance-account-select" style="min-width:220px;"></select>
+      <div class="finance-toolbar">
+        <select id="finance-account-select" style="min-width:180px;"></select>
         <button type="button" id="finance-add-account-btn" class="btn-secondary">+ Account</button>
         <button type="button" id="finance-edit-account-btn" class="btn-secondary">Edit account</button>
-        <div style="flex:1"></div>
-        <button type="button" class="finance-tab-btn" data-tab="transactions">Transactions</button>
-        <button type="button" class="finance-tab-btn" data-tab="import">Import</button>
-        <button type="button" class="finance-tab-btn" data-tab="budget">Budget</button>
-        <button type="button" class="finance-tab-btn" data-tab="recurring">Recurring</button>
-        <button type="button" class="finance-tab-btn" data-tab="reports">Reports</button>
+        <div class="finance-toolbar-tabs" id="finance-toolbar-tabs"></div>
+        <div class="finance-chrome-actions">
+          <button type="button" id="finance-add-tx-btn" class="btn-primary">+ Transaction</button>
+          <button type="button" id="finance-privacy-btn" class="btn-secondary" aria-pressed="false">Hide amounts</button>
+          <button type="button" id="finance-density-btn" class="btn-secondary" aria-pressed="true">Comfortable</button>
+        </div>
       </div>
       <div id="finance-panel" style="flex:1;overflow:auto;padding:12px;"></div>
+      <div id="finance-overlay" class="finance-overlay hidden"></div>
     </div>`;
   document.body.appendChild(_modal);
   const content = _modal.querySelector('.finance-modal-content');
@@ -135,13 +209,59 @@ function _getModal() {
     _activeAccountId = e.target.value || null;
     _renderPanel();
   });
-  _modal.querySelectorAll('.finance-tab-btn').forEach((btn) => {
+  _el('finance-add-tx-btn')?.addEventListener('click', () => _openTxOverlay(null));
+  _el('finance-privacy-btn')?.addEventListener('click', () => _setPrivacy(!_privacyOn()));
+  _el('finance-density-btn')?.addEventListener('click', () => _setDensity(!_densityCompact()));
+  _el('finance-overlay')?.addEventListener('click', (e) => {
+    if (e.target?.id === 'finance-overlay') _closeTxOverlay();
+  });
+  _renderTabButtons();
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => _renderTabButtons()).observe(content);
+  }
+  _applyChromePrefs();
+  return _modal;
+}
+
+function _tabVisibleInOverflow(tab) {
+  if (tab.id === _activeTab) return false;
+  if (tab.overflow) return true;
+  return _tabsNarrow && tab.id === 'reports';
+}
+
+function _renderTabButtons() {
+  const wrap = _el('finance-toolbar-tabs');
+  if (!wrap) return;
+  const width = _modal?.querySelector('.finance-modal-content')?.clientWidth || 1100;
+  _tabsNarrow = width < 920;
+  const primary = FINANCE_TABS.filter((t) => !_tabVisibleInOverflow(t));
+  const overflow = FINANCE_TABS.filter((t) => _tabVisibleInOverflow(t));
+  wrap.innerHTML = `
+    ${primary.map((t) =>
+      `<button type="button" class="finance-tab-btn btn-secondary" data-tab="${t.id}" ${_activeTab === t.id ? 'aria-current="true"' : ''}>${t.label}</button>`
+    ).join('')}
+    <div class="finance-tab-more-wrap">
+      <button type="button" id="finance-tab-more" class="btn-secondary" aria-expanded="${_tabOverflowOpen ? 'true' : 'false'}">More</button>
+      <div id="finance-tab-overflow" class="finance-overflow-menu ${_tabOverflowOpen ? '' : 'hidden'}" role="menu">
+        ${overflow.map((t) =>
+          `<button type="button" class="finance-tab-btn" data-tab="${t.id}" ${_activeTab === t.id ? 'aria-current="true"' : ''}>${t.label}</button>`
+        ).join('') || '<div style="padding:6px 8px;opacity:0.7;">No extra tabs</div>'}
+      </div>
+    </div>`;
+  wrap.querySelectorAll('.finance-tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       _activeTab = btn.dataset.tab || 'transactions';
+      _tabOverflowOpen = false;
+      _renderTabButtons();
       _renderPanel();
     });
   });
-  return _modal;
+  _el('finance-tab-more')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    _tabOverflowOpen = !_tabOverflowOpen;
+    _renderTabButtons();
+  });
+  _applyChromePrefs();
 }
 
 async function _loadAccounts() {
@@ -198,10 +318,10 @@ function _renderAccountMeta() {
   const stale = (a.available_age_days ?? 0) > 3;
   const avail = a.available_cents == null
     ? 'Available not pinned'
-    : `Available ${_fmtMoney(a.available_cents)}${availAge ? ` (${availAge})` : ''}`;
+    : `Available ${_moneyHtml(a.available_cents)}${availAge ? ` (${availAge})` : ''}`;
   meta.innerHTML = `
-    <span>Posted ${_fmtMoney(a.posted_cents ?? a.balance_cents)}</span>
-    <span style="margin-left:10px;${stale ? 'opacity:0.55;' : ''}">${_escHtml(avail)}</span>
+    <span>Posted ${_moneyHtml(a.posted_cents ?? a.balance_cents)}</span>
+    <span style="margin-left:10px;${stale ? 'opacity:0.55;' : ''}">${avail}</span>
     ${a.posted_pin_cents != null ? `<span style="margin-left:10px;">${_escHtml(_pinDeltaText(a))}</span>` : ''}
     ${stale && a.available_cents != null ? '<button type="button" id="finance-repin-btn" class="btn-secondary" style="margin-left:8px;font-size:0.75rem;">Re-pin available</button>' : ''}
   `;
@@ -310,15 +430,246 @@ function _bindCategoryForm() {
 }
 
 function _dollarsToCents(raw) {
-  if (raw === '' || raw == null) return null;
-  const n = Number(raw);
-  if (Number.isNaN(n)) return null;
-  return Math.round(n * 100);
+  return evalFinanceAmount(raw);
 }
 
 function _centsToDollars(cents) {
   if (cents == null) return '';
   return (Number(cents) / 100).toFixed(2);
+}
+
+function _todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function _closeTxOverlay() {
+  _txOverlay = null;
+  _splitDraft = [];
+  const overlay = _el('finance-overlay');
+  if (overlay) {
+    overlay.classList.add('hidden');
+    overlay.innerHTML = '';
+  }
+}
+
+async function _suggestPayees(query, listEl, inputEl) {
+  if (!listEl) return;
+  const q = (query || '').trim();
+  try {
+    const data = await _api(`/payees?q=${encodeURIComponent(q)}&limit=12`);
+    const payees = data.payees || [];
+    listEl.innerHTML = payees.map((p) =>
+      `<button type="button" class="finance-payee-suggest" data-payee="${_escHtml(p.payee)}">${_escHtml(p.payee)}</button>`
+    ).join('');
+    listEl.querySelectorAll('.finance-payee-suggest').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const input = inputEl || _el('fin-tx-payee');
+        if (input) input.value = btn.dataset.payee || '';
+        listEl.innerHTML = '';
+      });
+    });
+  } catch {
+    listEl.innerHTML = '';
+  }
+}
+
+function _splitRemainderCents(parentCents) {
+  const used = _splitDraft.reduce((sum, row) => sum + (Number(row.amount_cents) || 0), 0);
+  return (Number(parentCents) || 0) - used;
+}
+
+function _renderSplitEditor(parentCents) {
+  const box = _el('fin-tx-splits');
+  if (!box) return;
+  const remainder = _splitRemainderCents(parentCents);
+  const rows = _splitDraft.map((row, idx) => `
+    <div class="finance-split-row" data-split-idx="${idx}" style="display:grid;grid-template-columns:1fr 110px 1fr auto;gap:6px;margin-bottom:6px;">
+      <select data-split-cat>
+        <option value="">—</option>
+        ${_categoryOptionsHtml(row.category_id || '')}
+      </select>
+      <input data-split-amt type="text" inputmode="decimal" value="${row.amount_cents != null ? (row.amount_cents / 100).toFixed(2) : ''}" />
+      <input data-split-memo type="text" value="${_escHtml(row.memo || '')}" placeholder="Memo" />
+      <button type="button" class="btn-secondary" data-split-del>Remove</button>
+    </div>`).join('');
+  box.innerHTML = `
+    <div style="font-weight:600;margin:8px 0 4px;">Splits</div>
+    <p style="font-size:0.8rem;opacity:0.8;margin:0 0 6px;">Lines must sum to ${_moneyHtml(parentCents)}. Remainder ${_moneyHtml(remainder)}.</p>
+    ${rows || '<p style="opacity:0.7;font-size:0.85rem;">No split lines yet.</p>'}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button type="button" id="fin-tx-split-add" class="btn-secondary">Add line</button>
+      <button type="button" id="fin-tx-split-clear" class="btn-secondary">Clear splits</button>
+    </div>
+    <p id="fin-tx-split-error" style="color:var(--danger,#e74c3c);font-size:0.85rem;margin:6px 0 0;"></p>`;
+  box.querySelectorAll('[data-split-idx]').forEach((el) => {
+    const idx = Number(el.dataset.splitIdx);
+    el.querySelector('[data-split-cat]')?.addEventListener('change', (e) => {
+      _splitDraft[idx].category_id = e.target.value || null;
+    });
+    el.querySelector('[data-split-amt]')?.addEventListener('change', (e) => {
+      _splitDraft[idx].amount_cents = evalFinanceAmount(e.target.value) || 0;
+      _renderSplitEditor(parentCents);
+    });
+    el.querySelector('[data-split-memo]')?.addEventListener('input', (e) => {
+      _splitDraft[idx].memo = e.target.value || '';
+    });
+    el.querySelector('[data-split-del]')?.addEventListener('click', () => {
+      _splitDraft.splice(idx, 1);
+      _renderSplitEditor(parentCents);
+    });
+  });
+  _el('fin-tx-split-add')?.addEventListener('click', () => {
+    if (_splitDraft.length >= 62) return;
+    const rest = _splitRemainderCents(parentCents);
+    _splitDraft.push({ category_id: '', amount_cents: rest || 0, memo: '' });
+    _renderSplitEditor(parentCents);
+  });
+  _el('fin-tx-split-clear')?.addEventListener('click', () => {
+    _splitDraft = [];
+    _renderSplitEditor(parentCents);
+  });
+}
+
+async function _openTxOverlay(tx) {
+  const overlay = _el('finance-overlay');
+  if (!overlay) return;
+  _txOverlay = tx ? { ...tx } : {
+    account_id: _activeAccountId,
+    date: _todayIso(),
+    amount_cents: 0,
+    payee: '',
+    memo: '',
+    category_id: '',
+    movement_class: '',
+  };
+  _splitDraft = [];
+  overlay.classList.remove('hidden');
+  overlay.innerHTML = `
+    <div class="finance-overlay-card">
+      <h3>${tx ? 'Edit transaction' : 'Add transaction'}</h3>
+      <div class="finance-overlay-grid">
+        <label>Date<input id="fin-tx-date" type="date" value="${_escHtml(_txOverlay.date || _todayIso())}" /></label>
+        <label>Amount<input id="fin-tx-amount" type="text" inputmode="decimal" placeholder="12.50+3.20" value="${tx ? _centsToDollars(tx.amount_cents) : ''}" /></label>
+        <label style="grid-column:1 / -1;">Payee
+          <input id="fin-tx-payee" type="text" autocomplete="off" value="${_escHtml(_txOverlay.payee || '')}" />
+          <div id="fin-tx-payee-suggest" class="finance-overflow-menu" style="position:static;margin-top:4px;"></div>
+        </label>
+        <label style="grid-column:1 / -1;">Memo<input id="fin-tx-memo" type="text" value="${_escHtml(_txOverlay.memo || '')}" /></label>
+        <label>Category
+          <select id="fin-tx-cat"><option value="">—</option>${_categoryOptionsHtml(_txOverlay.category_id || '')}</select>
+        </label>
+        <label>Class
+          <select id="fin-tx-class">${_classOptionsHtml(_txOverlay.movement_class)}</select>
+        </label>
+        <label>Account
+          <select id="fin-tx-account">${_accounts.map((a) =>
+            `<option value="${a.id}" ${a.id === (_txOverlay.account_id || _activeAccountId) ? 'selected' : ''}>${_escHtml(a.name)}</option>`
+          ).join('')}</select>
+        </label>
+      </div>
+      <div id="fin-tx-splits"></div>
+      <p id="fin-tx-error" style="color:var(--danger,#e74c3c);font-size:0.85rem;"></p>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+        <button type="button" id="fin-tx-save" class="btn-primary">Save</button>
+        <button type="button" id="fin-tx-cancel" class="btn-secondary">Cancel</button>
+        ${tx ? '<button type="button" id="fin-tx-void" class="btn-secondary">Void</button>' : ''}
+      </div>
+    </div>`;
+  const payeeInput = _el('fin-tx-payee');
+  payeeInput?.addEventListener('input', () => {
+    clearTimeout(_payeeSuggestTimer);
+    _payeeSuggestTimer = setTimeout(() => _suggestPayees(payeeInput.value, _el('fin-tx-payee-suggest'), payeeInput), 200);
+  });
+  _el('fin-tx-amount')?.addEventListener('blur', (e) => {
+    const cents = evalFinanceAmount(e.target.value);
+    if (cents != null) e.target.value = (cents / 100).toFixed(2);
+  });
+  _el('fin-tx-cancel')?.addEventListener('click', _closeTxOverlay);
+  _el('fin-tx-save')?.addEventListener('click', _saveTxOverlay);
+  _el('fin-tx-void')?.addEventListener('click', async () => {
+    if (!tx?.id) return;
+    try {
+      await _api(`/transactions/${tx.id}/void`, { method: 'POST' });
+      _closeTxOverlay();
+      await _loadAccounts();
+      await _renderPanel();
+    } catch (err) {
+      const box = _el('fin-tx-error');
+      if (box) box.textContent = err.message || String(err);
+    }
+  });
+  if (tx?.id) {
+    try {
+      const data = await _api(`/transactions/${tx.id}/splits`);
+      _splitDraft = (data.splits || []).map((s) => ({
+        category_id: s.category_id || '',
+        amount_cents: s.amount_cents,
+        memo: s.memo || '',
+      }));
+    } catch { /* new or unsplit */ }
+  }
+  const amountCents = evalFinanceAmount(_el('fin-tx-amount')?.value) || tx?.amount_cents || 0;
+  _renderSplitEditor(amountCents);
+  _el('fin-tx-amount')?.addEventListener('change', () => {
+    _renderSplitEditor(evalFinanceAmount(_el('fin-tx-amount')?.value) || 0);
+  });
+}
+
+async function _saveTxOverlay() {
+  const err = _el('fin-tx-error');
+  const amountCents = evalFinanceAmount(_el('fin-tx-amount')?.value);
+  if (amountCents == null) {
+    if (err) err.textContent = 'Enter an amount. Math like 12.50+3.20 is allowed.';
+    return;
+  }
+  const willSplit = _splitDraft.length > 0;
+  const body = {
+    account_id: _el('fin-tx-account')?.value || _activeAccountId,
+    date: _el('fin-tx-date')?.value,
+    amount_cents: amountCents,
+    payee: _el('fin-tx-payee')?.value || '',
+    memo: _el('fin-tx-memo')?.value || '',
+    movement_class: _el('fin-tx-class')?.value || null,
+  };
+  if (!willSplit) body.category_id = _el('fin-tx-cat')?.value || null;
+  try {
+    let txId = _txOverlay?.id;
+    if (txId && !willSplit) {
+      await _api(`/transactions/${txId}/splits`, { method: 'DELETE' }).catch(() => {});
+    }
+    if (txId) {
+      await _api(`/transactions/${txId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } else {
+      const created = await _api('/transactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      txId = created.id;
+    }
+    if (willSplit) {
+      await _api(`/transactions/${txId}/splits`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          splits: _splitDraft.map((row) => ({
+            category_id: row.category_id || null,
+            amount_cents: Number(row.amount_cents) || 0,
+            memo: row.memo || '',
+          })),
+        }),
+      });
+    }
+    _closeTxOverlay();
+    await _loadAccounts();
+    await _renderPanel();
+  } catch (e) {
+    if (err) err.textContent = e.message || String(e);
+  }
 }
 
 function _openAccountForm(accountId) {
@@ -365,19 +716,19 @@ function _renderAccountForm() {
         </select>
       </label>
       <label>Opening posted ($)
-        <input id="fin-acct-opening" type="number" step="0.01" value="${_centsToDollars(existing.opening_balance_cents || 0)}" />
+        <input id="fin-acct-opening" type="text" inputmode="decimal" value="${_centsToDollars(existing.opening_balance_cents || 0)}" />
       </label>
       <label>Balance as of
         <input id="fin-acct-opening-date" type="date" value="${existing.opening_balance_date || ''}" />
       </label>
       <label>Available ($)
-        <input id="fin-acct-avail" type="number" step="0.01" value="${_centsToDollars(existing.available_cents)}" />
+        <input id="fin-acct-avail" type="text" inputmode="decimal" value="${_centsToDollars(existing.available_cents)}" />
       </label>
       <label>Available as of
         <input id="fin-acct-avail-date" type="date" value="${existing.available_as_of || ''}" />
       </label>
       <label>Posted pin ($)
-        <input id="fin-acct-pin" type="number" step="0.01" value="${_centsToDollars(existing.posted_pin_cents)}" />
+        <input id="fin-acct-pin" type="text" inputmode="decimal" value="${_centsToDollars(existing.posted_pin_cents)}" />
       </label>
       <label>Pin as of
         <input id="fin-acct-pin-date" type="date" value="${existing.posted_pin_as_of || ''}" />
@@ -546,14 +897,19 @@ function _txRowHtml(tx) {
   const catOpts = _categoryOptionsHtml(tx.category_id);
   const checked = _selectedTxIds.has(tx.id) ? 'checked' : '';
   const linked = tx.is_linked ? ' <span title="Linked movement" style="opacity:0.7;">↔</span>' : '';
+  const splitMark = tx.is_split || tx.split_count ? ' <span title="Split" style="opacity:0.7;">split</span>' : '';
+  const catDisabled = tx.is_split || tx.split_count ? 'disabled' : '';
   return `<tr>
     <td><input type="checkbox" class="finance-tx-check" data-tx-id="${tx.id}" ${checked} /></td>
     <td>${tx.date || ''}</td>
-    <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(tx.payee)}">${_escHtml(tx.payee)}${linked}</td>
-    <td style="${amtClass};text-align:right;">${_fmtMoney(tx.amount_cents)}</td>
-    <td><select data-tx-cat="${tx.id}" class="finance-cat-select"><option value="">—</option>${catOpts}</select></td>
+    <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(tx.payee)}">${_escHtml(tx.payee)}${linked}${splitMark}</td>
+    <td style="${amtClass};text-align:right;">${_moneyHtml(tx.amount_cents)}</td>
+    <td><select data-tx-cat="${tx.id}" class="finance-cat-select" ${catDisabled}><option value="">—</option>${catOpts}</select></td>
     <td><select data-tx-class="${tx.id}" class="finance-class-select">${_classOptionsHtml(tx.movement_class)}</select></td>
-    <td><button type="button" class="btn-secondary finance-apply-payee" data-tx-id="${tx.id}" data-payee="${_escHtml(tx.payee)}" style="font-size:0.75rem;">Apply to payee</button></td>
+    <td>
+      <button type="button" class="btn-secondary finance-tx-edit" data-tx-id="${tx.id}" style="font-size:0.75rem;">Edit</button>
+      <button type="button" class="btn-secondary finance-apply-payee" data-tx-id="${tx.id}" data-payee="${_escHtml(tx.payee)}" style="font-size:0.75rem;">Apply to payee</button>
+    </td>
   </tr>`;
 }
 
@@ -601,6 +957,12 @@ function _wireCategorySelects(root) {
         }),
       });
       _fetchTransactionPage();
+    });
+  });
+  root?.querySelectorAll('.finance-tx-edit').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tx = _txById.get(btn.dataset.txId);
+      if (tx) _openTxOverlay(tx);
     });
   });
 }
@@ -792,6 +1154,7 @@ async function _fetchTransactionPage() {
     const data = await _api(_txListQuery());
     const txs = data.transactions || [];
     const total = Number(data.total) || 0;
+    _txById = new Map(txs.map((tx) => [tx.id, tx]));
     if (status) status.textContent = _txFilterStatusText();
     _syncTxFilterControls();
     if (tbody) {
@@ -938,6 +1301,10 @@ async function _renderImport() {
       </select>
       <button type="button" id="finance-import-preview-btn" class="btn-primary">Preview import</button>
     </div>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:0.85rem;margin-bottom:12px;">Paste CSV or OFX
+      <textarea id="finance-import-paste" rows="4" placeholder="Date,Amount,Description&#10;2026-08-01,-12.50,Coffee"></textarea>
+      <button type="button" id="finance-import-paste-btn" class="btn-secondary" style="align-self:flex-start;">Preview paste</button>
+    </label>
   ` : `
     <h3 style="margin:24px 0 8px;">Bank export</h3>
     <p>Create an account first, then import the setup file or a bank CSV.</p>
@@ -961,6 +1328,7 @@ async function _renderImport() {
     <div id="finance-import-preview"></div>`);
   _el('finance-stmt-convert-btn')?.addEventListener('click', _runStatementConvert);
   _el('finance-import-preview-btn')?.addEventListener('click', _runImportPreview);
+  _el('finance-import-paste-btn')?.addEventListener('click', _runImportPreviewText);
   if (_setupConvert) _renderSetupConvertResult();
 }
 
@@ -1153,6 +1521,44 @@ async function _runImportPreview() {
   await _postImportPreview(file, preset);
 }
 
+async function _runImportPreviewText() {
+  const status = _el('finance-import-status');
+  const previewEl = _el('finance-import-preview');
+  const text = _el('finance-import-paste')?.value || '';
+  const acct = _activeAccountId;
+  if (!acct) {
+    if (status) status.textContent = 'Pick an account first.';
+    return;
+  }
+  if (!text.trim()) {
+    if (status) status.textContent = 'Paste CSV or OFX text first.';
+    return;
+  }
+  if (status) status.textContent = 'Parsing paste…';
+  try {
+    const body = {
+      account_id: acct,
+      text,
+      filename: 'clipboard.csv',
+      preset: _el('finance-import-preset')?.value || '',
+      mapping_id: _el('finance-import-mapping')?.value || '',
+    };
+    if (_preview?.pending_mapping) {
+      body.mapping = _preview.pending_mapping;
+      body.preset = 'csv_generic';
+    }
+    _preview = await _api('/import/preview-text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    _paintImportPreview(_preview, status, previewEl);
+  } catch (err) {
+    if (status) status.textContent = err.message || String(err);
+    if (previewEl) previewEl.innerHTML = '';
+  }
+}
+
 async function _postImportPreview(file, preset, accountId) {
   const status = _el('finance-import-status');
   const previewEl = _el('finance-import-preview');
@@ -1179,43 +1585,48 @@ async function _postImportPreview(file, preset, accountId) {
         if (!r.ok) throw new Error(d.detail || 'Preview failed');
         return d;
       });
-    if (_preview.needs_mapping) {
-      if (status) status.textContent = 'This file needs a column mapping before counts are trustworthy.';
-      _renderMappingForm(_preview, previewEl);
-      return;
-    }
-    const enrich = _preview.enrich_count || 0;
-    if (status) {
-      status.textContent = `${_preview.new_count} new, ${enrich} filled from this file, ${_preview.duplicate_count} already in the books (${_preview.format})`;
-    }
-    const rows = (_preview.rows || []).slice(0, 100).map((r) =>
-      `<tr style="${r.status === 'duplicate' ? 'opacity:0.5' : ''}${r.status === 'enrich' ? ';background:rgba(46,204,113,0.12)' : ''}${r.status === 'possible_manual_duplicate' ? ';outline:1px solid var(--warn,#f1c40f)' : ''}">
-        <td>${r.date}</td><td>${_escHtml(r.payee)}</td><td style="text-align:right;">${_fmtMoney(r.amount_cents)}</td><td>${_escHtml(r.status)}</td>
-      </tr>`
-    ).join('');
-    const importLabel = enrich
-      ? `Import ${_preview.new_count} new and fill ${enrich}`
-      : `Import ${_preview.new_count} transactions`;
-    previewEl.innerHTML = `
-      ${_preview.warning ? `<p style="color:var(--warn,#f1c40f);">${_escHtml(_preview.warning)}</p>` : ''}
-      ${_preview.opening ? `<p>This file includes opening posted <strong>${_fmtMoney(_preview.opening.opening_posted_cents)}</strong> as of ${_escHtml(_preview.opening.opening_as_of)}.</p>
-        <label style="display:flex;gap:8px;align-items:center;margin:8px 0;">
-          <input type="checkbox" id="finance-import-apply-opening" ${_preview.opening.account_has_opening ? '' : 'checked'} />
-          Apply opening posted to this account
-        </label>
-        ${_preview.opening.account_has_opening ? '<p style="font-size:0.85rem;opacity:0.8;">This account already has an opening posted. Check the box only if you want to replace it.</p>' : ''}
-      ` : ''}
-      <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
-        <thead><tr><th>Date</th><th>Payee</th><th>Amount</th><th>Status</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      ${(_preview.rows || []).length > 100 ? '<p>Showing first 100 rows…</p>' : ''}
-      <button type="button" id="finance-import-commit-btn" class="btn-primary" style="margin-top:12px;">${importLabel}</button>`;
-    _el('finance-import-commit-btn')?.addEventListener('click', _commitImport);
+    _paintImportPreview(_preview, status, previewEl);
   } catch (err) {
     if (status) status.textContent = err.message || String(err);
     if (previewEl) previewEl.innerHTML = '';
   }
+}
+
+function _paintImportPreview(preview, status, previewEl) {
+  if (!previewEl) return;
+  if (preview.needs_mapping) {
+    if (status) status.textContent = 'This file needs a column mapping before counts are trustworthy.';
+    _renderMappingForm(preview, previewEl);
+    return;
+  }
+  const enrich = preview.enrich_count || 0;
+  if (status) {
+    status.textContent = `${preview.new_count} new, ${enrich} filled from this file, ${preview.duplicate_count} already in the books (${preview.format})`;
+  }
+  const rows = (preview.rows || []).slice(0, 100).map((r) =>
+    `<tr style="${r.status === 'duplicate' ? 'opacity:0.5' : ''}${r.status === 'enrich' ? ';background:rgba(46,204,113,0.12)' : ''}${r.status === 'possible_manual_duplicate' ? ';outline:1px solid var(--warn,#f1c40f)' : ''}">
+      <td>${r.date}</td><td>${_escHtml(r.payee)}</td><td style="text-align:right;">${_moneyHtml(r.amount_cents)}</td><td>${_escHtml(r.status)}</td>
+    </tr>`
+  ).join('');
+  const importLabel = enrich
+    ? `Import ${preview.new_count} new and fill ${enrich}`
+    : `Import ${preview.new_count} transactions`;
+  previewEl.innerHTML = `
+    ${preview.warning ? `<p style="color:var(--warn,#f1c40f);">${_escHtml(preview.warning)}</p>` : ''}
+    ${preview.opening ? `<p>This file includes opening posted <strong>${_moneyHtml(preview.opening.opening_posted_cents)}</strong> as of ${_escHtml(preview.opening.opening_as_of)}.</p>
+      <label style="display:flex;gap:8px;align-items:center;margin:8px 0;">
+        <input type="checkbox" id="finance-import-apply-opening" ${preview.opening.account_has_opening ? '' : 'checked'} />
+        Apply opening posted to this account
+      </label>
+      ${preview.opening.account_has_opening ? '<p style="font-size:0.85rem;opacity:0.8;">This account already has an opening posted. Check the box only if you want to replace it.</p>' : ''}
+    ` : ''}
+    <table class="finance-table" style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
+      <thead><tr><th>Date</th><th>Payee</th><th>Amount</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${(preview.rows || []).length > 100 ? '<p>Showing first 100 rows…</p>' : ''}
+    <button type="button" id="finance-import-commit-btn" class="btn-primary" style="margin-top:12px;">${importLabel}</button>`;
+  _el('finance-import-commit-btn')?.addEventListener('click', _commitImport);
 }
 
 function _renderMappingForm(preview, previewEl) {
@@ -1310,49 +1721,53 @@ async function _renderBudget() {
         <span style="display:inline-block;width:10px;height:10px;background:${_escHtml(c.color || '#888')};border-radius:2px;margin-right:6px;"></span>
         <button type="button" class="finance-budget-cat" data-budget-open-cat="${_escHtml(catId)}" data-budget-uncategorized="${uncategorized}" title="Show transactions in this category" style="background:none;border:none;padding:0;color:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px;">${_escHtml(c.category_name)}</button>
       </td>
-      <td style="text-align:right;">${_fmtMoney(c.spent_cents)}</td>
-      <td style="text-align:right;">${c.limit_cents != null ? _fmtMoney(c.limit_cents) : '—'}</td>
-      <td style="text-align:right;">${c.remaining_cents != null ? _fmtMoney(c.remaining_cents) : '—'}</td>
-      <td><input type="number" min="0" step="1" data-budget-cat="${_escHtml(catId)}" placeholder="Set $" value="${c.limit_cents != null ? (c.limit_cents / 100).toFixed(0) : ''}" style="width:80px;" /></td>
+      <td style="text-align:right;">${_moneyHtml(c.spent_cents)}</td>
+      <td style="text-align:right;">${c.limit_cents != null ? _moneyHtml(c.limit_cents) : '—'}</td>
+      <td style="text-align:right;">${c.remaining_cents != null ? _moneyHtml(c.remaining_cents) : '—'}</td>
+      <td style="text-align:right;">${c.suggested_limit_cents != null ? _moneyHtml(c.suggested_limit_cents) : '—'}</td>
+      <td><input type="text" inputmode="decimal" data-budget-cat="${_escHtml(catId)}" data-suggested="${c.suggested_limit_cents != null ? (c.suggested_limit_cents / 100).toFixed(2) : ''}" placeholder="Set $" value="${c.limit_cents != null ? (c.limit_cents / 100).toFixed(2) : ''}" style="width:90px;" /></td>
     </tr>`;
   }).join('');
+  const lookback = data.average_lookback_months || 3;
   _panelSwap(panel, `
     <h3 style="margin-top:0;">Budget — ${data.month}</h3>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
       <input id="finance-budget-month" type="month" value="${data.month}" />
       <button type="button" id="finance-budget-reload" class="btn-secondary">Load month</button>
       <button type="button" id="finance-budget-copy" class="btn-secondary">Copy previous month</button>
+      <button type="button" id="finance-budget-averages" class="btn-secondary">Use ${lookback}-month averages</button>
       <label>Income target $
-        <input id="finance-income-target" type="number" step="1" value="${data.income_target_cents != null ? (data.income_target_cents / 100).toFixed(0) : ''}" style="width:90px;" />
+        <input id="finance-income-target" type="text" inputmode="decimal" value="${data.income_target_cents != null ? (data.income_target_cents / 100).toFixed(0) : ''}" style="width:90px;" />
       </label>
     </div>
-    <p style="opacity:0.8;font-size:0.85rem;">${_escHtml(_classifiedStat(data))} Click a category to open its transactions for this month. Category rows are gross; reimbursements offset below the table. Planned lines are not posted spend.</p>
-    <table style="width:100%;border-collapse:collapse;">
-      <thead><tr><th>Category</th><th style="text-align:right;">Spent</th><th style="text-align:right;">Limit</th><th style="text-align:right;">Remaining</th><th>Set limit</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="5">No spending this month yet.</td></tr>'}</tbody>
+    <p style="opacity:0.8;font-size:0.85rem;">${_escHtml(_classifiedStat(data))} Average column is true spend over ${(data.average_source_months || []).join(', ') || 'prior months'}. Click a category to open its transactions. Planned lines are not posted spend.</p>
+    <div id="finance-upcoming-wrap"></div>
+    <table class="finance-table">
+      <thead><tr><th>Category</th><th style="text-align:right;">Spent</th><th style="text-align:right;">Limit</th><th style="text-align:right;">Remaining</th><th style="text-align:right;">Avg</th><th>Set limit</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6">No spending this month yet.</td></tr>'}</tbody>
     </table>
     <button type="button" id="finance-save-budgets" class="btn-secondary" style="margin-top:12px;">Save limits</button>`);
   _el('finance-save-budgets')?.addEventListener('click', async () => {
     const inputs = panel.querySelectorAll('[data-budget-cat]');
     for (const inp of inputs) {
-      const dollars = parseFloat(inp.value);
-      if (!inp.value || Number.isNaN(dollars)) continue;
+      const dollars = evalFinanceAmount(inp.value);
+      if (dollars == null) continue;
       await _api('/budgets', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           category_id: inp.dataset.budgetCat,
           month: data.month,
-          limit_cents: Math.round(dollars * 100),
+          limit_cents: Math.abs(dollars),
         }),
       });
     }
-    const target = parseFloat(_el('finance-income-target')?.value);
-    if (!Number.isNaN(target)) {
+    const target = evalFinanceAmount(_el('finance-income-target')?.value);
+    if (target != null) {
       await _api('/budgets/income-target', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ month: data.month, income_target_cents: Math.round(target * 100) }),
+        body: JSON.stringify({ month: data.month, income_target_cents: Math.abs(target) }),
       });
     }
     _renderBudget();
@@ -1377,6 +1792,12 @@ async function _renderBudget() {
     });
     _renderBudget();
   });
+  _el('finance-budget-averages')?.addEventListener('click', () => {
+    panel.querySelectorAll('[data-budget-cat]').forEach((inp) => {
+      if (inp.dataset.suggested) inp.value = inp.dataset.suggested;
+    });
+  });
+  await _renderUpcomingAndSubscriptions(_el('finance-upcoming-wrap'));
   await _renderPlannedAndJob(panel, data.month);
 }
 
@@ -1384,6 +1805,47 @@ function _spendTitle(cf) {
   const n = Number(cf.unclassified_count || 0);
   if (n > 0) return `Spend (${n} rows counted by sign)`;
   return 'True spend';
+}
+
+async function _renderUpcomingAndSubscriptions(host) {
+  if (!host) return;
+  try {
+    const data = await _api('/recurring');
+    const series = data.series || [];
+    const today = _todayIso();
+    const horizon = new Date();
+    horizon.setDate(horizon.getDate() + 14);
+    const horizonIso = horizon.toISOString().slice(0, 10);
+    const upcoming = series.filter((s) =>
+      s.status !== 'dismissed' && s.next_due_date && s.next_due_date >= today && s.next_due_date <= horizonIso
+    );
+    const subs = series.filter((s) =>
+      s.status !== 'dismissed' && ['weekly', 'biweekly', 'monthly', 'quarterly', 'annual'].includes(s.cadence)
+    );
+    const subTotal = subs.reduce((sum, s) => sum + (Number(s.monthly_normalized_cents) || 0), 0);
+    host.innerHTML = `
+      <div class="finance-report-cards">
+        <div class="finance-card">
+          <h4>Upcoming (14 days)</h4>
+          <ul class="finance-upcoming-list">
+            ${upcoming.map((s) =>
+              `<li><span>${_escHtml(s.display_payee)} · ${s.next_due_date}</span><span class="finance-money">${_fmtMoney(s.median_amount_cents)}</span></li>`
+            ).join('') || '<li>Nothing due in the next 14 days.</li>'}
+          </ul>
+        </div>
+        <div class="finance-card">
+          <h4>Subscriptions</h4>
+          <div class="finance-card-value">${_moneyHtml(subTotal)} <span style="font-size:0.8rem;font-weight:400;">/ month</span></div>
+          <ul class="finance-upcoming-list">
+            ${subs.slice(0, 8).map((s) =>
+              `<li><span>${_escHtml(s.display_payee)} · ${s.cadence}</span><span class="finance-money">${_fmtMoney(s.monthly_normalized_cents)}</span></li>`
+            ).join('') || '<li>No subscriptions detected yet.</li>'}
+          </ul>
+        </div>
+      </div>`;
+  } catch {
+    host.innerHTML = '';
+  }
 }
 
 function _classifiedStat(cf) {
@@ -1400,18 +1862,19 @@ async function _renderReports() {
   if (!panel) return;
   const seq = _panelLoading(panel);
   const month = new Date().toISOString().slice(0, 7);
-  const [spending, trends, worth, byAcct] = await Promise.all([
+  const [spending, trends, worth, byAcct, cashflow] = await Promise.all([
     _api(`/reports/spending?month=${month}`),
     _api('/reports/trends?months=6'),
     _api('/reports/net-worth'),
     _api(`/reports/spend-by-account?month=${month}`),
+    _api(`/reports/cashflow?month=${month}`),
   ]);
   if (seq !== _renderSeq) return;
   const catRows = (spending.categories || []).map((c) =>
-    `<tr><td>${_escHtml(c.category_name)}</td><td style="text-align:right;">${_fmtMoney(c.gross_spent_cents ?? c.spent_cents)}</td><td style="text-align:right;">${c.transaction_count}</td></tr>`
+    `<tr><td>${_escHtml(c.category_name)}</td><td style="text-align:right;">${_moneyHtml(c.gross_spent_cents ?? c.spent_cents)}</td><td style="text-align:right;">${c.transaction_count}</td></tr>`
   ).join('');
   const trendRows = (trends.trends || []).map((t) =>
-    `<tr><td>${t.month}</td><td style="text-align:right;color:var(--success,#2ecc71);">${_fmtMoney(t.income_cents)}</td><td style="text-align:right;color:var(--danger,#e74c3c);">${_fmtMoney(t.spending_cents)}</td></tr>`
+    `<tr><td>${t.month}</td><td style="text-align:right;color:var(--success,#2ecc71);">${_moneyHtml(t.income_cents)}</td><td style="text-align:right;color:var(--danger,#e74c3c);">${_moneyHtml(t.spending_cents)}</td></tr>`
   ).join('');
   const reimbRows = (spending.reimbursements || []).map((r) => {
     const share = r.billed_cents
@@ -1422,38 +1885,160 @@ async function _renderReports() {
   const funding = spending.unmatched_funding || [];
   const fundingCents = spending.unmatched_funding_cents || 0;
   const unclassifiedNote = spending.unclassified_count
-    ? `<p>Up to ${_fmtMoney(spending.unclassified_outflow_cents)} of this may be transfers or reimbursements.</p>`
+    ? `<p>Up to ${_moneyHtml(spending.unclassified_outflow_cents)} of this may be transfers or reimbursements.</p>`
     : '';
+  const cf = cashflow || spending;
   _panelSwap(panel, `
+    <div class="finance-report-cards">
+      <div class="finance-card">
+        <h4>Net worth</h4>
+        <div class="finance-card-value">${_moneyHtml(worth.net_worth_cents)}</div>
+        <p style="font-size:0.85rem;margin:6px 0 0;">Assets ${_moneyHtml(worth.assets_cents)} · Liabilities ${_moneyHtml(worth.liabilities_cents)}</p>
+      </div>
+      <div class="finance-card">
+        <h4>Cashflow — ${cf.month || month}</h4>
+        <div class="finance-card-value">${_moneyHtml((cf.income_cents || 0) - (cf.personal_spend_cents || cf.net_spend_cents || 0))}</div>
+        <p style="font-size:0.85rem;margin:6px 0 0;">Income ${_moneyHtml(cf.income_cents)} · True spend ${_moneyHtml(cf.personal_spend_cents || cf.net_spend_cents)}</p>
+      </div>
+    </div>
     <h3 style="margin-top:0;">${_spendTitle(spending)} — ${spending.month}</h3>
     <p style="font-size:0.85rem;opacity:0.85;">${_escHtml(_classifiedStat(spending))}</p>
     ${unclassifiedNote}
-    <p>Income ${_fmtMoney(spending.income_cents)} · Gross spend ${_fmtMoney(spending.gross_spend_cents)} · Less reimbursements ${_fmtMoney(spending.reimbursement_in_cents)} · Net ${_fmtMoney(spending.net_spend_cents)}</p>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:12px;">
+    <p>Income ${_moneyHtml(spending.income_cents)} · Gross spend ${_moneyHtml(spending.gross_spend_cents)} · Less reimbursements ${_moneyHtml(spending.reimbursement_in_cents)} · Net ${_moneyHtml(spending.net_spend_cents)}</p>
+    <table class="finance-table" style="margin-bottom:12px;">
       <thead><tr><th>Category</th><th style="text-align:right;">Spent (gross)</th><th style="text-align:right;">Txns</th></tr></thead>
       <tbody>${catRows || '<tr><td colspan="3">No data</td></tr>'}</tbody>
     </table>
-    <p style="font-size:0.85rem;">Less reimbursements received: ${_fmtMoney(spending.reimbursement_in_cents)}</p>
+    <p style="font-size:0.85rem;">Less reimbursements received: ${_moneyHtml(spending.reimbursement_in_cents)}</p>
     <h3>Reimbursements</h3>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+    <table class="finance-table" style="margin-bottom:16px;">
       <thead><tr><th>Date</th><th>Share</th><th>Memo</th></tr></thead>
       <tbody>${reimbRows || '<tr><td colspan="3">None this month</td></tr>'}</tbody>
     </table>
-    <p>${funding.length} funding legs with no matching bill, ${_fmtMoney(fundingCents)} total; merchant spend may be missing.</p>
+    <p>${funding.length} funding legs with no matching bill, ${_moneyHtml(fundingCents)} total; merchant spend may be missing.</p>
     <h3>Spend by account</h3>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+    <table class="finance-table" style="margin-bottom:16px;">
       <thead><tr><th>Account</th><th>Purpose</th><th style="text-align:right;">Spend</th></tr></thead>
       <tbody>${(byAcct.accounts || []).map((a) =>
-        `<tr><td>${_escHtml(a.name)}</td><td>${_escHtml(a.purpose)}</td><td style="text-align:right;">${_fmtMoney(a.personal_spend_cents)}</td></tr>`
+        `<tr><td>${_escHtml(a.name)}</td><td>${_escHtml(a.purpose)}</td><td style="text-align:right;">${_moneyHtml(a.personal_spend_cents)}</td></tr>`
       ).join('') || '<tr><td colspan="3">No data</td></tr>'}</tbody>
     </table>
-    <h3>Net worth</h3>
-    <p>Assets ${_fmtMoney(worth.assets_cents)} · Liabilities ${_fmtMoney(worth.liabilities_cents)} · Net ${_fmtMoney(worth.net_worth_cents)}</p>
     <h3>6-month trends</h3>
-    <table style="width:100%;border-collapse:collapse;">
+    <table class="finance-table">
       <thead><tr><th>Month</th><th style="text-align:right;">Income</th><th style="text-align:right;">Spending</th></tr></thead>
       <tbody>${trendRows}</tbody>
     </table>`);
+}
+
+async function _renderRules() {
+  const panel = _el('finance-panel');
+  if (!panel) return;
+  const seq = _panelLoading(panel);
+  const data = await _api('/rules');
+  if (seq !== _renderSeq) return;
+  const operators = [
+    ['', 'Legacy (regex / substring)'],
+    ['contains', 'Contains'],
+    ['not_contains', 'Does not contain'],
+    ['equals', 'Equals'],
+    ['starts_with', 'Starts with'],
+    ['ends_with', 'Ends with'],
+    ['regex', 'Regex'],
+  ];
+  const fields = [
+    ['payee', 'Payee'],
+    ['memo', 'Memo'],
+    ['both', 'Payee or memo'],
+  ];
+  const rows = (data.rules || []).map((r) => {
+    const cat = _categories.find((c) => c.id === r.category_id);
+    return `
+    <tr>
+      <td>${_escHtml(r.pattern)}</td>
+      <td>${_escHtml(r.operator || 'legacy')}</td>
+      <td>${_escHtml(r.match_field || 'payee')}</td>
+      <td>${_escHtml(cat ? _categoryOptionLabel(cat) : (r.category_id || '—'))}</td>
+      <td>${_escHtml(r.movement_class || '—')}</td>
+      <td>${r.priority}</td>
+      <td><button type="button" class="btn-secondary" data-del-rule="${r.id}">Delete</button></td>
+    </tr>`;
+  }).join('');
+  _panelSwap(panel, `
+    <h3 style="margin-top:0;">Rules</h3>
+    <p style="font-size:0.85rem;opacity:0.8;">First match wins (lower priority number first). Empty operator keeps the old payee matcher. Rules fill empty category or class only; they never auto-post.</p>
+    <table class="finance-table">
+      <thead><tr><th>Pattern</th><th>Operator</th><th>Field</th><th>Category</th><th>Class</th><th>Priority</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="7">No rules yet.</td></tr>'}</tbody>
+    </table>
+    <div style="margin-top:16px;padding:10px;border:1px solid var(--border-color,#333);border-radius:6px;">
+      <div style="font-weight:600;margin-bottom:8px;">New rule</div>
+      <div class="finance-overlay-grid">
+        <label style="grid-column:1 / -1;">Pattern
+          <input id="fin-rule-pattern" type="text" autocomplete="off" placeholder="STARBUCKS" />
+          <div id="fin-rule-payee-suggest" class="finance-overflow-menu" style="position:static;margin-top:4px;"></div>
+        </label>
+        <label>Operator
+          <select id="fin-rule-op">${operators.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+        </label>
+        <label>Match
+          <select id="fin-rule-field">${fields.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+        </label>
+        <label>Category
+          <select id="fin-rule-cat"><option value="">—</option>${_categoryOptionsHtml('')}</select>
+        </label>
+        <label>Class
+          <select id="fin-rule-class">${_classOptionsHtml('')}</select>
+        </label>
+        <label>Priority
+          <input id="fin-rule-priority" type="number" value="100" />
+        </label>
+      </div>
+      <p id="fin-rule-error" style="color:var(--danger,#e74c3c);font-size:0.85rem;"></p>
+      <button type="button" id="fin-rule-save" class="btn-primary" style="margin-top:8px;">Save rule</button>
+    </div>`);
+  panel.querySelectorAll('[data-del-rule]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await _api(`/rules/${btn.dataset.delRule}`, { method: 'DELETE' });
+      _renderRules();
+    });
+  });
+  const patternInput = _el('fin-rule-pattern');
+  patternInput?.addEventListener('input', () => {
+    clearTimeout(_payeeSuggestTimer);
+    _payeeSuggestTimer = setTimeout(() => _suggestPayees(patternInput.value, _el('fin-rule-payee-suggest'), patternInput), 200);
+  });
+  _el('fin-rule-save')?.addEventListener('click', async () => {
+    const err = _el('fin-rule-error');
+    const pattern = (_el('fin-rule-pattern')?.value || '').trim();
+    const categoryId = _el('fin-rule-cat')?.value || null;
+    const movementClass = _el('fin-rule-class')?.value || null;
+    if (!pattern) {
+      if (err) err.textContent = 'Pattern is required.';
+      return;
+    }
+    if (!categoryId && !movementClass) {
+      if (err) err.textContent = 'Pick a category or a class.';
+      return;
+    }
+    try {
+      await _api('/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pattern,
+          category_id: categoryId,
+          movement_class: movementClass,
+          operator: _el('fin-rule-op')?.value || '',
+          match_field: _el('fin-rule-field')?.value || 'payee',
+          priority: Number(_el('fin-rule-priority')?.value || 100),
+          apply_existing: true,
+        }),
+      });
+      _renderRules();
+    } catch (e) {
+      if (err) err.textContent = e.message || String(e);
+    }
+  });
 }
 
 async function _renderPanel() {
@@ -1465,6 +2050,7 @@ async function _renderPanel() {
   else if (_activeTab === 'budget') await _renderBudget();
   else if (_activeTab === 'recurring') await _renderRecurring();
   else if (_activeTab === 'reports') await _renderReports();
+  else if (_activeTab === 'rules') await _renderRules();
 }
 
 async function _renderPlannedAndJob(panel, month) {
@@ -1567,12 +2153,14 @@ async function _renderRecurring() {
       </td>
     </tr>`).join('');
   _panelSwap(panel, `
+    <div id="finance-upcoming-wrap"></div>
     <h3 style="margin-top:0;">Recurring</h3>
     <p style="font-size:0.85rem;opacity:0.8;">Detected means the series was inferred. Automatic is a label, not a bill poster.</p>
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr><th>Payee</th><th>Cadence</th><th style="text-align:right;">Median</th><th>Status</th><th></th><th></th></tr></thead>
       <tbody>${rows || '<tr><td colspan="6">No recurring series yet.</td></tr>'}</tbody>
     </table>`);
+  await _renderUpcomingAndSubscriptions(_el('finance-upcoming-wrap'));
   panel.querySelectorAll('[data-rec-auto]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const spend = CLASS_OPTIONS.find((o) => o.value === 'spend');
