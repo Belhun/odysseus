@@ -163,6 +163,8 @@ def _migrate_trustworthy_books_schema(engine) -> None:
         _ensure_column(conn, "finance_recurring_series", "category_id", "TEXT")
         _ensure_column(conn, "finance_recurring_series", "movement_class", "TEXT")
         _ensure_column(conn, "finance_categorization_rules", "movement_class", "TEXT")
+        _ensure_column(conn, "finance_categorization_rules", "match_field", "TEXT NOT NULL DEFAULT 'payee'")
+        _ensure_column(conn, "finance_categorization_rules", "operator", "TEXT NOT NULL DEFAULT ''")
 
         if _table_exists(conn, "finance_transactions"):
             conn.execute(
