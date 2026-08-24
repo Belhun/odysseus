@@ -623,6 +623,6 @@ def test_token_form_markup_exists_in_settings():
     ):
         assert f'id="{mid}"' in html
     assert 'value="phone_finance"' in html
-    assert 'data-settings-tab="tokens"' in html
+    assert 'data-settings-tab="phone-app-token"' in html
     assert 'id="adm-tokenPhoneBtn"' in html
-    assert 'id="user-bar-tokens"' in html
+    assert 'id="user-bar-phone-token"' in html
