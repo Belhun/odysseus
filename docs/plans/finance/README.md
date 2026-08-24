@@ -7,6 +7,12 @@ Research: [`docs/research/finance/`](../../research/finance/)
 
 **Product direction (2026-08-15):** trustworthy books first.
 
+**Web UX steal spec (requirements, not implementation):** [finance-steal/](finance-steal/) — Cashew / MyFin / Ocular / DumbBudget ideas into the Odysseus `/finance` modal. Keep Odysseus as the books.
+
+**Web steal v1 implementation (branch `feat/finance-web-steal-v1` from `belhun/playground`):**
+
+- [2026-08-21-001 webapp steal](2026-08-21-001-feat-webapp-steal-implementation-plan.md) — clipboard import, operator rules, split UI, upcoming/subscriptions, copy-month averages, net-worth card, density, privacy blur, inline math
+
 **Unified implementation (branch `feat/finance-trustworthy-books`):**
 
 - [2026-08-15-002 trustworthy books](2026-08-15-002-feat-trustworthy-books-implementation-plan.md) — how to build pins, CRUD, movement class, import mapper, true-spend budget, recurring, planned, and job overlay together

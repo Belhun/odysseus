@@ -20,6 +20,7 @@ Optional Banking & Budgeting plugin for Odysseus. Manual CSV/OFX/QFX import; no 
 | Feature inventory | [`docs/research/finance/01-feature-inventory.md`](../research/finance/01-feature-inventory.md) |
 | Per-feature cards | [`docs/research/finance/features/`](../research/finance/features/) |
 | Implementation plans | [`docs/plans/finance/`](../plans/finance/) |
+| Web feature-steal spec | [`docs/plans/finance/finance-steal/`](../plans/finance/finance-steal/) |
 
 ## Web v1 (paste, rules, splits, reports)
 
