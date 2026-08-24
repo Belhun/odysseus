@@ -43,6 +43,8 @@ class EmptyFinanceHttp extends http.BaseClient {
       body = {'income_cents': 0, 'net_spend_cents': 0, 'personal_spend_cents': 0};
     } else if (path.contains('/spend-by-account')) {
       body = {'accounts': []};
+    } else if (path.contains('/goals')) {
+      body = {'goals': []};
     } else if (path.contains('/ping')) {
       body = {'ok': true};
     }
@@ -64,8 +66,9 @@ void main() {
     final controller = AppController(prefs: prefs);
     await tester.pumpWidget(OdysseusPhoneApp(controller: controller));
     expect(find.text('Odysseus'), findsWidgets);
+    expect(find.text('Phone client'), findsOneWidget);
     expect(find.textContaining('Tailscale'), findsWidgets);
-    expect(find.text('Connect'), findsOneWidget);
+    expect(find.text('Home'), findsNothing);
     expect(find.text('Home'), findsNothing);
   });
 
@@ -90,13 +93,17 @@ void main() {
     expect(find.byType(FloatingActionButton), findsOneWidget);
   });
 
-  testWidgets('More lists labeled placeholders', (tester) async {
+  testWidgets('More opens Goals instead of a placeholder', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
-    final controller = AppController(prefs: prefs, httpClient: EmptyFinanceHttp());
-    controller.finance = FinanceClient(
-      OdyHttp(baseUrl: 'http://test:7000', token: 'ody_test', client: EmptyFinanceHttp()),
+    final httpLayer = OdyHttp(
+      baseUrl: 'http://test:7000',
+      token: 'ody_test',
+      client: EmptyFinanceHttp(),
     );
+    final controller = AppController(prefs: prefs, httpClient: EmptyFinanceHttp());
+    controller.httpLayer = httpLayer;
+    controller.finance = FinanceClient(httpLayer);
     await tester.pumpWidget(OdysseusPhoneApp(controller: controller));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -106,10 +113,12 @@ void main() {
     await tester.scrollUntilVisible(find.text('Investing'), 300);
     expect(find.text('Goals'), findsOneWidget);
     expect(find.text('Investing'), findsOneWidget);
+    expect(find.text('Chat'), findsOneWidget);
     expect(find.text('Budget (test: month-close)'), findsOneWidget);
     await tester.tap(find.text('Goals'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.textContaining('placeholder'), findsWidgets);
+    expect(find.text('No goals yet'), findsOneWidget);
+    expect(find.textContaining('placeholder'), findsNothing);
   });
 }

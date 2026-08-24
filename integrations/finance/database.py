@@ -221,10 +221,17 @@ def _merge_default_config_keys() -> None:
 
 def init_finance_db() -> None:
     """Create plugin tables if missing."""
+    import integrations.finance.models_goals  # noqa: F401
+    import integrations.finance.models_investing  # noqa: F401
+    from integrations.finance.services.goals import ensure_goals_schema
+    from integrations.finance.services.investing import ensure_invest_schema
+
     engine = get_engine()
     FinanceBase.metadata.create_all(bind=engine)
     _migrate_unique_dedup_index(engine)
     _migrate_trustworthy_books_schema(engine)
+    ensure_goals_schema(engine)
+    ensure_invest_schema(engine)
     _merge_default_config_keys()
 
 

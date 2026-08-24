@@ -298,6 +298,18 @@ def _require_auth(request: Request) -> str:
     unconfigured mode are only honoured if they're coming from
     localhost; everyone else gets 401.
     """
+    if getattr(request.state, "api_token", False):
+        scopes = getattr(request.state, "api_token_scopes", None) or []
+        if isinstance(scopes, str):
+            scopes = [s.strip() for s in scopes.split(",")]
+        scope_set = {str(s).strip() for s in scopes if str(s).strip()}
+        if not scope_set.intersection({"email:read", "email:draft", "email:send"}):
+            raise HTTPException(403, "API token requires email:read scope")
+        from src.auth_helpers import effective_user
+        owner = effective_user(request)
+        if not owner:
+            raise HTTPException(401, "Not authenticated")
+        return owner
     u = get_current_user(request)
     if u:
         return u

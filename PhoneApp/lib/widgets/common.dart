@@ -23,10 +23,17 @@ Color parseHexColor(String? hex, [Color fallback = OdyColors.accent]) {
 }
 
 class OdyCard extends StatelessWidget {
-  const OdyCard({super.key, required this.child, this.onTap, this.padding});
+  const OdyCard({
+    super.key,
+    required this.child,
+    this.onTap,
+    this.onLongPress,
+    this.padding,
+  });
 
   final Widget child;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final EdgeInsetsGeometry? padding;
 
   @override
@@ -35,11 +42,12 @@ class OdyCard extends StatelessWidget {
       padding: padding ?? const EdgeInsets.all(14),
       child: child,
     );
+    final interactive = onTap != null || onLongPress != null;
     return Card(
       clipBehavior: Clip.antiAlias,
-      child: onTap == null
-          ? body
-          : InkWell(onTap: onTap, child: body),
+      child: interactive
+          ? InkWell(onTap: onTap, onLongPress: onLongPress, child: body)
+          : body,
     );
   }
 }

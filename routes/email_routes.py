@@ -40,7 +40,7 @@ from src.llm_core import llm_call_async
 from src.upload_limits import read_upload_limited, EMAIL_COMPOSE_UPLOAD_MAX_BYTES
 
 from routes.email_helpers import (
-    _strip_think, _extract_reply, _apply_email_style_mechanics, require_owner, require_user, _assert_owns_account,
+    _strip_think, _extract_reply, _apply_email_style_mechanics, _assert_owns_account,
     _q, _attach_compose_uploads, _cleanup_compose_uploads,
     _load_settings, _save_settings, _get_email_config,
     _send_smtp_message, _smtp_security_mode,
@@ -58,6 +58,7 @@ from routes.email_helpers import (
     ATTACHMENTS_DIR, COMPOSE_UPLOADS_DIR, SCHEDULED_DB,
     attachment_extract_dir, _email_cache_owner_clause,
 )
+from routes.email_mobile_routes import require_owner, require_user
 from routes.email_pollers import _start_poller
 
 logger = logging.getLogger(__name__)

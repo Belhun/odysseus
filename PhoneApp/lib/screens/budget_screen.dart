@@ -4,6 +4,7 @@ import '../api/models.dart';
 import '../state/app_controller.dart';
 import '../theme/ody_theme.dart';
 import '../widgets/common.dart';
+import 'transactions_screen.dart';
 
 class BudgetScreen extends StatefulWidget {
   const BudgetScreen({super.key, required this.controller, this.monthClose = false});
@@ -51,6 +52,21 @@ class _BudgetScreenState extends State<BudgetScreen> {
         _loading = false;
       });
     }
+  }
+
+  void _openCategoryTransactions(BudgetCategoryRow row) {
+    final uncategorized = row.categoryId == null || row.categoryId!.isEmpty;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TransactionsScreen(
+          controller: widget.controller,
+          initialCategoryId: uncategorized ? null : row.categoryId,
+          initialCategoryName: row.categoryName,
+          initialMonth: _month,
+          uncategorized: uncategorized,
+        ),
+      ),
+    );
   }
 
   Future<void> _editLimit(BudgetCategoryRow row) async {
@@ -226,6 +242,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
                             padding: const EdgeInsets.only(bottom: 8),
                             child: OdyCard(
                               onTap: () => _editLimit(row),
+                              onLongPress: () => _openCategoryTransactions(row),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [

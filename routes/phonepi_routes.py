@@ -15,6 +15,7 @@ from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from core.middleware import require_admin
+from src.auth_helpers import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,69 @@ async def phonepi_gmessages_serve(request: Request):
     from src.gmessages_bridge import start_serve
 
     return JSONResponse(start_serve())
+
+
+@router.post("/api/phonepi/phoneapp-setup")
+async def phoneapp_setup(request: Request):
+    """Mint a phone_finance token and return an odyphone:// QR (token shown once)."""
+    require_admin(request)
+    import secrets
+    import uuid
+
+    import bcrypt
+
+    from core.database import ApiToken, get_db_session
+    from src.gmessages_bridge import qr_png_data_uri
+    from src.phonepi import phoneapp_public_url, phoneapp_setup_deeplink
+
+    user = get_current_user(request) or ""
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    name = str(body.get("name") or "PhoneApp QR").strip()[:100]
+    raw = "ody_" + secrets.token_urlsafe(32)
+    token_hash = bcrypt.hashpw(raw.encode(), bcrypt.gensalt()).decode()
+    token_id = str(uuid.uuid4())[:8]
+    scopes = "finance:read,finance:write"
+    with get_db_session() as db:
+        db.add(
+            ApiToken(
+                id=token_id,
+                owner=user,
+                name=name,
+                token_hash=token_hash,
+                token_prefix=raw[:8],
+                scopes=scopes,
+                is_active=True,
+            )
+        )
+    try:
+        invalidator = getattr(request.app.state, "invalidate_token_cache", None)
+        if invalidator:
+            invalidator()
+    except Exception:
+        pass
+    url = phoneapp_public_url()
+    deeplink = phoneapp_setup_deeplink(url=url, token=raw, user=user)
+    return JSONResponse(
+        {
+            "ok": True,
+            "id": token_id,
+            "name": name,
+            "owner": user,
+            "url": url,
+            "user": user,
+            "token": raw,
+            "token_prefix": raw[:8],
+            "scopes": scopes.split(","),
+            "deeplink": deeplink,
+            "qr": qr_png_data_uri(deeplink),
+        }
+    )
 
 
 @router.post("/api/phonepi/restart")

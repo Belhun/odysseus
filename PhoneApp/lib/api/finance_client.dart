@@ -3,6 +3,7 @@ import 'package:http_parser/http_parser.dart';
 
 import 'models.dart';
 import 'ody_http.dart';
+import 'recurring_status.dart';
 
 class FinanceClient {
   FinanceClient(this.httpClient);
@@ -151,9 +152,11 @@ class FinanceClient {
     });
   }
 
-  Future<List<RecurringSeries>> recurring() async {
+  Future<List<RecurringSeries>> recurring({bool includeDismissed = false}) async {
     final data = await httpClient.get('/api/finance/recurring');
-    return _list(data, 'series', RecurringSeries.fromJson);
+    final series = _list(data, 'series', RecurringSeries.fromJson);
+    if (includeDismissed) return series;
+    return visibleRecurringSeries(series);
   }
 
   Future<void> patchRecurring(String id, Map<String, dynamic> body) async {

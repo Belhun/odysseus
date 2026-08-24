@@ -71,6 +71,20 @@ def _require_user(request: Request) -> str:
     disabled or unconfigured, and only raises 401 when auth is configured but
     the caller is unauthenticated. Falls back to FALLBACK_OWNER for calendar
     writes so data isn't stored under an empty owner in single-user mode."""
+    if getattr(request.state, "api_token", False):
+        scopes = getattr(request.state, "api_token_scopes", None) or []
+        if isinstance(scopes, str):
+            scopes = [s.strip() for s in scopes.split(",")]
+        scope_set = {str(s).strip() for s in scopes if str(s).strip()}
+        write = request.method not in ("GET", "HEAD", "OPTIONS")
+        if write and "calendar:write" not in scope_set:
+            raise HTTPException(403, "API token requires calendar:write scope")
+        if not write and "calendar:read" not in scope_set and "calendar:write" not in scope_set:
+            raise HTTPException(403, "API token requires calendar:read scope")
+        owner = getattr(request.state, "api_token_owner", None)
+        if not owner:
+            raise HTTPException(401, "Not authenticated")
+        return owner
     user = require_user(request)
     if user:
         return user

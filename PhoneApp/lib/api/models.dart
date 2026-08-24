@@ -224,6 +224,8 @@ class RecurringSeries {
     required this.status,
     this.nextDueDate,
     this.categoryId,
+    this.movementClass,
+    this.skipReason,
   });
 
   final String id;
@@ -234,6 +236,10 @@ class RecurringSeries {
   final String status;
   final String? nextDueDate;
   final String? categoryId;
+  final String? movementClass;
+  final String? skipReason;
+
+  bool get canMarkAutomatic => skipReason == null || skipReason!.isEmpty;
 
   factory RecurringSeries.fromJson(Map<String, dynamic> json) {
     return RecurringSeries(
@@ -245,6 +251,8 @@ class RecurringSeries {
       status: asString(json['status'], 'active'),
       nextDueDate: json['next_due_date']?.toString(),
       categoryId: json['category_id']?.toString(),
+      movementClass: json['movement_class']?.toString(),
+      skipReason: json['skip_reason']?.toString(),
     );
   }
 }
@@ -382,6 +390,39 @@ class CategorizationRule {
       movementClass: json['movement_class']?.toString(),
     );
   }
+}
+
+/// Values the phone/web class picker shows. Stored `pass_through` maps to Transfer.
+const kUiMovementClasses = <String?>[
+  null,
+  'spend',
+  'income',
+  'transfer',
+  'reimbursement',
+];
+
+const kTxStatuses = ['cleared', 'pending', 'reconciled', 'void'];
+
+/// Web `_uiClassValue`: processor legs are stored as pass_through, shown as Transfer.
+String? uiMovementClass(String? movementClass) {
+  if (movementClass == 'pass_through') return 'transfer';
+  return movementClass;
+}
+
+/// Keep pass_through on save when the user leaves Transfer selected.
+String? storedMovementClass(String? uiClass, {String? original}) {
+  if (uiClass == 'transfer' && original == 'pass_through') {
+    return 'pass_through';
+  }
+  return uiClass;
+}
+
+/// DropdownButton asserts the bound value appears exactly once in [items].
+T? dropdownValueIn<T>(T? value, Iterable<T?> itemValues) {
+  for (final item in itemValues) {
+    if (item == value) return value;
+  }
+  return null;
 }
 
 String currentMonthKey([DateTime? now]) {

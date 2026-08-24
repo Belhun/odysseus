@@ -710,6 +710,8 @@ app.include_router(setup_chat_routes(
     webhook_manager=webhook_manager,
     skills_manager=skills_manager,
 ))
+from routes.chat_mobile_routes import setup_chat_mobile_routes
+app.include_router(setup_chat_mobile_routes(session_manager))
 
 # Research (background deep-research tasks)
 from routes.research.research_routes import setup_research_routes

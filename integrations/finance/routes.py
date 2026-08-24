@@ -1571,4 +1571,11 @@ def setup_finance_routes() -> APIRouter:
         finally:
             db.close()
 
+    from integrations.finance.routes_goals import mount_goals
+    from integrations.finance.routes_investing import mount_investing
+    from integrations.finance.routes_sankey import mount_sankey
+
+    mount_goals(router)
+    mount_investing(router)
+    mount_sankey(router)
     return router

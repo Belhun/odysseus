@@ -20,7 +20,13 @@ import threading
 import time
 from pathlib import Path
 
-from src.phonepi import phonepi_connect_hint, phonepi_enabled
+from src.phonepi import (
+    phoneapp_public_url,
+    phoneapp_setup_deeplink,
+    phonepi_connect_hint,
+    phonepi_enabled,
+    phonepi_setup_deeplink,
+)
 from src.runtime_paths import get_app_root
 
 logger = logging.getLogger(__name__)
@@ -295,11 +301,18 @@ def phonepi_status() -> dict:
     if pair.get("paired") and not pair.get("pairing_live") and not bridge_running():
         start_serve()
         pair = read_pair_status()
+    deeplink = phonepi_setup_deeplink(hint)
+    phone_url = phoneapp_public_url(hint)
     return {
         "phonepi_enabled": phonepi_enabled(),
         "gmessages_binary": bool(gmessages_bin()),
         "connect": hint,
-        "connect_qr": qr_png_data_uri(hint["url"]),
+        "connect_deeplink": deeplink,
+        "connect_qr": qr_png_data_uri(deeplink),
+        "phoneapp": {
+            "url": phone_url,
+            "deeplink_template": phoneapp_setup_deeplink(url=phone_url, token="TOKEN", user="USER"),
+        },
         "gmessages": {
             "binary": bool(gmessages_bin()),
             "paired": is_paired(),

@@ -258,3 +258,7 @@ class FinanceJobScenario(TimestampMixin, FinanceBase):
     owner = Column(String, nullable=False, unique=True, index=True)
     take_home_cents = Column(Integer, nullable=False, default=0)
     label = Column(String, nullable=False, default="Hypothetical job")
+
+
+from integrations.finance import models_goals as _finance_models_goals  # noqa: E402,F401
+from integrations.finance import models_investing as _finance_models_investing  # noqa: E402,F401

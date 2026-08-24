@@ -111,6 +111,8 @@ docker-compose.override.yml
 # Flutter PhoneApp
 PhoneApp/.ody_bootstrap.json
 PhoneApp/.ody_dart_defines.json
+.phonepi_bootstrap.json
+.phonepi_db/
 PhoneApp/.dart_tool/
 PhoneApp/.flutter-plugins
 PhoneApp/.flutter-plugins-dependencies

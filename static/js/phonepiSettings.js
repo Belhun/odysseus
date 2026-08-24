@@ -61,9 +61,15 @@ function renderStatus(data) {
   const port = data.connect && data.connect.port;
   const hostInput = el('phonepi-host');
   const portInput = el('phonepi-port');
+  const linkInput = el('phonepi-deeplink');
   if (hostInput) hostInput.value = host || '';
   if (portInput) portInput.value = port != null ? String(port) : '';
+  if (linkInput) linkInput.value = data.connect_deeplink || '';
   showQr('phonepi-connect-qr-wrap', 'phonepi-connect-qr', data.connect_qr);
+  const phoneappUrl = el('phoneapp-setup-url');
+  if (phoneappUrl && data.phoneapp && data.phoneapp.url) {
+    phoneappUrl.value = data.phoneapp.url;
+  }
 
   const gm = data.gmessages || {};
   const pill = el('gmessages-status-pill');
@@ -130,6 +136,39 @@ export function initPhonePanel() {
     const port = el('phonepi-port')?.value || '';
     await copyText(`${host}\n${port}`);
     setMsg('phonepi-msg', 'Host and port copied.', true);
+  });
+  el('phonepi-copy-deeplink')?.addEventListener('click', async () => {
+    await copyText(el('phonepi-deeplink')?.value || '');
+    setMsg('phonepi-msg', 'PhonePi setup link copied.', true);
+  });
+  let lastPhoneappDeeplink = '';
+  el('phoneapp-mint-qr-btn')?.addEventListener('click', async () => {
+    setMsg('phoneapp-setup-msg', 'Minting PhoneApp token...');
+    try {
+      const res = await fetch(API + '/phoneapp-setup', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'PhoneApp QR' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+      lastPhoneappDeeplink = data.deeplink || '';
+      showQr('phoneapp-setup-qr-wrap', 'phoneapp-setup-qr', data.qr);
+      const prefix = el('phoneapp-setup-prefix');
+      if (prefix) prefix.textContent = data.token_prefix
+        ? `Token prefix ${data.token_prefix}... Scan the QR in PhoneApp. Full token is in the QR, not shown here.`
+        : '';
+      const copyBtn = el('phoneapp-copy-deeplink');
+      if (copyBtn) copyBtn.style.display = lastPhoneappDeeplink ? '' : 'none';
+      setMsg('phoneapp-setup-msg', 'QR ready. Scan with the Pixel camera or PhoneApp.', true);
+    } catch (err) {
+      setMsg('phoneapp-setup-msg', err.message || String(err), false);
+    }
+  });
+  el('phoneapp-copy-deeplink')?.addEventListener('click', async () => {
+    await copyText(lastPhoneappDeeplink);
+    setMsg('phoneapp-setup-msg', 'Setup link copied. It includes the token; treat it as a secret.', true);
   });
   el('phonepi-restart-btn')?.addEventListener('click', async () => {
     setMsg('phonepi-msg', 'Restarting PhonePi...');

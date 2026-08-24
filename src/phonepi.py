@@ -9,12 +9,14 @@ wss://dell-mini-pc.tailcbcc46.ts.net/phonepi for the Android app.
 from __future__ import annotations
 
 import os
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 PHONEPI_WS_PATH = "/phonepi"
 PHONEPI_UPSTREAM_DEFAULT = "ws://127.0.0.1:11041"
 PHONEPI_SERVER_ID = "phonepi"
 PHONEPI_DISPLAY_NAME = "Built-in: PhonePi"
+PHONEPI_SETUP_SCHEME = "phonepi"
+PHONEAPP_SETUP_SCHEME = "odyphone"
 
 
 def env_flag(name: str, default: str = "") -> bool:
@@ -69,3 +71,36 @@ def phonepi_connect_hint(public_origin: str | None = None) -> dict:
         "scheme": scheme,
         "url": f"{scheme}://{host}:{port}{PHONEPI_WS_PATH}",
     }
+
+
+def phonepi_setup_deeplink(hint: dict | None = None) -> str:
+    """Custom-scheme link the PhonePi app's intent-filter opens.
+
+    Pixel camera / Google Lens open phonepi:// in PhonePi. A wss:// QR opens Chrome.
+    """
+    hint = hint or phonepi_connect_hint()
+    query = urlencode({"host": hint["host"], "port": str(hint["port"])})
+    return f"{PHONEPI_SETUP_SCHEME}://setup?{query}"
+
+
+def phoneapp_public_url(hint: dict | None = None) -> str:
+    hint = hint or phonepi_connect_hint()
+    host = str(hint["host"])
+    port = int(hint["port"])
+    https = hint.get("scheme") == "wss" or host.endswith(".ts.net")
+    scheme = "https" if https else "http"
+    if host in ("127.0.0.1", "localhost") and port == 11041:
+        return "http://127.0.0.1:7000"
+    if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
+        return f"{scheme}://{host}"
+    return f"{scheme}://{host}:{port}"
+
+
+def phoneapp_setup_deeplink(*, url: str, token: str = "", user: str = "") -> str:
+    """odyphone://setup?... — PhoneApp intent-filter. Token stays in the QR payload."""
+    params: dict[str, str] = {"url": url.rstrip("/")}
+    if token:
+        params["token"] = token
+    if user:
+        params["user"] = user
+    return f"{PHONEAPP_SETUP_SCHEME}://setup?{urlencode(params)}"

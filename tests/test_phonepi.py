@@ -1,6 +1,15 @@
 """PhonePi optional builtin: connect hint, enable flag, WS proxy, Messages QR files."""
 
-from src.phonepi import phonepi_connect_hint, phonepi_enabled
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from src.phonepi import (
+    phoneapp_public_url,
+    phoneapp_setup_deeplink,
+    phonepi_connect_hint,
+    phonepi_enabled,
+    phonepi_setup_deeplink,
+)
 
 
 def test_phonepi_disabled_by_default(monkeypatch):
@@ -39,6 +48,48 @@ def test_connect_hint_loopback_http():
     assert hint["port"] == 7000
     assert hint["scheme"] == "ws"
     assert hint["url"] == "ws://127.0.0.1:7000/phonepi"
+
+
+def test_phonepi_setup_deeplink_uses_custom_scheme():
+    hint = phonepi_connect_hint("https://dell-mini-pc.tailcbcc46.ts.net")
+    link = phonepi_setup_deeplink(hint)
+    parsed = urlparse(link)
+    assert parsed.scheme == "phonepi"
+    assert parsed.netloc == "setup"
+    qs = parse_qs(parsed.query)
+    assert qs["host"] == ["dell-mini-pc.tailcbcc46.ts.net"]
+    assert qs["port"] == ["443"]
+    assert not link.startswith("wss://")
+
+
+def test_phoneapp_setup_deeplink_carries_url_token_user():
+    link = phoneapp_setup_deeplink(
+        url="https://dell-mini-pc.tailcbcc46.ts.net",
+        token="ody_test",
+        user="belhun",
+    )
+    parsed = urlparse(link)
+    assert parsed.scheme == "odyphone"
+    assert parsed.netloc == "setup"
+    qs = parse_qs(parsed.query)
+    assert qs["url"] == ["https://dell-mini-pc.tailcbcc46.ts.net"]
+    assert qs["token"] == ["ody_test"]
+    assert qs["user"] == ["belhun"]
+
+
+def test_phoneapp_public_url_strips_https_443():
+    hint = phonepi_connect_hint("https://dell-mini-pc.tailcbcc46.ts.net")
+    assert phoneapp_public_url(hint) == "https://dell-mini-pc.tailcbcc46.ts.net"
+
+
+def test_phone_settings_markup_has_both_setup_qrs():
+    html = Path("static/index.html").read_text(encoding="utf-8")
+    assert 'id="phonepi-connect-qr"' in html
+    assert 'id="phonepi-deeplink"' in html
+    assert 'id="phoneapp-setup-qr"' in html
+    assert 'id="phoneapp-mint-qr-btn"' in html
+    js = Path("static/js/phonepiSettings.js").read_text(encoding="utf-8")
+    assert "/phoneapp-setup" in js
 
 
 def test_phonepi_stdio_skipped_when_disabled(monkeypatch):

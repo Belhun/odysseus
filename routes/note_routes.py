@@ -18,6 +18,38 @@ from sqlalchemy.orm.attributes import flag_modified
 
 logger = logging.getLogger(__name__)
 
+_NOTES_READ_SCOPES = frozenset({"notes:read", "notes:write"})
+
+
+def _token_scopes(request: Request) -> set[str]:
+    scopes = getattr(request.state, "api_token_scopes", None) or []
+    if isinstance(scopes, str):
+        scopes = [s.strip() for s in scopes.split(",")]
+    return {str(s).strip() for s in scopes if str(s).strip()}
+
+
+def notes_owner(request: Request) -> Optional[str]:
+    """Owner for /api/notes.
+
+    Cookie sessions use require_user (fail closed for ody_ tokens). Bearer
+    ody_ tokens need notes:read (GET/HEAD) or notes:write (mutating methods)
+    and resolve to api_token_owner so PhoneApp sees the same Note rows as
+    the web UI.
+    """
+    if getattr(request.state, "api_token", False):
+        scopes = _token_scopes(request)
+        write = request.method not in ("GET", "HEAD", "OPTIONS")
+        if write:
+            if "notes:write" not in scopes:
+                raise HTTPException(403, "API token requires notes:write scope")
+        elif not scopes.intersection(_NOTES_READ_SCOPES):
+            raise HTTPException(403, "API token requires notes:read scope")
+        owner = getattr(request.state, "api_token_owner", None) or None
+        if not owner:
+            raise HTTPException(401, "Not authenticated")
+        return owner
+    return require_user(request) or None
+
 
 # ---------------------------------------------------------------------------
 # Request models
@@ -586,16 +618,10 @@ def setup_note_routes(task_scheduler=None, upload_handler=None):
     router = APIRouter(prefix="/api/notes", tags=["notes"])
 
     def _owner(request: Request) -> Optional[str]:
-        # require_user, not bare get_current_user: a request that reaches
-        # these owner-scoped routes with NO identity (auth-middleware
-        # regression, SSRF from a sibling service) must fail closed (401)
-        # when auth is configured — not be treated as the single-user mode
-        # and handed blanket access to every account's notes. The documented
-        # anonymous modes (AUTH_ENABLED=false, LOCALHOST_BYPASS on loopback,
-        # unconfigured first-run) still resolve to None, the single-user
-        # path. fire_reminder below already gated this way; the CRUD routes
-        # did not.
-        return require_user(request) or None
+        # Cookie sessions still fail closed via require_user. Bearer ody_
+        # tokens with notes:read / notes:write resolve to api_token_owner
+        # (same Note rows as the desktop user). Unscoped tokens stay 403.
+        return notes_owner(request)
 
     def _reserve_note_uploads(owner: Optional[str], *values) -> None:
         missing_id = reserve_upload_references(upload_handler, owner, *values)

@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 
 import '../state/app_controller.dart';
-import '../theme/ody_theme.dart';
-import '../widgets/common.dart';
 import 'accounts_screen.dart';
 import 'budget_screen.dart';
+import 'calendar_screen.dart';
+import 'chat_list_screen.dart';
+import 'email_list_screen.dart';
+import 'goals_screen.dart';
 import 'import_screen.dart';
+import 'investing_screen.dart';
+import 'notes_list_screen.dart';
 import 'reports_screen.dart';
 import 'rules_screen.dart';
+import 'sankey_screen.dart';
 
 class MoreScreen extends StatelessWidget {
   const MoreScreen({super.key, required this.controller});
@@ -39,36 +44,31 @@ class MoreScreen extends StatelessWidget {
           ),
           const Divider(),
           const ListTile(
-            title: Text('No API yet'),
-            subtitle: Text('Labeled placeholders. Not a second database.'),
+            title: Text('Finance extras'),
+            subtitle: Text('Same books as the web finance modal'),
           ),
-          _placeholder(
+          _tile(context, Icons.flag, 'Goals', () => GoalsScreen(controller: controller)),
+          _tile(context, Icons.show_chart, 'Investing',
+              () => InvestingScreen(controller: controller)),
+          _tile(
             context,
-            'Goals',
-            'Odysseus has no goals table. Use Budget limits for now.',
-            'Budget',
-          ),
-          _placeholder(
-            context,
-            'Investing',
-            'No investing endpoints. Do not block shipping on this.',
-            null,
-          ),
-          _placeholder(
-            context,
+            Icons.account_tree,
             'Sankey / cashflow map',
-            'Ocular-style Sankey is not on the finance API. Reports → Cashflow is the closest live view.',
-            'Reports',
+            () => SankeyScreen(controller: controller),
           ),
           const Divider(),
           const ListTile(
-            title: Text('Later Odysseus modules'),
-            subtitle: Text('Shell only. Chat, email, calendar, notes come after finance v1.'),
+            title: Text('Companion'),
+            subtitle: Text('Same records as Odysseus web'),
           ),
-          _placeholder(context, 'Chat', 'Not in v1.', null),
-          _placeholder(context, 'Email', 'Not in v1.', null),
-          _placeholder(context, 'Calendar', 'Not in v1.', null),
-          _placeholder(context, 'Notes', 'Not in v1.', null),
+          _tile(context, Icons.chat_bubble_outline, 'Chat',
+              () => ChatListScreen(controller: controller)),
+          _tile(context, Icons.mail_outline, 'Email',
+              () => EmailListScreen(controller: controller)),
+          _tile(context, Icons.calendar_month, 'Calendar',
+              () => CalendarScreen(controller: controller)),
+          _tile(context, Icons.sticky_note_2_outlined, 'Notes',
+              () => NotesListScreen(controller: controller)),
           const Divider(),
           ListTile(
             leading: const Icon(Icons.settings),
@@ -96,23 +96,6 @@ class MoreScreen extends StatelessWidget {
     );
   }
 
-  ListTile _placeholder(
-    BuildContext context,
-    String title,
-    String reason,
-    String? closest,
-  ) {
-    return ListTile(
-      leading: const Icon(Icons.hourglass_empty, color: OdyColors.muted),
-      title: Text(title),
-      subtitle: const Text('Placeholder'),
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => PlaceholderScreen(title: title, reason: reason, closest: closest),
-        ),
-      ),
-    );
-  }
 }
 
 class SettingsScreen extends StatelessWidget {
@@ -186,12 +169,32 @@ class SettingsScreen extends StatelessWidget {
               const SizedBox(height: 12),
               Padding(
                 padding: const EdgeInsets.all(16),
-                child: OutlinedButton(
-                  onPressed: () async {
-                    await controller.disconnect();
-                    if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
-                  },
-                  child: const Text('Disconnect'),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    OutlinedButton(
+                      onPressed: () async {
+                        await controller.disconnect();
+                        if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+                      },
+                      child: const Text('Sign out'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () async {
+                        await controller.clearSavedToken();
+                        if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+                      },
+                      child: const Text('Clear saved token'),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Sign out keeps the last ody_ token for one-tap reconnect. Clear saved token forgets it.',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],

@@ -3,6 +3,9 @@
  */
 
 import { makeWindowDraggable } from '/static/js/windowDrag.js';
+import { renderFinanceGoals } from './goals.js';
+import { renderFinanceInvesting } from './investing.js';
+import { renderFinanceSankey } from './sankey.js';
 // bindMenuDismiss reserved for future esc-menu wiring
 
 const API = `${window.location.origin}/api/finance`;
@@ -15,6 +18,8 @@ const FINANCE_TABS = [
   { id: 'reports', label: 'Reports', overflow: false },
   { id: 'recurring', label: 'Recurring', overflow: true },
   { id: 'rules', label: 'Rules', overflow: true },
+  { id: 'goals', label: 'Goals', overflow: true },
+  { id: 'investing', label: 'Investing', overflow: true },
 ];
 let _open = false;
 
@@ -1927,7 +1932,19 @@ async function _renderReports() {
     <table class="finance-table">
       <thead><tr><th>Month</th><th style="text-align:right;">Income</th><th style="text-align:right;">Spending</th></tr></thead>
       <tbody>${trendRows}</tbody>
-    </table>`);
+    </table>
+    <div id="finance-sankey-mount"></div>`);
+  const mount = _el('finance-sankey-mount');
+  if (mount) {
+    await renderFinanceSankey({
+      panel,
+      mount,
+      api: _api,
+      moneyHtml: _moneyHtml,
+      escHtml: _escHtml,
+      month,
+    });
+  }
 }
 
 async function _renderRules() {
@@ -2051,6 +2068,22 @@ async function _renderPanel() {
   else if (_activeTab === 'recurring') await _renderRecurring();
   else if (_activeTab === 'reports') await _renderReports();
   else if (_activeTab === 'rules') await _renderRules();
+  else if (_activeTab === 'goals') {
+    await renderFinanceGoals({
+      panel: _el('finance-panel'),
+      api: _api,
+      moneyHtml: _moneyHtml,
+      escHtml: _escHtml,
+    });
+  }
+  else if (_activeTab === 'investing') {
+    await renderFinanceInvesting({
+      panel: _el('finance-panel'),
+      api: _api,
+      moneyHtml: _moneyHtml,
+      escHtml: _escHtml,
+    });
+  }
 }
 
 async function _renderPlannedAndJob(panel, month) {
@@ -2140,7 +2173,7 @@ async function _renderRecurring() {
   const seq = _panelLoading(panel);
   const data = await _api('/recurring');
   if (seq !== _renderSeq) return;
-  const rows = (data.series || []).map((s) => `
+  const rows = (data.series || []).filter((s) => s.status !== 'dismissed').map((s) => `
     <tr>
       <td>${_escHtml(s.display_payee)}</td>
       <td>${s.cadence}</td>

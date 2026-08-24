@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app.dart';
 import 'debug_log.dart';
+import 'setup_link_channel.dart';
 import 'state/app_controller.dart';
 
 Future<void> main() async {
@@ -19,6 +20,7 @@ Future<void> main() async {
   final controller = AppController(prefs: prefs);
   odyLog('PhoneApp start restore v8 connected=${controller.isConnected}');
   await controller.restore();
+  listenPhoneAppSetupLinks(controller);
   odyLog(
     'PhoneApp restored url=${controller.baseUrl} '
     'token=${controller.token.isNotEmpty} cookie=${controller.sessionCookie.isNotEmpty}',

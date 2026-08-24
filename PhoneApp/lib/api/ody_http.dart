@@ -113,6 +113,18 @@ class OdyHttp {
     return res;
   }
 
+  Future<dynamic> postForm(String path, Map<String, String> fields) async {
+    final headers = {
+      ..._headers,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    };
+    final url = uri(path);
+    odyLog('POST-FORM $url auth=${_authMode()}');
+    final res = await _client.post(url, headers: headers, body: fields);
+    odyLog('POST-FORM $path -> ${res.statusCode} ${res.reasonPhrase}');
+    return parseResponse(res);
+  }
+
   Future<http.StreamedResponse> sendMultipart(
     http.MultipartRequest request,
   ) async {

@@ -2082,7 +2082,8 @@
               PhonePi companion
               <span id="phonepi-enabled-pill" style="margin-left:auto;font-size:11px;font-weight:normal;opacity:0.7"></span>
             </h2>
-            <div class="admin-toggle-sub" style="margin-bottom:10px">Same host as this Odysseus UI. Paste it into the PhonePi app, port 443 on Tailscale Serve. PhoneApp finance tokens are next door: Settings → Phone app token (or the key icon in the user bar).</div>
+            <div class="admin-toggle-sub" style="margin-bottom:10px">Scan the PhonePi QR with the Pixel camera. It opens PhonePi and fills host/port. Typing the same host still works; the app maps MagicDNS to the Mini PC Tailscale IP. PhoneApp finance tokens are the QR below.</div>
+            <!-- PhonePi stays a separate app from PhoneApp; this tab only mints setup QRs for both. -->
             <div class="settings-col" style="gap:8px">
               <div class="settings-row">
                 <label class="settings-label">Host</label>
@@ -2094,14 +2095,40 @@
                 <input id="phonepi-port" class="settings-select" readonly style="max-width:120px">
                 <button type="button" class="admin-btn-sm" id="phonepi-copy-both">Copy both</button>
               </div>
+              <div class="settings-row">
+                <label class="settings-label">Setup link</label>
+                <input id="phonepi-deeplink" class="settings-select" readonly>
+                <button type="button" class="admin-btn-sm" id="phonepi-copy-deeplink">Copy link</button>
+              </div>
               <div id="phonepi-connect-qr-wrap" style="display:none;margin:8px 0">
                 <img id="phonepi-connect-qr" alt="PhonePi connect QR" width="180" height="180" style="background:#fff;border-radius:8px;padding:8px">
+                <div style="font-size:11px;opacity:0.7;margin-top:6px">phonepi:// setup QR. Scan to open PhonePi, not Chrome.</div>
               </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap">
                 <button type="button" class="admin-btn-add" id="phonepi-restart-btn">Restart PhonePi</button>
               </div>
               <div id="phonepi-msg" style="font-size:11px"></div>
             </div>
+          </div>
+          <div class="admin-card">
+            <h2 style="display:flex;align-items:center;gap:8px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.6"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 1 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+              PhoneApp finance QR
+            </h2>
+            <div class="admin-toggle-sub" style="margin-bottom:10px">Mints a phone_finance <code>ody_</code> token and encodes it in an <code>odyphone://</code> QR. Scan with the Pixel camera to open PhoneApp and sign in. The raw token is shown once as a prefix here.</div>
+            <div class="settings-row" style="margin-bottom:8px">
+              <label class="settings-label">PhoneApp URL</label>
+              <input id="phoneapp-setup-url" class="settings-select" readonly>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button type="button" class="admin-btn-add" id="phoneapp-mint-qr-btn">Mint PhoneApp QR</button>
+              <button type="button" class="admin-btn-sm" id="phoneapp-copy-deeplink" style="display:none">Copy setup link</button>
+            </div>
+            <div id="phoneapp-setup-qr-wrap" style="display:none;margin:8px 0">
+              <img id="phoneapp-setup-qr" alt="PhoneApp connect QR" width="180" height="180" style="background:#fff;border-radius:8px;padding:8px">
+              <div id="phoneapp-setup-prefix" style="font-size:11px;opacity:0.7;margin-top:6px"></div>
+            </div>
+            <div id="phoneapp-setup-msg" style="font-size:11px"></div>
           </div>
           <div class="admin-card">
             <h2 style="display:flex;align-items:center;gap:8px;">

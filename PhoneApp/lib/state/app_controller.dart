@@ -1,20 +1,21 @@
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
+import 'package:http/http.dart' as http_pkg;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/finance_client.dart';
 import '../api/models.dart';
 import '../api/ody_http.dart';
 import '../debug_log.dart';
+import '../setup_link.dart';
 
 class AppController extends ChangeNotifier {
   AppController({
     required this.prefs,
-    http.Client? httpClient,
+    http_pkg.Client? httpClient,
   }) : _rawClient = httpClient;
 
   final SharedPreferences prefs;
-  final http.Client? _rawClient;
+  final http_pkg.Client? _rawClient;
 
   String baseUrl = '';
   String token = '';
@@ -27,6 +28,17 @@ class AppController extends ChangeNotifier {
   bool needsTotp = false;
 
   FinanceClient? finance;
+  OdyHttp? httpLayer;
+
+  /// Shared Odysseus HTTP client. Prefer `httpLayer`; fall back to the finance client.
+  OdyHttp get odyHttp {
+    final layer = httpLayer ?? finance?.httpClient;
+    if (layer == null) {
+      throw StateError('Not connected');
+    }
+    return layer;
+  }
+
   List<FinanceAccount> cachedAccounts = [];
   BudgetSnapshot? cachedBudget;
   NetWorth? cachedNetWorth;
@@ -78,6 +90,7 @@ class AppController extends ChangeNotifier {
       } catch (e) {
         odyLog('restore session failed $e');
         finance = null;
+        httpLayer = null;
         homePrefetched = false;
       }
     }
@@ -85,13 +98,14 @@ class AppController extends ChangeNotifier {
   }
 
   void _attachClient() {
-    final httpLayer = OdyHttp(
+    final layer = OdyHttp(
       baseUrl: baseUrl,
       token: token.isEmpty ? null : token,
       sessionCookie: token.isEmpty ? sessionCookie : null,
       client: _rawClient,
     );
-    finance = FinanceClient(httpLayer);
+    httpLayer = layer;
+    finance = FinanceClient(layer);
   }
 
   Future<bool> connect({
@@ -144,6 +158,7 @@ class AppController extends ChangeNotifier {
           needsTotp = true;
           lastError = 'Enter the 2FA code from your authenticator.';
           finance = null;
+          httpLayer = null;
           odyLog('connect requires TOTP');
           return false;
         }
@@ -169,6 +184,7 @@ class AppController extends ChangeNotifier {
       return true;
     } catch (e) {
       finance = null;
+      httpLayer = null;
       lastError = _friendly(e);
       odyLog('connect fail friendly=$lastError', error: e, stack: StackTrace.current);
       return false;
@@ -179,12 +195,33 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
+    sessionCookie = '';
+    finance = null;
+    httpLayer = null;
+    await prefs.remove('sessionCookie');
+    await prefs.setString('token', token);
+    await prefs.setString('baseUrl', baseUrl);
+    await prefs.setString('username', username);
+    notifyListeners();
+  }
+
+  Future<void> clearSavedToken() async {
     token = '';
     sessionCookie = '';
     finance = null;
+    httpLayer = null;
     await prefs.remove('token');
     await prefs.remove('sessionCookie');
     notifyListeners();
+  }
+
+  Future<bool> applySetupLink(String raw) async {
+    final link = PhoneAppSetupLink.tryParse(raw);
+    if (link == null) {
+      odyLog('setup link ignored');
+      return false;
+    }
+    return connect(url: link.url, apiToken: link.token, user: link.user);
   }
 
   Future<void> setPrivacy(bool value) async {

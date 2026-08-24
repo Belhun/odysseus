@@ -162,6 +162,14 @@ class _ConnectScreenState extends State<ConnectScreen> {
             ),
           ],
           const SizedBox(height: 20),
+          if (c.token.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                'Saved token is ready. Tap Connect, or Clear saved token in Settings to forget it.',
+                style: TextStyle(color: OdyColors.muted, fontSize: 12),
+              ),
+            ),
           FilledButton(
             onPressed: c.busy ? null : _submit,
             child: c.busy

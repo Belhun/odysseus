@@ -18,7 +18,7 @@ from integrations.finance.models import (
 )
 from integrations.finance.services.balances import account_balance_snapshot, iso_date
 
-ACCOUNT_TYPES = ("checking", "savings", "credit_card", "loan", "cash", "other")
+ACCOUNT_TYPES = ("checking", "savings", "credit_card", "loan", "cash", "other", "investment")
 
 
 def parse_optional_date(raw: Optional[str]) -> Optional[date]:

@@ -26,6 +26,7 @@ class _TransactionEditScreenState extends State<TransactionEditScreen> {
   String? _categoryId;
   String _status = 'cleared';
   String? _movementClass;
+  String? _originalMovementClass;
   DateTime _date = DateTime.now();
   bool _income = false;
   bool _loading = true;
@@ -42,8 +43,12 @@ class _TransactionEditScreenState extends State<TransactionEditScreen> {
       _amount.text = (tx.amountCents.abs() / 100).toStringAsFixed(2);
       _accountId = tx.accountId;
       _categoryId = tx.categoryId;
-      _status = tx.status;
-      _movementClass = tx.movementClass;
+      _status = dropdownValueIn(tx.status, kTxStatuses) ?? 'cleared';
+      _originalMovementClass = tx.movementClass;
+      _movementClass = dropdownValueIn(
+        uiMovementClass(tx.movementClass),
+        kUiMovementClasses,
+      );
       _income = tx.amountCents > 0;
       if (tx.date != null && tx.date!.length >= 10) {
         _date = DateTime.tryParse(tx.date!) ?? _date;
@@ -103,7 +108,11 @@ class _TransactionEditScreenState extends State<TransactionEditScreen> {
           'memo': _memo.text.trim(),
           if (_categoryId != null) 'category_id': _categoryId,
           'status': _status,
-          if (_movementClass != null) 'movement_class': _movementClass,
+          if (_movementClass != null)
+            'movement_class': storedMovementClass(
+              _movementClass,
+              original: _originalMovementClass,
+            ),
         });
       } else {
         await api.patchTransaction(widget.existing!.id, {
@@ -114,7 +123,10 @@ class _TransactionEditScreenState extends State<TransactionEditScreen> {
           'memo': _memo.text.trim(),
           'category_id': _categoryId,
           'status': _status,
-          'movement_class': _movementClass,
+          'movement_class': storedMovementClass(
+            _movementClass,
+            original: _originalMovementClass,
+          ),
         });
       }
       if (mounted) Navigator.pop(context, true);
@@ -146,8 +158,37 @@ class _TransactionEditScreenState extends State<TransactionEditScreen> {
     }
   }
 
+  List<DropdownMenuItem<T>> _ensureValue<T>(
+    List<DropdownMenuItem<T>> items,
+    T? value,
+    String missingLabel,
+  ) {
+    if (value != null && !items.any((item) => item.value == value)) {
+      return [
+        DropdownMenuItem(value: value, child: Text(missingLabel)),
+        ...items,
+      ];
+    }
+    return items;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final accountItems = _ensureValue(
+      _accounts.map((a) => DropdownMenuItem(value: a.id, child: Text(a.name))).toList(),
+      _accountId,
+      'Unknown account',
+    );
+    final categoryItems = _ensureValue<String?>(
+      [
+        const DropdownMenuItem(value: null, child: Text('Uncategorized')),
+        ..._categories.map(
+          (c) => DropdownMenuItem(value: c.id, child: Text(c.displayName)),
+        ),
+      ],
+      _categoryId,
+      'Unknown category',
+    );
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.existing == null ? 'Add transaction' : 'Edit transaction'),
@@ -199,38 +240,37 @@ class _TransactionEditScreenState extends State<TransactionEditScreen> {
                   },
                 ),
                 DropdownButtonFormField<String>(
-                  value: _accountId,
+                  value: dropdownValueIn(_accountId, accountItems.map((item) => item.value)),
                   decoration: const InputDecoration(labelText: 'Account'),
-                  items: _accounts
-                      .map((a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
-                      .toList(),
+                  items: accountItems,
                   onChanged: (v) => setState(() => _accountId = v),
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String?>(
-                  value: _categoryId,
+                  value: dropdownValueIn(
+                    _categoryId,
+                    categoryItems.map((item) => item.value),
+                  ),
                   decoration: const InputDecoration(labelText: 'Category'),
-                  items: [
-                    const DropdownMenuItem(value: null, child: Text('Uncategorized')),
-                    ..._categories.map(
-                      (c) => DropdownMenuItem(value: c.id, child: Text(c.displayName)),
-                    ),
-                  ],
+                  items: categoryItems,
                   onChanged: (v) => setState(() => _categoryId = v),
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
-                  value: _status,
+                  value: dropdownValueIn(_status, kTxStatuses) ?? 'cleared',
                   decoration: const InputDecoration(labelText: 'Status'),
                   items: const [
                     DropdownMenuItem(value: 'cleared', child: Text('Cleared')),
                     DropdownMenuItem(value: 'pending', child: Text('Pending')),
+                    DropdownMenuItem(value: 'reconciled', child: Text('Reconciled')),
+                    DropdownMenuItem(value: 'void', child: Text('Void')),
                   ],
                   onChanged: (v) => setState(() => _status = v ?? 'cleared'),
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String?>(
-                  value: _movementClass,
+                  key: const Key('tx-movement-class'),
+                  value: dropdownValueIn(_movementClass, kUiMovementClasses),
                   decoration: const InputDecoration(labelText: 'Movement class'),
                   items: const [
                     DropdownMenuItem(value: null, child: Text('—')),
