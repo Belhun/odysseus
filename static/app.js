@@ -1394,11 +1394,11 @@ function initializeEventListeners() {
     });
   }
 
-  // Sidebar user bar — settings, admin, profile
+  // Sidebar user bar — settings, admin, profile, phone token
   const userBarSettings = el('user-bar-settings');
   const userBarProfile = el('user-bar-profile');
   const userBarAdmin = el('user-bar-admin');
-  const userBarTokens = el('user-bar-tokens');
+  const userBarPhoneToken = el('user-bar-phone-token');
 
   if (userBarSettings) {
     userBarSettings.addEventListener('click', () => settingsModule.open());
@@ -1411,8 +1411,8 @@ function initializeEventListeners() {
   if (userBarAdmin) {
     userBarAdmin.addEventListener('click', () => adminModule.open());
   }
-  if (userBarTokens) {
-    userBarTokens.addEventListener('click', () => adminModule.open('tokens'));
+  if (userBarPhoneToken) {
+    userBarPhoneToken.addEventListener('click', () => adminModule.open('phone-app-token'));
   }
 
   // Fetch auth status — populate user bar and show admin button if admin
@@ -1421,7 +1421,7 @@ function initializeEventListeners() {
     .then(d => {
       window._isAdmin = !!d.is_admin;
       if (d.is_admin && userBarAdmin) userBarAdmin.style.display = '';
-      if (d.is_admin && userBarTokens) userBarTokens.style.display = '';
+      if (d.is_admin && userBarPhoneToken) userBarPhoneToken.style.display = '';
       const userBarName = el('user-bar-name');
       const userBarAvatar = el('user-bar-avatar');
       if (userBarName && d.username) {

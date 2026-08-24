@@ -28,6 +28,13 @@ def is_cors_preflight(method: str, headers) -> bool:
     return method == "OPTIONS" and "access-control-request-method" in headers
 
 
+# Flutter web / PhoneApp serve from http://localhost:<random-port>. The default
+# ALLOWED_ORIGINS list is exact-match and does not include ports, so a regex
+# covers loopback with or without a port. Does not match Tailscale ts.net
+# origins; those still need an explicit ALLOWED_ORIGINS entry.
+LOCALHOST_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+
+
 def require_admin(request: Request):
     """Raise 403 if the current user isn't an admin.
     Allows access when auth is explicitly disabled, or when the request carries

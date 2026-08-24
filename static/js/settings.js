@@ -23,7 +23,7 @@ function safeRasterDataUrl(raw) {
 }
 
 /* ── Tab switching ── */
-const ADMIN_TABS = new Set(['services', 'integrations', 'tokens', 'tools', 'users', 'system']);
+const ADMIN_TABS = new Set(['services', 'integrations', 'tools', 'users', 'system', 'phone-app-token']);
 
 function initTabs() {
   modalEl.querySelectorAll('[data-settings-tab]').forEach(btn => {
@@ -2346,6 +2346,118 @@ function initAccount() {
   }
 }
 
+function initPhoneAppToken() {
+  const createBtn = el('phone-token-create-btn');
+  if (!createBtn || createBtn.dataset.bound === '1') return;
+  createBtn.dataset.bound = '1';
+
+  const COPY_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  const CHECK_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+
+  async function copyText(value) {
+    const text = String(value || '');
+    if (!text) return false;
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (_) {}
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', 'readonly');
+    ta.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;z-index:-1;';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+    ta.remove();
+    return ok;
+  }
+
+  async function renderPhoneTokens() {
+    const list = el('phone-token-list');
+    if (!list) return;
+    try {
+      const res = await fetch('/api/tokens', { credentials: 'same-origin' });
+      if (!res.ok) {
+        list.innerHTML = '<div class="admin-empty" style="font-size:11px;">Admin only.</div>';
+        return;
+      }
+      const tokens = await res.json();
+      const phone = (Array.isArray(tokens) ? tokens : []).filter((t) => {
+        const scopes = new Set(t.scopes || []);
+        return scopes.has('finance:read') && scopes.has('finance:write');
+      });
+      if (!phone.length) {
+        list.innerHTML = '<div class="admin-empty" style="font-size:11px;opacity:0.6;">No phone finance tokens yet.</div>';
+        return;
+      }
+      list.innerHTML = phone.map((t) => `
+        <div class="admin-user-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:12px;font-weight:600;">${esc(t.name || 'Phone finance')}</span>
+          <span class="admin-badge">${esc(t.token_prefix || 'ody_')}...</span>
+          <span style="font-size:11px;opacity:0.55;">${esc((t.scopes || []).join(', '))}</span>
+        </div>`).join('');
+    } catch (_) {
+      list.innerHTML = '<div class="admin-error">Failed to load tokens</div>';
+    }
+  }
+
+  createBtn.addEventListener('click', async () => {
+    const msg = el('phone-token-msg');
+    const reveal = el('phone-token-reveal');
+    const nameInput = el('phone-token-name');
+    const name = ((nameInput && nameInput.value) || '').trim() || 'Phone finance';
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('profile', 'phone_finance');
+    createBtn.disabled = true;
+    try {
+      const r = await fetch('/api/tokens', { method: 'POST', credentials: 'same-origin', body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || 'Failed');
+      const valueEl = el('phone-token-value');
+      if (valueEl) valueEl.textContent = d.token || '';
+      if (reveal) reveal.style.display = '';
+      if (msg) {
+        msg.textContent = `Created "${name}". Copy the ody_ secret now.`;
+        msg.style.color = 'var(--green, #50fa7b)';
+      }
+      await renderPhoneTokens();
+    } catch (err) {
+      if (msg) {
+        msg.textContent = err?.message || 'Failed';
+        msg.style.color = 'var(--red)';
+      }
+    } finally {
+      createBtn.disabled = false;
+    }
+  });
+
+  el('phone-token-copy-btn')?.addEventListener('click', async () => {
+    const token = el('phone-token-value')?.textContent || '';
+    const btn = el('phone-token-copy-btn');
+    const ok = await copyText(token);
+    if (!btn) return;
+    if (ok) {
+      btn.innerHTML = CHECK_ICON;
+      btn.style.color = 'var(--accent, var(--red))';
+      btn.style.opacity = '1';
+    }
+    setTimeout(() => {
+      const latest = el('phone-token-copy-btn');
+      if (latest) {
+        latest.innerHTML = COPY_ICON;
+        latest.style.color = '';
+        latest.style.opacity = '0.7';
+      }
+    }, 1600);
+  });
+
+  renderPhoneTokens();
+}
+
 function initAll() {
   modalEl = el('settings-modal');
   initTabs();
@@ -2376,6 +2488,7 @@ function initAll() {
   initPluginIntegrations();
   initUnifiedIntegrations();
   initFinanceAgentPrefs();
+  initPhoneAppToken();
   initPhonePanel();
 }
 

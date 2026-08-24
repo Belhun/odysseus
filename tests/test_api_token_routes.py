@@ -222,6 +222,33 @@ def test_cookbook_launch_scope_implies_read(monkeypatch, token_routes_mod):
     assert resp["scopes"] == ["cookbook:read", "cookbook:launch"]
 
 
+def test_create_token_phone_finance_profile(monkeypatch, token_routes_mod):
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    mod = token_routes_mod
+
+    fake_session = MagicMock()
+    monkeypatch.setattr(mod, "get_db_session", lambda: _db_ctx(fake_session))
+    monkeypatch.setattr(mod, "get_current_user", lambda req: req.state.current_user)
+
+    req = _req("belhun", is_admin=True)
+    create_token = _get_handler(mod, "POST", "/tokens")
+    resp = create_token(request=req, name="Phone finance", profile="phone_finance")
+
+    assert resp["scopes"] == ["finance:read", "finance:write"]
+    assert "chat" not in resp["scopes"]
+
+
+def test_token_profiles_lists_phone_finance(monkeypatch, token_routes_mod):
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    mod = token_routes_mod
+    profiles = _get_handler(mod, "GET", "/tokens/profiles")
+    resp = profiles(request=_req("belhun", is_admin=True))
+    assert "phone_finance" in resp["profiles"]
+    assert resp["profiles"]["phone_finance"] == ["finance:read", "finance:write"]
+    assert "finance:read" in resp["allowed_scopes"]
+    assert "finance:write" in resp["allowed_scopes"]
+
+
 # ---------------------------------------------------------------------------
 # 3. GET /api/tokens — safe display fields only, no hash or raw token
 # ---------------------------------------------------------------------------

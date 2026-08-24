@@ -75,6 +75,9 @@ output.txt.txt
 
 # …except shipped static assets
 !static/icons/*.png
+!PhoneApp/web/favicon.png
+!PhoneApp/web/icons/*.png
+!PhoneApp/android/app/src/main/res/**/*.png
 
 # …except shipped demo assets in docs/ that the README links to.
 !docs/*.jpg
@@ -108,23 +111,26 @@ scripts/deploy-mini-pc.ps1
 # Host-local Compose overlay (optional extras, bind, etc.)
 docker-compose.override.yml
 
-# Flutter PhoneApp
+# Flutter PhoneApp build artifacts
 PhoneApp/.ody_bootstrap.json
 PhoneApp/.ody_dart_defines.json
 .phonepi_bootstrap.json
 .phonepi_db/
 PhoneApp/.dart_tool/
-PhoneApp/.flutter-plugins
-PhoneApp/.flutter-plugins-dependencies
 PhoneApp/.packages
 PhoneApp/build/
+PhoneApp/.flutter-plugins
+PhoneApp/.flutter-plugins-dependencies
+PhoneApp/.metadata
 PhoneApp/.pub-cache/
 PhoneApp/.pub/
 PhoneApp/android/.gradle/
 PhoneApp/android/local.properties
+PhoneApp/android/app/debug/
+PhoneApp/android/app/profile/
+PhoneApp/android/app/release/
 PhoneApp/**/*.iml
 !PhoneApp/**/*.png
-
 
 # Local config
 compound.config.json
