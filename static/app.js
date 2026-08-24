@@ -1398,6 +1398,7 @@ function initializeEventListeners() {
   const userBarSettings = el('user-bar-settings');
   const userBarProfile = el('user-bar-profile');
   const userBarAdmin = el('user-bar-admin');
+  const userBarTokens = el('user-bar-tokens');
 
   if (userBarSettings) {
     userBarSettings.addEventListener('click', () => settingsModule.open());
@@ -1410,6 +1411,9 @@ function initializeEventListeners() {
   if (userBarAdmin) {
     userBarAdmin.addEventListener('click', () => adminModule.open());
   }
+  if (userBarTokens) {
+    userBarTokens.addEventListener('click', () => adminModule.open('tokens'));
+  }
 
   // Fetch auth status — populate user bar and show admin button if admin
   fetch(`${API_BASE}/api/auth/status`, { credentials: 'same-origin' })
@@ -1417,6 +1421,7 @@ function initializeEventListeners() {
     .then(d => {
       window._isAdmin = !!d.is_admin;
       if (d.is_admin && userBarAdmin) userBarAdmin.style.display = '';
+      if (d.is_admin && userBarTokens) userBarTokens.style.display = '';
       const userBarName = el('user-bar-name');
       const userBarAvatar = el('user-bar-avatar');
       if (userBarName && d.username) {

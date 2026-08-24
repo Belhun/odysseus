@@ -576,3 +576,26 @@ def test_update_token_normal_object_still_works(monkeypatch, token_routes_mod):
     assert token.name == "updated"
     assert resp["name"] == "updated"
     invalidator.assert_called_once()
+
+
+def test_token_form_markup_exists_in_settings():
+    """Settings overhaul dropped these ids once; PhoneApp minting needs them."""
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parent.parent / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    for mid in (
+        "adm-tokenList",
+        "adm-tokenName",
+        "adm-tokenProfile",
+        "adm-tokenAddBtn",
+        "adm-tokenReveal",
+        "adm-tokenValue",
+        "adm-tokenCopyBtn",
+    ):
+        assert f'id="{mid}"' in html
+    assert 'value="phone_finance"' in html
+    assert 'data-settings-tab="tokens"' in html
+    assert 'id="adm-tokenPhoneBtn"' in html
+    assert 'id="user-bar-tokens"' in html

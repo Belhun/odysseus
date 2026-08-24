@@ -971,6 +971,9 @@
         <span class="user-bar-name" id="user-bar-name">User</span>
       </div>
       <div class="user-bar-actions">
+        <button type="button" class="user-bar-btn" id="user-bar-tokens" title="Phone app token" style="display:none">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+        </button>
         <button type="button" class="user-bar-btn" id="user-bar-settings" title="Settings">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
@@ -1440,6 +1443,10 @@
           </button>
           <div class="settings-sidebar-divider admin-only"></div>
           <div class="settings-sidebar-label admin-only">Admin</div>
+          <button class="settings-nav-item admin-only" data-settings-tab="tokens">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+            <span>Phone app token</span>
+          </button>
           <button class="settings-nav-item admin-only" data-settings-tab="tools">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
             <span>Agent Tools</span>
@@ -2075,7 +2082,7 @@
               PhonePi companion
               <span id="phonepi-enabled-pill" style="margin-left:auto;font-size:11px;font-weight:normal;opacity:0.7"></span>
             </h2>
-            <div class="admin-toggle-sub" style="margin-bottom:10px">Same host as this Odysseus UI. Paste it into the PhonePi app, port 443 on Tailscale Serve.</div>
+            <div class="admin-toggle-sub" style="margin-bottom:10px">Same host as this Odysseus UI. Paste it into the PhonePi app, port 443 on Tailscale Serve. PhoneApp finance tokens are next door: Settings → Phone app token (or the key icon in the user bar).</div>
             <div class="settings-col" style="gap:8px">
               <div class="settings-row">
                 <label class="settings-label">Host</label>
@@ -2401,6 +2408,35 @@
             <div id="unified-intg-form" style="display:none"></div>
             <div style="text-align:right;padding:8px 0;">
               <button type="button" class="admin-btn-add" id="unified-intg-add-btn" style="text-align:center;display:inline-flex;align-items:center;justify-content:center;gap:5px;flex-shrink:0;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>Add Integration</button>
+            </div>
+          </div>
+          <div class="admin-card admin-only">
+            <div class="admin-toggle-sub">PhoneApp <code>ody_</code> tokens live under <a href="#" data-go-settings-tab="tokens" style="color:var(--accent, var(--red));text-decoration:underline;font-weight:600;">Phone app token</a> (admin). Codex/Claude agent tokens stay here.</div>
+          </div>
+        </div>
+
+        <!-- ═══ PHONE APP TOKEN TAB ═══ -->
+        <div data-settings-panel="tokens" class="hidden admin-only">
+          <div class="admin-card">
+            <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.6"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>Phone app token</h2>
+            <div class="admin-toggle-sub" style="margin-bottom:8px">Admin only. One click mints <code>ody_</code> with <code>finance:read</code> + <code>finance:write</code>. Copy it once, paste into PhoneApp, leave password blank.</div>
+            <button type="button" class="admin-btn-add" id="adm-tokenPhoneBtn" style="margin-bottom:12px;">Create Phone finance token</button>
+            <div id="adm-tokenList" style="margin-bottom:8px;"></div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-start;">
+              <input type="text" id="adm-tokenName" placeholder="Token name (e.g. Pixel finance)" class="settings-select" style="flex:1;min-width:160px;">
+              <select id="adm-tokenProfile" class="settings-select" style="flex:1;min-width:180px;" title="phone_finance is the PhoneApp profile">
+                <option value="phone_finance" selected>Phone finance</option>
+                <option value="chat">Chat only</option>
+                <option value="">Custom scopes</option>
+              </select>
+              <input type="text" id="adm-tokenScopes" placeholder="custom scopes (if Custom)" class="settings-select" style="flex:2;min-width:180px;" title="Used only when profile is Custom. Example: finance:read,finance:write">
+              <button class="admin-btn-add" id="adm-tokenAddBtn">Create token</button>
+            </div>
+            <div id="adm-tokenMsg" style="font-size:11px;margin-top:6px;"></div>
+            <div id="adm-tokenReveal" style="display:none;margin-top:8px;padding:8px 10px;background:color-mix(in srgb, var(--accent, var(--red)) 12%, transparent);border:1px solid color-mix(in srgb, var(--accent, var(--red)) 35%, transparent);border-radius:6px;">
+              <div style="font-size:11px;font-weight:600;margin-bottom:4px;">Copy now — paste into PhoneApp, leave password blank. This is the only time you'll see it:</div>
+              <code id="adm-tokenValue" style="font-family:'Berkeley Mono','SF Mono','Fira Code',monospace;font-size:11px;word-break:break-all;display:block;background:var(--bg);padding:6px 8px;border-radius:4px;margin-bottom:6px;user-select:all;"></code>
+              <button class="admin-btn-sm" id="adm-tokenCopyBtn">Copy</button>
             </div>
           </div>
         </div>

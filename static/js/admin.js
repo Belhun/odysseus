@@ -2458,6 +2458,8 @@ const _TOKEN_SCOPES = [
   { key: 'memory:write',      label: 'Memory write',      detail: 'Write memory when enabled' },
   { key: 'cookbook:read',     label: 'Cookbook read',     detail: 'List cookbook tasks + tail their tmux output' },
   { key: 'cookbook:launch',   label: 'Cookbook launch',   detail: 'Launch and stop cookbook serve tasks' },
+  { key: 'finance:read',      label: 'Finance read',      detail: 'Read accounts, transactions, budgets, and reports (phone client)' },
+  { key: 'finance:write',     label: 'Finance write',     detail: 'Create and edit finance data from a Tailscale phone client' },
 ];
 
 function _renderTokenScopeRows(t) {
@@ -2578,8 +2580,13 @@ function initTokenForm() {
     const name = el('adm-tokenName').value.trim();
     if (!name) { msg.textContent = 'Token name is required'; msg.className = 'admin-error'; return; }
     const fd = new FormData(); fd.append('name', name);
-    const scopes = (el('adm-tokenScopes')?.value || '').trim();
-    if (scopes) fd.append('scopes', scopes);
+    const profile = (el('adm-tokenProfile')?.value || '').trim();
+    if (profile) {
+      fd.append('profile', profile);
+    } else {
+      const scopes = (el('adm-tokenScopes')?.value || '').trim();
+      if (scopes) fd.append('scopes', scopes);
+    }
     try {
       const res = await fetch('/api/tokens', { method: 'POST', body: fd, credentials: 'same-origin' });
       const data = await res.json();
@@ -2593,6 +2600,17 @@ function initTokenForm() {
       else { msg.textContent = data.detail || 'Failed'; msg.className = 'admin-error'; }
     } catch (e) { msg.textContent = 'Request failed'; msg.className = 'admin-error'; }
   });
+  const phoneBtn = el('adm-tokenPhoneBtn');
+  if (phoneBtn && !phoneBtn.dataset.bound) {
+    phoneBtn.dataset.bound = '1';
+    phoneBtn.addEventListener('click', () => {
+      const nameEl = el('adm-tokenName');
+      const profileEl = el('adm-tokenProfile');
+      if (nameEl && !nameEl.value.trim()) nameEl.value = 'PhoneApp';
+      if (profileEl) profileEl.value = 'phone_finance';
+      addBtn.click();
+    });
+  }
   const TOKEN_COPY_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
   const TOKEN_CHECK_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
   el('adm-tokenCopyBtn').addEventListener('click', () => {

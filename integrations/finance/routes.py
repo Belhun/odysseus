@@ -105,7 +105,7 @@ from integrations.finance.services.transactions import (
     unvoid_transaction,
     void_transaction,
 )
-from src.auth_helpers import effective_user, require_user
+from src.auth_helpers import effective_user, require_user as _session_require_user
 from src.plugins.registry import is_plugin_active, is_plugin_installed
 from src.upload_limits import (
     FINANCE_IMPORT_MAX_BYTES,
@@ -115,6 +115,38 @@ from src.upload_limits import (
     format_byte_limit,
     read_upload_limited,
 )
+
+_FINANCE_READ_SCOPES = {"finance:read", "finance:write"}
+
+
+def _finance_token_scopes(request: Request) -> set[str]:
+    scopes = getattr(request.state, "api_token_scopes", None) or []
+    if isinstance(scopes, str):
+        scopes = [s.strip() for s in scopes.split(",")]
+    return {str(s).strip() for s in scopes if str(s).strip()}
+
+
+def require_user(request: Request) -> str:
+    """Owner for finance routes.
+
+    Cookie sessions use the normal user gate. Bearer ``ody_`` tokens must
+    carry ``finance:read`` (GET/HEAD) or ``finance:write`` (mutating methods)
+    and resolve to the token owner so a Tailscale phone client sees the same
+    ledger as the web UI.
+    """
+    if getattr(request.state, "api_token", False):
+        scopes = _finance_token_scopes(request)
+        write = request.method not in ("GET", "HEAD", "OPTIONS")
+        if write:
+            if "finance:write" not in scopes:
+                raise HTTPException(403, "API token requires finance:write scope")
+        elif not scopes.intersection(_FINANCE_READ_SCOPES):
+            raise HTTPException(403, "API token requires finance:read scope")
+        owner = getattr(request.state, "api_token_owner", None) or None
+        if not owner:
+            raise HTTPException(401, "Not authenticated")
+        return owner
+    return _session_require_user(request)
 
 
 def _require_finance_plugin(_request: Request) -> None:

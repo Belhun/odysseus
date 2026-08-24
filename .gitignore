@@ -109,6 +109,8 @@ scripts/deploy-mini-pc.ps1
 docker-compose.override.yml
 
 # Flutter PhoneApp
+PhoneApp/.ody_bootstrap.json
+PhoneApp/.ody_dart_defines.json
 PhoneApp/.dart_tool/
 PhoneApp/.flutter-plugins
 PhoneApp/.flutter-plugins-dependencies

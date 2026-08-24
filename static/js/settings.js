@@ -23,7 +23,7 @@ function safeRasterDataUrl(raw) {
 }
 
 /* ── Tab switching ── */
-const ADMIN_TABS = new Set(['services', 'integrations', 'tools', 'users', 'system']);
+const ADMIN_TABS = new Set(['services', 'integrations', 'tokens', 'tools', 'users', 'system']);
 
 function initTabs() {
   modalEl.querySelectorAll('[data-settings-tab]').forEach(btn => {
@@ -5722,6 +5722,8 @@ async function initUnifiedIntegrations() {
       { key: 'memory:write', label: 'Memory write', detail: 'Write memory when enabled' },
       { key: 'cookbook:read', label: 'Cookbook', detail: 'List cookbook tasks + tail their tmux output (debug a model serve from outside the UI)' },
       { key: 'cookbook:launch', label: 'Cookbook launch', detail: 'Launch and stop cookbook serve tasks. Powerful: runs SSH commands on your configured servers, bounded by the same allowlist the UI uses (vllm/python3/sglang/llama-server/...)' },
+      { key: 'finance:read', label: 'Finance', detail: 'Read accounts, transactions, budgets, and reports (phone client)' },
+      { key: 'finance:write', label: 'Finance write', detail: 'Create and edit finance data from a Tailscale phone client' },
     ];
     // Strict name-prefix match keeps Codex and Claude tokens in their own forms.
     const agentTokens = (Array.isArray(tokens) ? tokens : []).filter(tok =>
@@ -5735,6 +5737,7 @@ async function initUnifiedIntegrations() {
       calendar: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
       memory: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2a2.5 2.5 0 0 0-2.5 2.5 2.5 2.5 0 0 0-2.5 2.5A2.5 2.5 0 0 0 2 9.5v3A2.5 2.5 0 0 0 4.5 15a2.5 2.5 0 0 0 2.5 2.5A2.5 2.5 0 0 0 9.5 20H10V2z"/><path d="M14.5 2a2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1 2.5 2.5A2.5 2.5 0 0 1 22 9.5v3A2.5 2.5 0 0 1 19.5 15a2.5 2.5 0 0 1-2.5 2.5A2.5 2.5 0 0 1 14.5 20H14V2z"/></svg>',
       cookbook: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
+      finance: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>',
     };
     const _scopeNiceLabel = (label) => label.replace(/\s+(write|drafts?|send)$/i, '');
     const _scopeAction = (key) => (key.split(':')[1] || '').toLowerCase();
