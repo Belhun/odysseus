@@ -1400,6 +1400,13 @@ function initializeEventListeners() {
   const userBarAdmin = el('user-bar-admin');
   const userBarPhoneToken = el('user-bar-phone-token');
 
+  function syncUserBarAdminButtons() {
+    const isAdmin = !!window._isAdmin;
+    document.body.classList.toggle('is-admin', isAdmin);
+    if (userBarAdmin) userBarAdmin.style.display = isAdmin ? '' : 'none';
+  }
+  window.syncUserBarAdminButtons = syncUserBarAdminButtons;
+
   if (userBarSettings) {
     userBarSettings.addEventListener('click', () => settingsModule.open());
   }
@@ -1412,7 +1419,7 @@ function initializeEventListeners() {
     userBarAdmin.addEventListener('click', () => adminModule.open());
   }
   if (userBarPhoneToken) {
-    userBarPhoneToken.addEventListener('click', () => adminModule.open('phone-app-token'));
+    userBarPhoneToken.addEventListener('click', () => settingsModule.open('phone-app-token'));
   }
 
   // Fetch auth status — populate user bar and show admin button if admin
@@ -1420,8 +1427,7 @@ function initializeEventListeners() {
     .then(r => r.json())
     .then(d => {
       window._isAdmin = !!d.is_admin;
-      if (d.is_admin && userBarAdmin) userBarAdmin.style.display = '';
-      if (d.is_admin && userBarPhoneToken) userBarPhoneToken.style.display = '';
+      syncUserBarAdminButtons();
       const userBarName = el('user-bar-name');
       const userBarAvatar = el('user-bar-avatar');
       if (userBarName && d.username) {
@@ -1629,6 +1635,7 @@ function initializeEventListeners() {
       // off then on to trigger applyUIVis a second time, which is the
       // bug they report as "deep research only shows after I toggle".
       try { if (window.applyUIVis && window.loadUIVis) window.applyUIVis(window.loadUIVis()); } catch (_) {}
+      try { if (window.syncUserBarAdminButtons) window.syncUserBarAdminButtons(); } catch (_) {}
     })
     .catch(() => {});
 

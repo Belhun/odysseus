@@ -28,7 +28,7 @@ def test_create_phone_finance_posts_profile():
 
 def test_user_bar_key_opens_phone_token_tab():
     assert 'id="user-bar-phone-token"' in _INDEX
-    assert "adminModule.open('phone-app-token')" in _APP
+    assert "settingsModule.open('phone-app-token')" in _APP
 
 
 def test_admin_token_form_exposes_finance_scopes():

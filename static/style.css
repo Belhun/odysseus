@@ -542,6 +542,14 @@ body.bg-pattern-sparkles {
       flex-shrink: 0;
     }
 
+    #user-bar-phone-token {
+      display: none;
+    }
+
+    body.is-admin #user-bar-phone-token {
+      display: inline-flex;
+    }
+
     .user-bar-btn {
       background: none;
       border: none;
