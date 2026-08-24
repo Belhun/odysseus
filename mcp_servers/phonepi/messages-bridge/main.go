@@ -55,6 +55,8 @@ func main() {
 	switch os.Args[1] {
 	case "pair":
 		err = cmd.RunPair(logger)
+	case "pair-google":
+		err = cmd.RunPairGoogle(logger)
 	case "serve":
 		err = cmd.RunServe(logger)
 	case "send":
@@ -78,8 +80,9 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "PhonePi Google Messages bridge (openmessage)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Usage: phonepi-gmessages <command>")
-	fmt.Fprintln(os.Stderr, "  pair   - Pair with Google Messages via QR code")
-	fmt.Fprintln(os.Stderr, "  serve  - Start sync server + web UI + HTTP tool bridge")
+	fmt.Fprintln(os.Stderr, "  pair         - Pair via QR code (legacy, US accounts)")
+	fmt.Fprintln(os.Stderr, "  pair-google  - Pair via Google account cookies + phone emoji")
+	fmt.Fprintln(os.Stderr, "  serve        - Start sync server + web UI + HTTP tool bridge")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Environment:")
 	fmt.Fprintln(os.Stderr, "  PHONEPI_GMESSAGES_DATA_DIR  Session + SQLite (default %USERPROFILE%\\.local\\share\\phonepi-gmessages)")

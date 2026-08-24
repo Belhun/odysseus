@@ -22,8 +22,8 @@ The image contains `mcp_servers/phonepi/messages-bridge/phonepi-gmessages`. Pair
 
 Settings → Phone:
 
-1. **Show pairing QR** — Google Messages → Settings → Device pairing → Pair a device, then scan.
-2. **Repair pairing** — drops the session and shows a new QR.
+1. **Pair with Google account** — Firefox private window → sign in at the config URL → paste cURL → tap emoji on phone.
+2. **Reset pairing** — drops the session; paste fresh cookies to pair again.
 3. **Restart sync** — starts `phonepi-gmessages serve` on loopback 11042 if already paired.
 
 `gm_*` MCP tools talk to `http://127.0.0.1:11042`. That path does not need the Android PhonePi WebSocket.

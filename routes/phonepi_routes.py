@@ -42,6 +42,23 @@ async def phonepi_gmessages_pair(request: Request):
     return JSONResponse(start_pair(reset_session=False))
 
 
+@router.post("/api/phonepi/gmessages/pair-google")
+async def phonepi_gmessages_pair_google(request: Request):
+    require_admin(request)
+    from src.gmessages_bridge import start_pair_google
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    cookies_input = str(body.get("curl") or body.get("cookies") or body.get("input") or "").strip()
+    reset = bool(body.get("reset_session"))
+    return JSONResponse(start_pair_google(cookies_input=cookies_input, reset_session=reset))
+
+
 @router.post("/api/phonepi/gmessages/repair")
 async def phonepi_gmessages_repair(request: Request):
     require_admin(request)

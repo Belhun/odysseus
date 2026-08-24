@@ -1,11 +1,9 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -29,7 +27,7 @@ func RunPair(logger zerolog.Logger) error {
 	}
 
 	sessionPath := dataDir + "/session.json"
-	writePairState("waiting", "")
+	writePairState(PairState{State: "waiting", Mode: "qr"})
 
 	cli := client.NewForPairing(logger)
 
@@ -54,7 +52,7 @@ func RunPair(logger zerolog.Logger) error {
 			return
 		}
 		fmt.Println("\nSession saved to", sessionPath)
-		writePairState("paired", "")
+		writePairState(PairState{State: "paired", Mode: "qr"})
 		if hint := os.Getenv("OPENMESSAGES_SERVE_HINT"); hint != "" {
 			fmt.Println(hint)
 		} else {
@@ -118,23 +116,7 @@ func displayQR(url string) {
 	qrterminal.GenerateHalfBlock(url, qrterminal.L, os.Stdout)
 	fmt.Println()
 	fmt.Println("URL:", url)
-	writePairState("waiting", url)
-}
-
-func writePairState(state string, url string) {
-	// Odysseus Settings → Phone reads these files. Pair stdout is often
-	// block-buffered when the process is not a TTY, so the UI cannot
-	// scrape the QR art from stdout.
-	dataDir := app.DefaultDataDir()
-	_ = os.MkdirAll(dataDir, 0700)
-	if url != "" {
-		_ = os.WriteFile(filepath.Join(dataDir, "qr-url.txt"), []byte(url+"\n"), 0o600)
-	}
-	payload, err := json.Marshal(map[string]string{"state": state, "url": url})
-	if err != nil {
-		return
-	}
-	_ = os.WriteFile(filepath.Join(dataDir, "pair-status.json"), payload, 0o600)
+	writePairState(PairState{State: "waiting", Mode: "qr", URL: url})
 }
 
 // Ensure PairCallback type matches what libgm expects

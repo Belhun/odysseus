@@ -1,4 +1,4 @@
-/** Settings → Phone: PhonePi host/port copy + Google Messages QR pair/repair. */
+/** Settings → Phone: PhonePi host/port copy + Google Messages pair/repair. */
 
 const API = '/api/phonepi';
 
@@ -16,8 +16,13 @@ function setMsg(id, text, ok) {
   node.style.color = ok === false ? 'var(--red,#ff5555)' : 'inherit';
 }
 
-async function api(path, method = 'GET') {
-  const res = await fetch(API + path, { method, credentials: 'same-origin' });
+async function api(path, method = 'GET', body) {
+  const opts = { method, credentials: 'same-origin' };
+  if (body !== undefined) {
+    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(API + path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data.error || data.detail || `HTTP ${res.status}`);
@@ -35,6 +40,19 @@ function showQr(wrapId, imgId, dataUri) {
   } else {
     wrap.style.display = 'none';
     img.removeAttribute('src');
+  }
+}
+
+function showEmoji(emoji) {
+  const wrap = el('gmessages-emoji-wrap');
+  const node = el('gmessages-emoji');
+  if (!wrap || !node) return;
+  if (emoji) {
+    node.textContent = emoji;
+    wrap.style.display = '';
+  } else {
+    node.textContent = '';
+    wrap.style.display = 'none';
   }
 }
 
@@ -73,27 +91,39 @@ function renderStatus(data) {
 
   const gm = data.gmessages || {};
   const pill = el('gmessages-status-pill');
+  const pairingLive = Boolean(gm.pairing_live);
+  const waitingQr = Boolean(gm.qr) && (pairingLive || gm.state === 'waiting') && gm.mode !== 'google';
+  const waitingEmoji = (pairingLive || gm.state === 'emoji_wait' || gm.state === 'starting') && gm.mode === 'google';
   if (pill) {
     if (!gm.binary) pill.textContent = 'Bridge not built';
-    else if (gm.pairing_live || gm.state === 'waiting') pill.textContent = 'Scan the QR';
+    else if (gm.state === 'error') pill.textContent = 'Pairing failed';
+    else if (waitingEmoji && gm.emoji) pill.textContent = 'Tap emoji on phone';
+    else if (waitingEmoji) pill.textContent = 'Pairing…';
+    else if (waitingQr) pill.textContent = 'Scan the QR';
     else if (gm.paired && gm.bridge_running) pill.textContent = 'Paired, syncing';
     else if (gm.paired) pill.textContent = 'Paired, sync stopped';
     else pill.textContent = 'Not paired';
   }
-  const showPairQr = Boolean(gm.qr) && (gm.pairing_live || gm.state === 'waiting');
-  showQr('gmessages-qr-wrap', 'gmessages-qr', showPairQr ? gm.qr : '');
+  showQr('gmessages-qr-wrap', 'gmessages-qr', waitingQr ? gm.qr : '');
+  showEmoji(waitingEmoji ? gm.emoji : '');
   const cancel = el('gmessages-cancel-btn');
-  if (cancel) cancel.style.display = showPairQr ? '' : 'none';
+  if (cancel) cancel.style.display = (waitingQr || waitingEmoji) ? '' : 'none';
   if (gm.paired && gm.bridge_running) {
     setMsg('gmessages-msg', 'Google Messages is paired and the sync server is running.', true);
   } else if (gm.paired) {
     setMsg('gmessages-msg', 'Paired. Click Restart sync if chats are stale.', true);
-  } else if (showPairQr) {
+  } else if (gm.state === 'error' && gm.error) {
+    setMsg('gmessages-msg', gm.error, false);
+  } else if (waitingEmoji && gm.emoji) {
+    setMsg('gmessages-msg', 'On your phone: Google Messages → Device pairing → tap the matching emoji.', true);
+  } else if (waitingEmoji) {
+    setMsg('gmessages-msg', 'Pairing with Google… keep this page open.', true);
+  } else if (waitingQr) {
     setMsg('gmessages-msg', 'Keep this page open until the phone scans the code.', true);
   } else if (!gm.binary) {
     setMsg('gmessages-msg', 'Rebuild Odysseus so the Google Messages binary is in the image.', false);
   } else {
-    setMsg('gmessages-msg', 'Click Show pairing QR, then scan it in Google Messages.', true);
+    setMsg('gmessages-msg', 'Paste a fresh cURL from Firefox, then click Pair with Google account.', true);
   }
 }
 
@@ -101,7 +131,8 @@ export async function refreshPhonePanel() {
   try {
     const data = await api('/status');
     renderStatus(data);
-    const pairing = data.gmessages && (data.gmessages.pairing_live || data.gmessages.state === 'waiting');
+    const gm = data.gmessages || {};
+    const pairing = gm.pairing_live || gm.state === 'waiting' || gm.state === 'emoji_wait' || gm.state === 'starting';
     if (pairing) startPoll();
     else stopPoll();
   } catch (err) {
@@ -180,8 +211,31 @@ export function initPhonePanel() {
       setMsg('phonepi-msg', err.message || String(err), false);
     }
   });
+  el('gmessages-copy-login-link-btn')?.addEventListener('click', async () => {
+    const link = el('gmessages-config-login-link')?.href || 'https://accounts.google.com/AccountChooser?continue=https://messages.google.com/web/config';
+    await copyText(link);
+    setMsg('gmessages-msg', 'Google login link copied. Open it in a Firefox private window.', true);
+  });
+  el('gmessages-pair-google-btn')?.addEventListener('click', async () => {
+    const cookiesInput = el('gmessages-cookies-input')?.value?.trim() || '';
+    if (!cookiesInput) {
+      setMsg('gmessages-msg', 'Paste a cURL or JSON cookies first.', false);
+      return;
+    }
+    setMsg('gmessages-msg', 'Starting Google account pairing…');
+    try {
+      const data = await api('/gmessages/pair-google', 'POST', { input: cookiesInput });
+      if (!data.ok) throw new Error(data.error || 'Pair failed');
+      const cookiesBox = el('gmessages-cookies-input');
+      if (cookiesBox) cookiesBox.value = '';
+      startPoll();
+      await refreshPhonePanel();
+    } catch (err) {
+      setMsg('gmessages-msg', err.message || String(err), false);
+    }
+  });
   el('gmessages-pair-btn')?.addEventListener('click', async () => {
-    setMsg('gmessages-msg', 'Starting pairing...');
+    setMsg('gmessages-msg', 'Starting legacy QR pairing…');
     try {
       const data = await api('/gmessages/pair', 'POST');
       if (!data.ok) throw new Error(data.error || 'Pair failed');
@@ -192,13 +246,16 @@ export function initPhonePanel() {
     }
   });
   el('gmessages-repair-btn')?.addEventListener('click', async () => {
-    if (!window.confirm('This drops the current Google Messages pairing and shows a new QR. Continue?')) return;
-    setMsg('gmessages-msg', 'Resetting pairing...');
+    if (!window.confirm('This drops the current Google Messages session. You will need to paste fresh cookies and pair again. Continue?')) return;
+    setMsg('gmessages-msg', 'Resetting pairing…');
     try {
       const data = await api('/gmessages/repair', 'POST');
-      if (!data.ok) throw new Error(data.error || 'Repair failed');
-      startPoll();
+      if (!data.ok) throw new Error(data.error || 'Reset failed');
+      showEmoji('');
+      showQr('gmessages-qr-wrap', 'gmessages-qr', '');
+      stopPoll();
       await refreshPhonePanel();
+      setMsg('gmessages-msg', 'Session cleared. Paste fresh cURL and pair again.', true);
     } catch (err) {
       setMsg('gmessages-msg', err.message || String(err), false);
     }

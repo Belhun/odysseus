@@ -2136,14 +2136,62 @@
               Google Messages
               <span id="gmessages-status-pill" style="margin-left:auto;font-size:11px;font-weight:normal;opacity:0.7"></span>
             </h2>
-            <div class="admin-toggle-sub" style="margin-bottom:10px">On the phone: Google Messages → Settings → Device pairing → Pair a device, then scan this QR. Repair replaces the pairing if sync breaks.</div>
+            <div class="admin-toggle-sub" style="margin-bottom:10px">Google no longer supports QR pairing in the US. Pair with your Google account using a cURL copied from Firefox, then confirm with an emoji on your phone.</div>
+            <details class="gmessages-pairing-guide" open style="margin-bottom:12px;font-size:12px;line-height:1.55;border:1px solid var(--border,rgba(255,255,255,0.08));border-radius:8px;padding:10px 12px;background:rgba(0,0,0,0.15)">
+              <summary style="cursor:pointer;font-weight:600;margin-bottom:4px">Step-by-step: copy cURL on Windows (Firefox)</summary>
+              <p style="margin:8px 0 10px;opacity:0.85">Use <strong>Firefox</strong> in a <strong>private window</strong>. Do not use normal Chrome; its cookies rotate and break pairing.</p>
+
+              <div style="font-weight:600;margin:10px 0 6px">A. Prepare your phone</div>
+              <ol style="margin:0 0 10px 20px;padding:0">
+                <li>Open <strong>Google Messages</strong> on your Android phone.</li>
+                <li>Tap your <strong>account menu</strong> (top right) → <strong>Device pairing</strong>.</li>
+                <li>Make sure you are on <strong>Google Account pairing</strong>, not QR scanner.</li>
+                <li>Keep the phone unlocked and on Wi‑Fi.</li>
+              </ol>
+
+              <div style="font-weight:600;margin:10px 0 6px">B. Sign in and copy cURL in Firefox (Windows)</div>
+              <ol style="margin:0 0 10px 20px;padding:0">
+                <li>Open Firefox. Press <kbd style="font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid rgba(255,255,255,0.2)">Ctrl</kbd>+<kbd style="font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid rgba(255,255,255,0.2)">Shift</kbd>+<kbd style="font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid rgba(255,255,255,0.2)">P</kbd> for a <strong>private window</strong>.</li>
+                <li>
+                  Go to the Google login page:
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0">
+                    <a id="gmessages-config-login-link" href="https://accounts.google.com/AccountChooser?continue=https://messages.google.com/web/config" target="_blank" rel="noopener" style="word-break:break-all">accounts.google.com → messages config</a>
+                    <button type="button" class="admin-btn-sm" id="gmessages-copy-login-link-btn">Copy link</button>
+                  </div>
+                </li>
+                <li>Sign in with the <strong>same Google account</strong> you use in Google Messages on your phone.</li>
+                <li>Press <kbd style="font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid rgba(255,255,255,0.2)">F12</kbd> to open Developer Tools.</li>
+                <li>Click the <strong>Network</strong> tab.</li>
+                <li>Press <kbd style="font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid rgba(255,255,255,0.2)">Ctrl</kbd>+<kbd style="font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid rgba(255,255,255,0.2)">R</kbd> to reload the page.</li>
+                <li>In the filter box, type <code>config</code>.</li>
+                <li>Click the request named <code>config</code> or <code>config?pli=1</code> (URL contains <code>messages.google.com/web/config</code>).</li>
+                <li>Right-click that request → <strong>Copy</strong> → <strong>Copy as cURL</strong> → choose <strong>cURL (Windows)</strong> if Firefox asks.</li>
+                <li>Do not open other Google tabs in that private window. Close it after you paste below.</li>
+              </ol>
+
+              <div style="font-weight:600;margin:10px 0 6px">C. Pair in Odysseus</div>
+              <ol style="margin:0 0 10px 20px;padding:0">
+                <li>Paste the full cURL into the box below (it should start with <code>curl.exe</code>).</li>
+                <li>Click <strong>Pair with Google account</strong>.</li>
+                <li>When an emoji appears here, tap the <strong>matching emoji</strong> on your phone.</li>
+                <li>Wait for status <strong>Paired, syncing</strong>. If it fails, get a fresh cURL and try again.</li>
+              </ol>
+
+              <p style="margin:0;opacity:0.75;font-size:11px">The cURL contains live Google session cookies. Paste only on your own Odysseus server. Do not share it in chat or email. Google Fi “sync to Google Account” mode is not supported.</p>
+            </details>
+            <textarea id="gmessages-cookies-input" class="settings-select" rows="5" placeholder="Paste cURL (Windows) here — should start with curl.exe …" style="width:100%;font-family:monospace;font-size:11px;margin-bottom:8px"></textarea>
+            <div id="gmessages-emoji-wrap" style="display:none;margin:8px 0 12px;text-align:center">
+              <div style="font-size:11px;opacity:0.8;margin-bottom:6px">On your phone, tap this emoji:</div>
+              <div id="gmessages-emoji" style="font-size:56px;line-height:1.2"></div>
+            </div>
             <div id="gmessages-qr-wrap" style="display:none;margin:8px 0 12px">
               <img id="gmessages-qr" alt="Google Messages pairing QR" width="220" height="220" style="background:#fff;border-radius:8px;padding:8px">
-              <div id="gmessages-qr-hint" style="font-size:11px;opacity:0.7;margin-top:6px">Waiting for you to scan...</div>
+              <div id="gmessages-qr-hint" style="font-size:11px;opacity:0.7;margin-top:6px">Legacy QR pairing (may not work in the US)</div>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <button type="button" class="admin-btn-add" id="gmessages-pair-btn">Show pairing QR</button>
-              <button type="button" class="admin-btn-add" id="gmessages-repair-btn">Repair pairing</button>
+              <button type="button" class="admin-btn-add" id="gmessages-pair-google-btn">Pair with Google account</button>
+              <button type="button" class="admin-btn-sm" id="gmessages-repair-btn">Reset pairing</button>
+              <button type="button" class="admin-btn-sm" id="gmessages-pair-btn" title="Legacy QR flow">Legacy QR</button>
               <button type="button" class="admin-btn-sm" id="gmessages-cancel-btn" style="display:none">Cancel</button>
               <button type="button" class="admin-btn-sm" id="gmessages-serve-btn">Restart sync</button>
             </div>

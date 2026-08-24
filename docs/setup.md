@@ -514,7 +514,7 @@ The phone talks to the **same host as the Odysseus UI**, path `/phonepi`:
 
 Do not use a separate `:11041` port. Odysseus proxies that socket internally. Do not enable Tailscale Funnel; `/phonepi` is not cookie-auth'd (the tailnet is the gate, same as the old PhonePi port).
 
-Open **Settings → Phone** in the Odysseus UI for the host/port to copy, a PhonePi restart button, and Google Messages pairing. Click **Show pairing QR**, then on the phone: Google Messages → Settings → Device pairing → Pair a device. **Repair pairing** drops the session and shows a new QR if sync breaks.
+Open **Settings → Phone** in the Odysseus UI for the host/port to copy, a PhonePi restart button, and Google Messages pairing. The pairing card includes a step-by-step guide for copying **cURL (Windows)** from Firefox. Paste the cURL, click **Pair with Google account**, then tap the matching emoji on your phone (Google Messages → Device pairing). **Reset pairing** drops the session; paste fresh cookies to pair again.
 
 Disable any leftover Settings → MCP row that still points at a Windows `F:\Codeing Project\phonepi-mcp\...` path, or two servers will fight over the loopback socket.
 

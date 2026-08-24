@@ -15,8 +15,9 @@ func main() {
 		With().Timestamp().Logger().Level(level)
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: openmessage <pair|serve|send>")
-		fmt.Fprintln(os.Stderr, "  pair                          - Pair with your phone via QR code")
+		fmt.Fprintln(os.Stderr, "Usage: openmessage <pair|pair-google|serve|send>")
+		fmt.Fprintln(os.Stderr, "  pair                          - Pair with your phone via QR code (legacy)")
+		fmt.Fprintln(os.Stderr, "  pair-google                   - Pair via Google account cookies + emoji")
 		fmt.Fprintln(os.Stderr, "  serve                         - Start MCP server (stdio)")
 		fmt.Fprintln(os.Stderr, "  send <conversation_id> <msg>  - Send message to a conversation")
 		os.Exit(1)
@@ -26,6 +27,8 @@ func main() {
 	switch os.Args[1] {
 	case "pair":
 		err = cmd.RunPair(logger)
+	case "pair-google":
+		err = cmd.RunPairGoogle(logger)
 	case "serve":
 		err = cmd.RunServe(logger)
 	case "send":

@@ -183,6 +183,41 @@ def _spawn(args: list[str]) -> subprocess.Popen:
     return subprocess.Popen(**kwargs)
 
 
+def cookies_input_path() -> Path:
+    return gmessages_data_dir() / "cookies-input.txt"
+
+
+def start_pair_google(*, cookies_input: str, reset_session: bool = False) -> dict:
+    """Pair via Google account cookies + phone emoji confirmation."""
+    raw = (cookies_input or "").strip()
+    if not raw:
+        return {"ok": False, "error": "Paste a cURL command or JSON cookies first."}
+    bin_path = gmessages_bin()
+    if not bin_path:
+        return {"ok": False, "error": "Google Messages bridge binary is not in this image. Rebuild Odysseus."}
+    stop_gmessages_processes()
+    data_dir = gmessages_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    if reset_session:
+        for name in ("session.json", "qr-url.txt", "pair-status.json", "cookies-input.txt"):
+            path = data_dir / name
+            if path.is_file():
+                path.unlink()
+    try:
+        cookies_input_path().write_text(raw + "\n", encoding="utf-8")
+    except OSError as exc:
+        return {"ok": False, "error": f"Could not save cookies: {exc}"}
+    pair_status_path().write_text(
+        json.dumps({"state": "starting", "mode": "google"}),
+        encoding="utf-8",
+    )
+    global _pair_proc
+    _pair_proc = _spawn([str(bin_path), "pair-google"])
+    logger.info("Started Google Messages pair-google pid=%s", _pair_proc.pid)
+    threading.Thread(target=_wait_then_serve, daemon=True).start()
+    return {"ok": True, "pairing": True, "mode": "google"}
+
+
 def start_pair(*, reset_session: bool = False) -> dict:
     bin_path = gmessages_bin()
     if not bin_path:
@@ -245,8 +280,15 @@ def cancel_pair() -> dict:
 
 
 def repair_pairing() -> dict:
-    """Stop sync, drop the session, show a new QR."""
-    return start_pair(reset_session=True)
+    """Stop sync, drop the session. Caller must supply fresh Google cookies."""
+    stop_gmessages_processes()
+    data_dir = gmessages_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("session.json", "qr-url.txt", "pair-status.json", "cookies-input.txt"):
+        path = data_dir / name
+        if path.is_file():
+            path.unlink()
+    return {"ok": True, "reset": True, "needs_cookies": True}
 
 
 def qr_png_data_uri(text: str) -> str | None:
@@ -267,12 +309,18 @@ def qr_png_data_uri(text: str) -> str | None:
 def read_pair_status() -> dict:
     state = "idle"
     url = ""
+    emoji = ""
+    mode = ""
+    error = ""
     status_file = pair_status_path()
     if status_file.is_file():
         try:
             data = json.loads(status_file.read_text(encoding="utf-8"))
             state = str(data.get("state") or state)
             url = str(data.get("url") or "")
+            emoji = str(data.get("emoji") or "")
+            mode = str(data.get("mode") or "")
+            error = str(data.get("error") or "")
         except (OSError, ValueError):
             pass
     if not url and qr_url_path().is_file():
@@ -281,14 +329,17 @@ def read_pair_status() -> dict:
         except OSError:
             pass
     pairing_live = bool(_pair_proc and _pair_proc.poll() is None)
-    if is_paired() and state != "waiting":
+    if is_paired() and state not in ("waiting", "emoji_wait", "starting"):
         state = "paired"
     elif pairing_live and state == "idle":
-        state = "waiting"
-    qr = qr_png_data_uri(url) if url else None
+        state = "waiting" if mode == "qr" else "starting"
+    qr = qr_png_data_uri(url) if url and mode != "google" else None
     return {
         "state": state,
         "url": url,
+        "emoji": emoji,
+        "mode": mode,
+        "error": error,
         "qr": qr,
         "pairing_live": pairing_live,
         "paired": is_paired(),

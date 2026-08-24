@@ -88,8 +88,14 @@ def test_phone_settings_markup_has_both_setup_qrs():
     assert 'id="phonepi-deeplink"' in html
     assert 'id="phoneapp-setup-qr"' in html
     assert 'id="phoneapp-mint-qr-btn"' in html
+    assert 'id="gmessages-cookies-input"' in html
+    assert 'id="gmessages-pair-google-btn"' in html
+    assert 'gmessages-pairing-guide' in html
+    assert 'Copy as cURL' in html
+    assert 'cURL (Windows)' in html
     js = Path("static/js/phonepiSettings.js").read_text(encoding="utf-8")
     assert "/phoneapp-setup" in js
+    assert "/gmessages/pair-google" in js
 
 
 def test_phonepi_stdio_skipped_when_disabled(monkeypatch):
@@ -116,13 +122,25 @@ def test_gmessages_read_pair_status_from_files(tmp_path, monkeypatch):
 
     (tmp_path / "qr-url.txt").write_text("https://support.google.com/messages/?p=web_computer\n", encoding="utf-8")
     (tmp_path / "pair-status.json").write_text(
-        '{"state":"waiting","url":"https://support.google.com/messages/?p=web_computer"}',
+        '{"state":"emoji_wait","mode":"google","emoji":"🐶🎈"}',
         encoding="utf-8",
     )
     status = read_pair_status()
-    assert status["state"] == "waiting"
-    assert status["url"].startswith("https://")
+    assert status["state"] == "emoji_wait"
+    assert status["mode"] == "google"
+    assert status["emoji"] == "🐶🎈"
     assert status["paired"] is False
+    assert status["qr"] is None
+
+
+def test_gmessages_start_pair_google_requires_input(tmp_path, monkeypatch):
+    monkeypatch.setenv("PHONEPI_GMESSAGES_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PHONEPI_GMESSAGES_BIN", str(tmp_path / "missing-bin"))
+    from src.gmessages_bridge import start_pair_google
+
+    result = start_pair_google(cookies_input="")
+    assert result["ok"] is False
+    assert "paste" in result["error"].lower()
 
 
 def test_phonepi_proxy_closes_when_disabled(monkeypatch):
