@@ -11,6 +11,7 @@ Feature work no longer lives on long-lived branches. Use the feature map below, 
 | See every fork feature and where its docs live | [`features/INDEX.md`](features/INDEX.md) |
 | Install / run / secure Odysseus | [`setup.md`](setup.md) |
 | Work on finance / banking | [`features/finance.md`](features/finance.md) |
+| Connect PhoneApp (token + login) | [`phone-client-connect-guide.md`](phone-client-connect-guide.md) |
 | Work on local email sync | [`features/email.md`](features/email.md) |
 | Work on SysForge Business | [`features/sysforge.md`](features/sysforge.md) |
 | Work on performance tracking | [`features/performance.md`](features/performance.md) |

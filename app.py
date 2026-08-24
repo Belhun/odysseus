@@ -71,7 +71,7 @@ from core.constants import (
     REQUEST_TIMEOUT, OPENAI_API_KEY, AUTH_FILE,
 )
 from core.database import SessionLocal, ApiToken
-from core.middleware import SecurityHeadersMiddleware, is_cors_preflight
+from core.middleware import SecurityHeadersMiddleware, is_cors_preflight, LOCALHOST_ORIGIN_REGEX
 from core.auth import AuthManager, normalize_known_username
 from core.exceptions import (
     SessionNotFoundError, InvalidFileUploadError,
@@ -134,6 +134,7 @@ allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost,http://127.0.0.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=LOCALHOST_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=CORS_ALLOW_METHODS,
     allow_headers=[

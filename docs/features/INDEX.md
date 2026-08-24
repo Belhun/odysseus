@@ -7,6 +7,7 @@ Use short-lived branches only for risky work. Keep durable knowledge here and un
 | Feature | Status | Code | Feature guide | Research | Plans |
 |---------|--------|------|---------------|----------|-------|
 | Finance / banking | Active | `integrations/finance/` | [finance.md](finance.md) | [research/finance](../research/finance/) | [plans/finance](../plans/finance/) |
+| PhoneApp connect / tokens | Active | `PhoneApp/` + Settings token UI | [phone-client-connect-guide.md](../phone-client-connect-guide.md) | — | — |
 | Local email sync | Active | email routes + local sync services | [email.md](email.md) | — | [plans/email](../plans/email/) |
 | SysForge Business | Active | `integrations/sysforge/` | [sysforge.md](sysforge.md) | [research/sysforge](../research/sysforge/) | [plans/sysforge](../plans/sysforge/) + [migration-audit](../migration-audit/) |
 | Performance tracking | Active | diagnostics / perf event bus | [performance.md](performance.md) | [research/performance](../research/performance/) | roadmap in research |

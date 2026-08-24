@@ -35,6 +35,14 @@ def test_finance_write_scope_implies_read():
     assert _normalize_scopes("finance:write") == ["finance:read", "finance:write"]
 
 
+def test_phone_finance_profile_is_read_and_write():
+    from routes.api_token_routes import TOKEN_PROFILES
+
+    assert TOKEN_PROFILES["phone_finance"] == ["finance:read", "finance:write"]
+    assert _normalize_scopes(None, "phone_finance") == ["finance:read", "finance:write"]
+    assert "chat" not in _normalize_scopes(None, "phone_finance")
+
+
 def test_chat_token_cannot_use_finance_routes():
     req = _token_request(scopes=["chat"], method="GET")
     with pytest.raises(HTTPException) as exc:

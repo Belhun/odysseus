@@ -35,7 +35,7 @@ v1 web surfaces:
 - Net worth and cashflow cards on Reports
 - Density, privacy blur on `.finance-money`, inline amount math (`12.50+3.20`)
 
-Odysseus stays the books. No Plaid, envelopes, household sharing, or auto-post. Tokens: mint `ody_` with `finance:read` / `finance:write`. Cookie sessions are unchanged. `docs/plans/finance/07-tokens-companion.md` is stale if present.
+Odysseus stays the books. No Plaid, envelopes, household sharing, or auto-post. Tokens: mint `ody_` with `finance:read` / `finance:write` via Settings → **Phone app token** (`phone_finance`). Cookie sessions are unchanged. See [`docs/phone-client-connect-guide.md`](../phone-client-connect-guide.md). `docs/plans/finance/07-tokens-companion.md` is stale if present.
 
 The steal spec path `docs/plans/finance/finance-steal/` was not in this git checkout; do not invent one.
 
