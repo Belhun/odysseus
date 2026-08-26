@@ -524,6 +524,41 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "discover_tools",
+            "description": "Search the full tool catalog or unlock tools for your NEXT agent round when your current callable tool list is missing what you need. search: find tools by intent (returns names + short descriptions, not full schemas). list: browse the catalog with an optional pattern filter. unlock: add tool names so their schemas appear on the following round — call unlock, then call the unlocked tool on the next round. MCP tools use qualified names mcp__server__tool.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["search", "list", "unlock"],
+                        "description": "search = RAG lookup by intent; list = browse catalog; unlock = pin tools for next round.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "For search: describe what you are trying to do.",
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "For list: optional substring filter on name or description.",
+                    },
+                    "tools": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "For unlock: tool names to add for your next agent round.",
+                    },
+                    "k": {
+                        "type": "integer",
+                        "description": "For search: max results (default 8, max 20).",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "manage_tasks",
             "description": "Manage scheduled/automated tasks: list, create, edit, delete, pause, resume, or run tasks. Use this for ANY recurring/scheduled request ('every morning…', 'each day at 7:30', 'daily summarize…') — create a task rather than doing it once. Task types: llm (AI runs a prompt), research (runs the deep-research pipeline on a question), or action (built-in automation). Triggers can be time-based or event-based.",
             "parameters": {
@@ -1847,6 +1882,8 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
         # them once; pre-escaping here caused literal ``\u00f1`` sequences to
         # remain visible in the debug panel.
         content = json.dumps(args, ensure_ascii=False)
+    elif tool_type == "discover_tools":
+        content = json.dumps(args)
     else:
         content = json.dumps(args)
 

@@ -121,6 +121,7 @@ _AGENT_RULES = """\
 - BIAS TOWARD ACTION on edit requests. If the user says "edit out X", "remove the Y paragraph", "change Z" — JUST DO IT with your best interpretation. Don't ask for clarification on minor ambiguity. The user can undo or re-prompt if wrong.
 - AFTER A TOOL SUCCEEDS, do not second-guess. The success message ("Document edited: v2, 1 edit") means it worked. Reply in ONE short sentence confirming what was done. No re-checking, no replaying the diff in your head, no validation theater.
 - AFTER A TOOL FAILS (timeout, error, "Unknown action", "not found"), DO NOT GO SILENT. The user expects a follow-up: either retry with a fix (e.g. correct args, longer-running form, run `tail -f /tmp/foo.log` to see progress, split into smaller steps), OR explicitly tell them "this didn't work, want me to try X instead?". A failed tool is not a stopping condition — only a successful one is.
+- If you need a capability not in your current tool list, call `discover_tools` with `action=search` and your intent, then `action=unlock` with the names you need. Unlocked tools appear on your NEXT round.
 - YOU DECLARE WHEN THE JOB IS DONE — not a timer. Keep taking concrete steps while the task still needs them; you have plenty of rounds, so don't rush to quit just because you've made a few calls. There are exactly three ways to end a turn: (1) DONE — before you declare it, sanity-check that every concrete thing the user asked for actually exists or succeeded (file written, edit applied, command exited clean); then stop calling tools and write the final answer (that IS your "done" signal); (2) BLOCKED — you genuinely can't proceed (a capability is missing, permission denied, or data you can't obtain), so say plainly what's blocking you, in a sentence or two, and stop; (3) keep going with the single most useful next step. The only wrong moves are trailing off mid-task without one of these, and repeating a call you already ran.
 - Calendar: call `manage_calendar` with `action=list_calendars` FIRST before create/update/delete operations.
 - BULK email actions ("delete all those", "mark all as read", "archive these", "delete all spam", "mark these 19 read") → use the `bulk_email` tool ONCE with either the exact `uids` list from the latest `list_emails` result or `all_unread: true`. NEVER just say you deleted/archived/marked messages unless a delete/archive/mark/bulk email tool call succeeded. NEVER loop mark_email_read / archive_email / delete_email one message at a time — that floods the context and can blow the token budget. One bulk_email call handles the whole set.
@@ -171,6 +172,7 @@ _API_AGENT_RULES = """\
 - BIAS TOWARD ACTION on edit requests. If the user says "edit out X", "remove the Y paragraph", "change Z" — call the edit tool with your best interpretation. Don't ask for clarification on minor ambiguity. The user can undo.
 - AFTER A TOOL SUCCEEDS, do not second-guess. A success response means it worked. Reply in ONE short sentence confirming what was done. No verification thinking, no re-analyzing — move on.
 - AFTER A TOOL FAILS, DO NOT GO SILENT. The user expects a follow-up: retry with a fix, run a diagnostic (`tail`, `ls`, `which`), or explicitly tell them what didn't work and what you'll try next. Failure is not a stopping condition.
+- If you need a capability that is not in your current callable tool list, call `discover_tools` with `action=search` and your intent, then `action=unlock` with the tool names you need. Unlocked tools appear on your NEXT round — call unlock first, then use the tool on the following round. Do not substitute bash when a dedicated tool exists.
 - YOU DECLARE WHEN THE JOB IS DONE — not a timer. Keep taking concrete steps while the task still needs them; don't quit early just because you've made a few calls. Three ways to end a turn: (1) DONE — before declaring it, verify every concrete deliverable the user asked for actually exists or succeeded; then stop calling tools and write the final answer (that IS your "done" signal); (2) BLOCKED — you can't proceed (missing capability, permission denied, unobtainable data), so state plainly what's blocking you and stop; (3) keep going with the single most useful next step. Never trail off mid-task without (1) or (2), and never repeat a call you already ran.
 - Calendar: call `manage_calendar` with `action=list_calendars` FIRST before create/update/delete operations.
 - "Create/add/write a note" / "notes" / "todos" / "remind me to X at <time>" → use `manage_notes`. Do NOT store notes in `manage_memory`; memory is for persistent facts/preferences about the user, not note content. For reminders, include a `due_date`; for todos, use `note_type=checklist` when appropriate. `manage_tasks` is for RECURRING background AI jobs, NOT for one-off user reminders.
@@ -628,6 +630,7 @@ Stage a workspace file for SysForge multipart commits. Returns upload_token for 
     "ui_control": "- ```ui_control``` — Control the UI: toggle tools on/off, OPEN PANELS, open email reply drafts, switch models, change themes. Commands: `toggle <name> on/off` (names: bash/shell, web/search, research, incognito, document_editor/documents), `open_panel <name>` (panels: documents, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook, finance/banking/budget), `open_email_reply <uid> <folder> <reply|reply-all|ai-reply> <body text>` (opens an email compose document pre-filled with body, DOES NOT send; use this for normal \"write/draft a reply saying X\" requests), `set_mode agent/chat`, `switch_model <name>`, `set_theme <preset>`, `create_theme <name> <bg> <fg> <panel> <border> <accent>` (optional key=val for advanced colors AND background effects: bgPattern=<none|dots|synapse|rain|constellations|perlin-flow|petals|sparkles|embers>, bgEffectColor=#RRGGBB, bgEffectIntensity=<num>, bgEffectSize=<num>, frosted=true|false). \"open documents\" / \"open library\" / \"show gallery\" / \"open inbox\" / \"open notes\" / \"open cookbook\" / \"open finance\" all map to `open_panel <name>`. Built-in theme presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute. For any other vibe/name, use create_theme.",
     "ask_user": "- ```ask_user``` — Ask the user a multiple-choice question when the task is genuinely ambiguous and the answer changes what you do next (pick an approach, confirm an assumption, choose a target). Args (JSON): {\"question\": \"...\", \"options\": [{\"label\": \"...\", \"description\": \"...\"?}, ...], \"multi\": false?}. 2-6 options. The user gets clickable buttons; calling this ENDS your turn and their choice comes back as your next message. Prefer sensible defaults — only ask when you truly can't proceed well without their input.",
     "update_plan": "- ```update_plan``` — While executing an approved plan, write the plan back: tick steps done or revise them. Args (JSON): {\"plan\": \"- [x] done step\\n- [ ] next step\"}. Always pass the COMPLETE checklist, not a diff. Call it after finishing each step (mark it `- [x]`) and whenever the user asks to change the plan. The user's docked plan window updates live. Does nothing if there's no active plan.",
+    "discover_tools": "- ```discover_tools``` — Search/unlock tools when your current callable list is missing what you need. Args (JSON): {\"action\":\"search\",\"query\":\"...\"} finds tools by intent (names + one-line descriptions). {\"action\":\"list\",\"pattern\":\"finance\"} browses the catalog. {\"action\":\"unlock\",\"tools\":[\"manage_finance\",\"grep\"]} adds tools for your NEXT agent round — call unlock, then call the unlocked tool on the following round. MCP tools use qualified names `mcp__server__tool`.",
     "list_served_models": "- ```list_served_models``` — Show what the Cookbook (LLM-serving subsystem) is currently running. NO args. Use this for ANY 'what's running' / 'what's serving' / 'show my cookbook' / 'is anything up' query. DO NOT shell out (`ps aux`, `docker ps`, etc.) — this tool is the source of truth. Failed serve tasks include recent logs plus diagnosis/retry suggestions; use those suggestions to call `serve_model` again with an adjusted command when appropriate.",
     "stop_served_model": "- ```stop_served_model``` — Stop a running model server. Args (JSON): {\"session_id\": \"<from list_served_models>\"}. Use for 'kill my cookbook' / 'stop the model' / 'shut down vLLM'.",
     "tail_serve_output": "- ```tail_serve_output``` — Read the actual tmux stderr/traceback of a CURRENTLY failing cookbook task. Args (JSON): {\"session_id\": \"<from list_served_models>\", \"tail\": 150?}. **Use ONLY after** you just launched something via `serve_model` AND `list_served_models` reports YOUR new task as `crashed`/`error`. DO NOT use it on old stopped/completed download tasks (they're historical noise — won't predict whether a new launch succeeds). DO NOT call it before launching a fresh attempt. When you do call it, bump `tail` to 400+ only if the visible error references 'see root cause above'.",
@@ -2278,7 +2281,7 @@ def _build_base_prompt(
         # ALWAYS_AVAILABLE back in here used to silently undo those
         # drops. Only force-include the irreducible loop primitives
         # (ask_user, update_plan) as belt-and-suspenders.
-        tool_names = set(relevant_tools) | {"ask_user", "update_plan"}
+        tool_names = set(relevant_tools) | {"ask_user", "update_plan", "discover_tools"}
         if needs_admin:
             tool_names |= _ADMIN_TOOLS
         agent_prompt = _assemble_prompt(tool_names, disabled, compact=compact)
@@ -4407,6 +4410,23 @@ async def stream_agent_loop(
                                 break
                     except Exception as _e:
                         logger.debug(f"skill requires_toolsets unlock skipped: {_e}")
+
+            # discover_tools unlock: union requested tools into the next round's
+            # schema list (same pattern as skill requires_toolsets above).
+            if (
+                block.tool_type == "discover_tools"
+                and _relevant_tools is not None
+                and not result.get("error")
+                and result.get("exit_code") == 0
+            ):
+                _unlocked = result.get("unlocked_tools") or []
+                _new_unlock = [t for t in _unlocked if t not in _relevant_tools]
+                if _new_unlock:
+                    _relevant_tools.update(_new_unlock)
+                    logger.info(
+                        "[tool-rag] discover_tools unlocked for next round: %s",
+                        sorted(_new_unlock),
+                    )
 
             # Extract structured web sources from web_search tool output.
             # web_search returns {"output": ..., "exit_code": 0}; check "output"
