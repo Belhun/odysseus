@@ -4,6 +4,9 @@ HTTP /api/phonepi/* is cookie-auth'd (require_admin). The /phonepi WebSocket
 is not: Starlette BaseHTTPMiddleware skips WebSocket, and the phone has no
 session cookie. Bind PhonePi to loopback and put Tailscale (not Funnel) in
 front of the UI host. Same gate as the old raw :11041 socket.
+
+The /gmessages/* HTTP proxy is admin-only and forwards to the OpenMessage UI
+on loopback (default :11042) so you can read SMS/RCS in a normal browser tab.
 """
 
 from __future__ import annotations
@@ -93,7 +96,9 @@ async def phoneapp_setup(request: Request):
     import bcrypt
 
     from core.database import ApiToken, get_db_session
+    from routes.api_token_routes import _normalize_scopes
     from src.gmessages_bridge import qr_png_data_uri
+    from src.phoneapp_setup import mint_setup_code
     from src.phonepi import phoneapp_public_url, phoneapp_setup_deeplink
 
     user = get_current_user(request) or ""
@@ -105,10 +110,12 @@ async def phoneapp_setup(request: Request):
     if not isinstance(body, dict):
         body = {}
     name = str(body.get("name") or "PhoneApp QR").strip()[:100]
+    profile = str(body.get("profile") or "phone_full").strip() or "phone_full"
+    scope_list = _normalize_scopes(profile=profile)
     raw = "ody_" + secrets.token_urlsafe(32)
     token_hash = bcrypt.hashpw(raw.encode(), bcrypt.gensalt()).decode()
     token_id = str(uuid.uuid4())[:8]
-    scopes = "finance:read,finance:write"
+    scopes = ",".join(scope_list)
     with get_db_session() as db:
         db.add(
             ApiToken(
@@ -128,7 +135,8 @@ async def phoneapp_setup(request: Request):
     except Exception:
         pass
     url = phoneapp_public_url()
-    deeplink = phoneapp_setup_deeplink(url=url, token=raw, user=user)
+    setup_code = mint_setup_code(token=raw, user=user, url=url)
+    deeplink = phoneapp_setup_deeplink(url=url, setup_code=setup_code, user=user)
     return JSONResponse(
         {
             "ok": True,
@@ -139,11 +147,33 @@ async def phoneapp_setup(request: Request):
             "user": user,
             "token": raw,
             "token_prefix": raw[:8],
-            "scopes": scopes.split(","),
+            "scopes": scope_list,
+            "profile": profile,
+            "setup_code": setup_code,
+            "setup_code_ttl_seconds": 300,
             "deeplink": deeplink,
             "qr": qr_png_data_uri(deeplink),
         }
     )
+
+
+@router.post("/api/phoneapp/exchange-setup")
+async def phoneapp_exchange_setup(request: Request):
+    """Exchange a single-use setup code from a PhoneApp QR for the finance token."""
+    from src.phoneapp_setup import exchange_setup_code
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    code = str(body.get("code") or "").strip()
+    payload = exchange_setup_code(code)
+    if not payload:
+        return JSONResponse({"ok": False, "error": "Invalid or expired setup code"}, status_code=400)
+    return JSONResponse({"ok": True, **payload})
 
 
 @router.post("/api/phonepi/restart")
@@ -159,16 +189,33 @@ async def phonepi_restart(request: Request):
     return JSONResponse({"ok": bool(ok)})
 
 
+@router.api_route("/gmessages", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+@router.api_route(
+    "/gmessages/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+)
+async def gmessages_ui_proxy(request: Request, path: str = ""):
+    from src.gmessages_proxy import proxy_gmessages
+
+    return await proxy_gmessages(request, path)
+
+
 @router.websocket("/phonepi")
 @router.websocket("/phonepi/")
 async def phonepi_proxy(websocket: WebSocket):
     """Phone app → Odysseus UI host → loopback Node WS (default 127.0.0.1:11041)."""
-    from src.phonepi import phonepi_enabled, phonepi_upstream_url
+    from src.phonepi import phonepi_enabled, phonepi_upstream_url, verify_phonepi_ws_token
 
-    await websocket.accept()
     if not phonepi_enabled():
         await websocket.close(code=1008, reason="PhonePi disabled")
         return
+
+    ws_token = websocket.query_params.get("token")
+    if not verify_phonepi_ws_token(ws_token):
+        await websocket.close(code=1008, reason="PhonePi auth required")
+        return
+
+    await websocket.accept()
 
     upstream = phonepi_upstream_url()
     try:

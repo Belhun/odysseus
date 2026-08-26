@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 from src.phonepi import (
+    gmessages_browser_url,
     phoneapp_public_url,
     phoneapp_setup_deeplink,
     phonepi_connect_hint,
@@ -362,13 +363,14 @@ def phonepi_status() -> dict:
         "connect_qr": qr_png_data_uri(deeplink),
         "phoneapp": {
             "url": phone_url,
-            "deeplink_template": phoneapp_setup_deeplink(url=phone_url, token="TOKEN", user="USER"),
+            "deeplink_template": phoneapp_setup_deeplink(url=phone_url, setup_code="CODE", user="USER"),
         },
         "gmessages": {
             "binary": bool(gmessages_bin()),
             "paired": is_paired(),
             "bridge_running": bridge_running(),
             "url": gmessages_url(),
+            "messages_ui_url": gmessages_browser_url(hint),
             "data_dir": str(gmessages_data_dir()),
             **pair,
         },

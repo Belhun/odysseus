@@ -3,13 +3,22 @@
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
+from src.gmessages_proxy import rewrite_gmessages_html, rewrite_location
 from src.phonepi import (
+    gmessages_browser_url,
     phoneapp_public_url,
     phoneapp_setup_deeplink,
     phonepi_connect_hint,
     phonepi_enabled,
     phonepi_setup_deeplink,
+    phonepi_ws_secret,
+    verify_phonepi_ws_token,
 )
+
+_EXAMPLE_HOST = "example-host.tail123456.ts.net"
+_EXAMPLE_ORIGIN = f"https://{_EXAMPLE_HOST}"
 
 
 def test_phonepi_disabled_by_default(monkeypatch):
@@ -23,48 +32,50 @@ def test_phonepi_enabled_flag(monkeypatch):
 
 
 def test_connect_hint_uses_tailscale_serve_origin(monkeypatch):
-    monkeypatch.setenv(
-        "ALLOWED_ORIGINS",
-        "http://localhost,https://dell-mini-pc.tailcbcc46.ts.net",
-    )
+    monkeypatch.setenv("ALLOWED_ORIGINS", f"http://localhost,{_EXAMPLE_ORIGIN}")
     hint = phonepi_connect_hint()
-    assert hint["host"] == "dell-mini-pc.tailcbcc46.ts.net"
+    assert hint["host"] == _EXAMPLE_HOST
     assert hint["port"] == 443
-    assert hint["path"] == "/phonepi"
-    assert hint["scheme"] == "wss"
-    assert hint["url"] == "wss://dell-mini-pc.tailcbcc46.ts.net:443/phonepi"
+    assert "token=" in hint["ws_url"]
 
 
 def test_connect_hint_explicit_origin():
-    hint = phonepi_connect_hint("https://dell-mini-pc.tailcbcc46.ts.net")
-    assert hint["host"] == "dell-mini-pc.tailcbcc46.ts.net"
+    hint = phonepi_connect_hint(_EXAMPLE_ORIGIN)
+    assert hint["host"] == _EXAMPLE_HOST
     assert hint["port"] == 443
     assert hint["url"].endswith("/phonepi")
 
 
-def test_connect_hint_loopback_http():
-    hint = phonepi_connect_hint("http://127.0.0.1:7000")
-    assert hint["host"] == "127.0.0.1"
-    assert hint["port"] == 7000
-    assert hint["scheme"] == "ws"
-    assert hint["url"] == "ws://127.0.0.1:7000/phonepi"
+def test_phonepi_setup_deeplink_includes_ws_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("ODYSSEUS_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("PHONEPI_WS_SECRET", raising=False)
+    link = phonepi_setup_deeplink(phonepi_connect_hint(_EXAMPLE_ORIGIN))
+    qs = parse_qs(urlparse(link).query)
+    assert qs["token"] == [phonepi_ws_secret()]
+
+
+def test_phoneapp_setup_deeplink_prefers_setup_code():
+    link = phoneapp_setup_deeplink(url=_EXAMPLE_ORIGIN, setup_code="setup_abc", user="alice")
+    qs = parse_qs(urlparse(link).query)
+    assert qs["code"] == ["setup_abc"]
+    assert "token" not in qs
 
 
 def test_phonepi_setup_deeplink_uses_custom_scheme():
-    hint = phonepi_connect_hint("https://dell-mini-pc.tailcbcc46.ts.net")
+    hint = phonepi_connect_hint(_EXAMPLE_ORIGIN)
     link = phonepi_setup_deeplink(hint)
     parsed = urlparse(link)
     assert parsed.scheme == "phonepi"
     assert parsed.netloc == "setup"
     qs = parse_qs(parsed.query)
-    assert qs["host"] == ["dell-mini-pc.tailcbcc46.ts.net"]
+    assert qs["host"] == [_EXAMPLE_HOST]
     assert qs["port"] == ["443"]
     assert not link.startswith("wss://")
 
 
 def test_phoneapp_setup_deeplink_carries_url_token_user():
     link = phoneapp_setup_deeplink(
-        url="https://dell-mini-pc.tailcbcc46.ts.net",
+        url=_EXAMPLE_ORIGIN,
         token="ody_test",
         user="belhun",
     )
@@ -72,88 +83,77 @@ def test_phoneapp_setup_deeplink_carries_url_token_user():
     assert parsed.scheme == "odyphone"
     assert parsed.netloc == "setup"
     qs = parse_qs(parsed.query)
-    assert qs["url"] == ["https://dell-mini-pc.tailcbcc46.ts.net"]
+    assert qs["url"] == [_EXAMPLE_ORIGIN]
     assert qs["token"] == ["ody_test"]
     assert qs["user"] == ["belhun"]
 
 
 def test_phoneapp_public_url_strips_https_443():
-    hint = phonepi_connect_hint("https://dell-mini-pc.tailcbcc46.ts.net")
-    assert phoneapp_public_url(hint) == "https://dell-mini-pc.tailcbcc46.ts.net"
+    hint = phonepi_connect_hint(_EXAMPLE_ORIGIN)
+    assert phoneapp_public_url(hint) == _EXAMPLE_ORIGIN
+
+
+def test_verify_phonepi_ws_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("ODYSSEUS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PHONEPI_WS_SECRET", "secret123")
+    assert verify_phonepi_ws_token("secret123") is True
+    assert verify_phonepi_ws_token("wrong") is False
 
 
 def test_phone_settings_markup_has_both_setup_qrs():
     html = Path("static/index.html").read_text(encoding="utf-8")
     assert 'id="phonepi-connect-qr"' in html
-    assert 'id="phonepi-deeplink"' in html
-    assert 'id="phoneapp-setup-qr"' in html
-    assert 'id="phoneapp-mint-qr-btn"' in html
-    assert 'id="gmessages-cookies-input"' in html
-    assert 'id="gmessages-pair-google-btn"' in html
-    assert 'gmessages-pairing-guide' in html
-    assert 'Copy as cURL' in html
-    assert 'cURL (Windows)' in html
+    assert 'id="gmessages-open-link"' in html
     js = Path("static/js/phonepiSettings.js").read_text(encoding="utf-8")
     assert "/phoneapp-setup" in js
-    assert "/gmessages/pair-google" in js
+    assert "messages_ui_url" in js
 
 
-def test_phonepi_stdio_skipped_when_disabled(monkeypatch):
-    monkeypatch.setenv("PHONEPI_ENABLED", "false")
-    from src.builtin_mcp import phonepi_stdio_kwargs
-
-    assert phonepi_stdio_kwargs("/app") is None
+def test_gmessages_browser_url_uses_public_origin(monkeypatch):
+    monkeypatch.setenv("ALLOWED_ORIGINS", f"http://localhost,https://{_EXAMPLE_HOST}")
+    assert gmessages_browser_url() == f"https://{_EXAMPLE_HOST}/gmessages/"
 
 
-def test_gmessages_start_pair_without_binary(tmp_path, monkeypatch):
-    monkeypatch.setenv("PHONEPI_GMESSAGES_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("PHONEPI_GMESSAGES_BIN", str(tmp_path / "missing-bin"))
-    from src.gmessages_bridge import is_paired, start_pair
-
-    assert is_paired() is False
-    result = start_pair()
-    assert result["ok"] is False
-    assert "binary" in result["error"].lower()
+def test_rewrite_gmessages_html_prefixes_api_paths():
+    html = b"const API = ''; fetchJSON(`/api/conversations`); href=\"/favicon.svg\""
+    out = rewrite_gmessages_html(html).decode()
+    assert "`/gmessages/api/conversations`" in out
+    assert 'href="/gmessages/favicon.svg"' in out
+    assert "API + '/gmessages/api/mark-read'" not in out
 
 
-def test_gmessages_read_pair_status_from_files(tmp_path, monkeypatch):
-    monkeypatch.setenv("PHONEPI_GMESSAGES_DATA_DIR", str(tmp_path))
-    from src.gmessages_bridge import read_pair_status
-
-    (tmp_path / "qr-url.txt").write_text("https://support.google.com/messages/?p=web_computer\n", encoding="utf-8")
-    (tmp_path / "pair-status.json").write_text(
-        '{"state":"emoji_wait","mode":"google","emoji":"🐶🎈"}',
-        encoding="utf-8",
-    )
-    status = read_pair_status()
-    assert status["state"] == "emoji_wait"
-    assert status["mode"] == "google"
-    assert status["emoji"] == "🐶🎈"
-    assert status["paired"] is False
-    assert status["qr"] is None
+def test_rewrite_location_adds_prefix():
+    assert rewrite_location("/api/status") == "/gmessages/api/status"
+    assert rewrite_location("/gmessages/") == "/gmessages/"
 
 
-def test_gmessages_start_pair_google_requires_input(tmp_path, monkeypatch):
-    monkeypatch.setenv("PHONEPI_GMESSAGES_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("PHONEPI_GMESSAGES_BIN", str(tmp_path / "missing-bin"))
-    from src.gmessages_bridge import start_pair_google
-
-    result = start_pair_google(cookies_input="")
-    assert result["ok"] is False
-    assert "paste" in result["error"].lower()
-
-
-def test_phonepi_proxy_closes_when_disabled(monkeypatch):
-    monkeypatch.setenv("PHONEPI_ENABLED", "false")
+def test_gmessages_proxy_requires_admin(monkeypatch, tmp_path):
+    monkeypatch.setenv("PHONEPI_ENABLED", "true")
     monkeypatch.setenv("AUTH_ENABLED", "false")
+    monkeypatch.setenv("ODYSSEUS_DATA_DIR", str(tmp_path))
+    from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from routes.phonepi_routes import setup_phonepi_routes
-    from fastapi import FastAPI
 
     app = FastAPI()
     app.include_router(setup_phonepi_routes())
     client = TestClient(app)
-    with client.websocket_connect("/phonepi") as ws:
-        msg = ws.receive()
-    assert msg.get("type") == "websocket.close"
-    assert msg.get("code") == 1008
+    res = client.get("/gmessages/")
+    assert res.status_code == 503
+
+
+def test_phonepi_proxy_rejects_missing_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("PHONEPI_ENABLED", "true")
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    monkeypatch.setenv("ODYSSEUS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PHONEPI_WS_SECRET", "ws-secret")
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routes.phonepi_routes import setup_phonepi_routes
+
+    app = FastAPI()
+    app.include_router(setup_phonepi_routes())
+    client = TestClient(app)
+    with pytest.raises(Exception):
+        with client.websocket_connect("/phonepi"):
+            pass

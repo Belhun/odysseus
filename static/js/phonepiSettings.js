@@ -108,6 +108,13 @@ function renderStatus(data) {
   showEmoji(waitingEmoji ? gm.emoji : '');
   const cancel = el('gmessages-cancel-btn');
   if (cancel) cancel.style.display = (waitingQr || waitingEmoji) ? '' : 'none';
+  const openWrap = el('gmessages-open-wrap');
+  const openLink = el('gmessages-open-link');
+  if (openWrap) {
+    const inboxUrl = gm.messages_ui_url || '/gmessages/';
+    if (openLink) openLink.href = inboxUrl;
+    openWrap.style.display = (gm.paired && gm.bridge_running) ? 'flex' : 'none';
+  }
   if (gm.paired && gm.bridge_running) {
     setMsg('gmessages-msg', 'Google Messages is paired and the sync server is running.', true);
   } else if (gm.paired) {
@@ -278,6 +285,11 @@ export function initPhonePanel() {
     } catch (err) {
       setMsg('gmessages-msg', err.message || String(err), false);
     }
+  });
+  el('gmessages-copy-open-link')?.addEventListener('click', async () => {
+    const url = el('gmessages-open-link')?.href || '/gmessages/';
+    await copyText(url);
+    setMsg('gmessages-msg', 'Messages inbox link copied. Open it while signed in to Odysseus.', true);
   });
 }
 
