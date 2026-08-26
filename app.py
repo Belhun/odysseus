@@ -274,6 +274,7 @@ if AUTH_ENABLED:
         "/api/auth/integrations/presets",
         "/api/health",
         "/api/version",
+        "/api/phoneapp/exchange-setup",
         "/login",
     }
     AUTH_EXEMPT_PREFIXES = ["/static", "/api/sysforge/companion/phone"]
