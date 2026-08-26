@@ -23,7 +23,7 @@ if (-not (Test-Path $ollamaExe)) {
 
 $env:OLLAMA_MODELS = [Environment]::GetEnvironmentVariable("OLLAMA_MODELS", "User")
 if (-not $env:OLLAMA_MODELS) { $env:OLLAMA_MODELS = "F:\ollama\models" }
-$env:OLLAMA_HOST = "0.0.0.0:11434"
+$env:OLLAMA_HOST = "127.0.0.1:11434"
 $env:OLLAMA_GPU_OVERIDE = "vulkan"
 
 $ollamaUp = $false

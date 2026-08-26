@@ -17,7 +17,7 @@ if (-not (Test-Path $modelsPath)) {
 }
 
 $env:OLLAMA_GPU_OVERIDE = "vulkan"
-$env:OLLAMA_HOST = "0.0.0.0:11434"
+$env:OLLAMA_HOST = "127.0.0.1:11434"
 $env:OLLAMA_ORIGINS = "*"
 $env:OLLAMA_MODELS = $modelsPath
 
