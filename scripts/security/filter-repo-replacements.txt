@@ -1,0 +1,5 @@
+dell-mini-pc.tailcbcc46.ts.net==>your-host.tailXXXXXX.ts.net
+100.79.4.36==>100.x.y.z
+tailcbcc46==>tailXXXXXX
+dell-mini-pc==>your-mini-host
+/home/belhun/==>/home/youruser/

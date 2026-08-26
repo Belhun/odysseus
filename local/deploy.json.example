@@ -1,0 +1,10 @@
+{
+  "odysseus_url": "https://your-host.tailXXXXXX.ts.net",
+  "magicdns_host": "your-host.tailXXXXXX.ts.net",
+  "tailscale_ip": "100.x.y.z",
+  "odysseus_user": "youruser",
+  "ssh_host": "your-mini-host",
+  "remote_repo": "~/odysseus",
+  "remote_path": "/home/youruser/odysseus",
+  "git_branch": "your-branch"
+}

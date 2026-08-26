@@ -103,10 +103,19 @@ dev-docs/
 # Windows-port working docs (local only, not for public repo)
 docs/windows-port/
 
+# Local config (hostnames, SSH targets — never commit real values)
+local/deploy.json
+
+# Personal deployment notes (local only)
+docs/plans/2026-08-15-mini-pc-issues-log.md
+docs/plans/2026-08-15-odysseus-dell-mini-pc-tailscale-plan.md
+
 # Personal playground sync (belhun/playground only; see scripts/sync-playground.ps1)
 scripts/sync-playground.ps1
-# Personal Mini PC deploy wrapper (see scripts/deploy-compose-host.ps1)
+# Personal Mini PC deploy wrappers
 scripts/deploy-mini-pc.ps1
+scripts/deploy-compose-host.ps1
+scripts/monitor-compose-host.ps1
 
 # Host-local Compose overlay (optional extras, bind, etc.)
 docker-compose.override.yml
