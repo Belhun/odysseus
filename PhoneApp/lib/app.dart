@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'screens/connect_screen.dart';
-import 'screens/shell_screen.dart';
+import 'app_gate.dart';
 import 'state/app_controller.dart';
 import 'theme/ody_theme.dart';
 
@@ -26,9 +25,7 @@ class OdysseusPhoneApp extends StatelessWidget {
           theme: OdyTheme.light(),
           darkTheme: OdyTheme.dark(),
           themeMode: themeMode,
-          home: controller.isConnected
-              ? ShellScreen(controller: controller)
-              : ConnectScreen(controller: controller),
+          home: AppGate(controller: controller),
         );
       },
     );

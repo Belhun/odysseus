@@ -222,8 +222,13 @@ void main() {
       ),
     );
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pumpAndSettle();
     expect(find.text('August 2026'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('No events this day'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('No events this day'), findsOneWidget);
     expect(find.byType(FloatingActionButton), findsOneWidget);
   });
@@ -262,9 +267,14 @@ void main() {
       ),
     );
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('cal-day-2026-08-15')));
-    await tester.pump();
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Standup'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('Standup'), findsWidgets);
   });
 

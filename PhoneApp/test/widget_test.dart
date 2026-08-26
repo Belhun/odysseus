@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:odysseus_phone/api/models.dart';
 import 'package:odysseus_phone/api/finance_client.dart';
 import 'package:odysseus_phone/api/ody_http.dart';
 import 'package:odysseus_phone/app.dart';
@@ -60,27 +61,38 @@ class EmptyFinanceHttp extends http.BaseClient {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('connect screen explains Tailscale', (tester) async {
+  testWidgets('setup screen explains Tailscale', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
     final controller = AppController(prefs: prefs);
     await tester.pumpWidget(OdysseusPhoneApp(controller: controller));
-    expect(find.text('Odysseus'), findsWidgets);
-    expect(find.text('Phone client'), findsOneWidget);
-    expect(find.textContaining('Tailscale'), findsWidgets);
-    expect(find.text('Home'), findsNothing);
+    expect(find.text('Odysseus setup'), findsOneWidget);
+    expect(find.text('First-time setup'), findsOneWidget);
     expect(find.text('Home'), findsNothing);
   });
 
   testWidgets('shell uses one bottom nav', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
-    final controller = AppController(prefs: prefs, httpClient: EmptyFinanceHttp());
+    final http = EmptyFinanceHttp();
+    final controller = AppController(prefs: prefs, httpClient: http);
+    controller.setupComplete = true;
+    controller.biometricLockEnabled = false;
+    controller.isUnlocked = true;
     controller.baseUrl = 'http://test:7000';
     controller.token = 'ody_test';
     controller.finance = FinanceClient(
-      OdyHttp(baseUrl: 'http://test:7000', token: 'ody_test', client: EmptyFinanceHttp()),
+      OdyHttp(baseUrl: 'http://test:7000', token: 'ody_test', client: http),
     );
+    controller.homePrefetched = true;
+    controller.cachedAccounts = [
+      FinanceAccount.fromJson({
+        'id': 'a1',
+        'name': 'Checking',
+        'posted_cents': 5000,
+        'balance_cents': 5000,
+      }),
+    ];
     await tester.pumpWidget(OdysseusPhoneApp(controller: controller));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
@@ -96,12 +108,17 @@ void main() {
   testWidgets('More opens Goals instead of a placeholder', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
+    final http = EmptyFinanceHttp();
     final httpLayer = OdyHttp(
       baseUrl: 'http://test:7000',
       token: 'ody_test',
-      client: EmptyFinanceHttp(),
+      client: http,
     );
-    final controller = AppController(prefs: prefs, httpClient: EmptyFinanceHttp());
+    final controller = AppController(prefs: prefs, httpClient: http);
+    controller.setupComplete = true;
+    controller.biometricLockEnabled = false;
+    controller.isUnlocked = true;
+    controller.homePrefetched = true;
     controller.httpLayer = httpLayer;
     controller.finance = FinanceClient(httpLayer);
     await tester.pumpWidget(OdysseusPhoneApp(controller: controller));

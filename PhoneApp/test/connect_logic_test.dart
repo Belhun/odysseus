@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:phone_app/connect_logic.dart';
+import 'package:odysseus_phone/connect_logic.dart';
 
 void main() {
   test('empty token is rejected and never looks like a password login', () {

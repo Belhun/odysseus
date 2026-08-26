@@ -13,6 +13,7 @@ import 'notes_list_screen.dart';
 import 'reports_screen.dart';
 import 'rules_screen.dart';
 import 'sankey_screen.dart';
+import 'security_screen.dart';
 
 class MoreScreen extends StatelessWidget {
   const MoreScreen({super.key, required this.controller});
@@ -77,6 +78,18 @@ class MoreScreen extends StatelessWidget {
               MaterialPageRoute(builder: (_) => SettingsScreen(controller: controller)),
             ),
           ),
+          ListTile(
+            leading: const Icon(Icons.security),
+            title: const Text('Security'),
+            subtitle: Text(
+              controller.biometricLockEnabled
+                  ? 'Biometric unlock on'
+                  : 'Stay signed in',
+            ),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => SecurityScreen(controller: controller)),
+            ),
+          ),
         ],
       ),
     );
@@ -138,6 +151,18 @@ class SettingsScreen extends StatelessWidget {
                 value: controller.privacyMode,
                 onChanged: controller.setPrivacy,
               ),
+              ListTile(
+                title: const Text('Security'),
+                subtitle: Text(
+                  controller.biometricLockEnabled
+                      ? 'Biometric unlock enabled'
+                      : 'Stay signed in — no lock screen',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => SecurityScreen(controller: controller)),
+                ),
+              ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Text('Theme', style: Theme.of(context).textTheme.titleSmall),
@@ -174,7 +199,7 @@ class SettingsScreen extends StatelessWidget {
                   children: [
                     OutlinedButton(
                       onPressed: () async {
-                        await controller.disconnect();
+                        await controller.logout();
                         if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
                       },
                       child: const Text('Sign out'),
@@ -185,12 +210,12 @@ class SettingsScreen extends StatelessWidget {
                         await controller.clearSavedToken();
                         if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
                       },
-                      child: const Text('Clear saved token'),
+                      child: const Text('Reset app'),
                     ),
                     const Padding(
                       padding: EdgeInsets.only(top: 4),
                       child: Text(
-                        'Sign out keeps the last ody_ token for one-tap reconnect. Clear saved token forgets it.',
+                        'Sign out clears your session and returns to setup (server, username, and token stay filled in). Reset app forgets everything.',
                         style: TextStyle(fontSize: 12),
                       ),
                     ),
