@@ -2,17 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'connect_logic.dart';
+import 'deploy_config.dart';
 import 'ody_session.dart';
 
-/// Home Mini PC: Pixel can ping the Tailscale IP but Android Private DNS
-/// (family-filter-dns.cleanbrowsing.org) cannot resolve MagicDNS.
-/// Same trick as `curl --resolve dell-mini-pc.tailcbcc46.ts.net:443:100.79.4.36`:
-/// connect to the IP, send Host as the MagicDNS name, and accept the Serve
-/// certificate only when it is for that name. Native password login reads the
-/// odysseus_session cookie from dart:io.
-const magicDnsIpOverrides = <String, String>{
-  'dell-mini-pc.tailcbcc46.ts.net': '100.79.4.36',
-};
+Map<String, String> get magicDnsIpOverrides => DeployConfig.magicDnsIpOverrides;
 
 OdySession createOdySession() => _IoOdySession();
 
@@ -21,13 +14,8 @@ HttpClient createOdyHttpClient() {
   client.userAgent = 'Odysseus-PhoneApp';
   client.badCertificateCallback = (X509Certificate cert, String host, int port) {
     for (final entry in magicDnsIpOverrides.entries) {
-      if (host != entry.key && host != entry.value) {
-        continue;
-      }
-      final subject = cert.subject;
-      if (subject.contains(entry.key)) {
-        return true;
-      }
+      if (host != entry.key && host != entry.value) continue;
+      if (cert.subject.contains(entry.key)) return true;
     }
     return false;
   };
@@ -36,7 +24,6 @@ HttpClient createOdyHttpClient() {
 
 class _IoOdySession implements OdySession {
   _IoOdySession() : _client = createOdyHttpClient();
-
   final HttpClient _client;
   String? _sessionCookie;
 
@@ -99,7 +86,5 @@ class _IoOdySession implements OdySession {
   }
 
   @override
-  void close() {
-    _client.close(force: true);
-  }
+  void close() => _client.close(force: true);
 }

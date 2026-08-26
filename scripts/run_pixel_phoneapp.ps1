@@ -44,7 +44,9 @@ $defines = @{
     ODY_URL = $boot.url
     ODY_TOKEN = $boot.token
     ODY_USER = $boot.user
-} | ConvertTo-Json
-[System.IO.File]::WriteAllText($definesFile, $defines)
+}
+if ($boot.magicdns_host) { $defines["ODY_MAGICDNS_HOST"] = [string]$boot.magicdns_host }
+if ($boot.tailscale_ip) { $defines["ODY_TAILSCALE_IP"] = [string]$boot.tailscale_ip }
+[System.IO.File]::WriteAllText($definesFile, ($defines | ConvertTo-Json))
 Write-Output "flutter run on $dev url=$($boot.url) user=$($boot.user) tokenPrefix=$($boot.token.Substring(0,8))..."
 & flutter run -d $dev --dart-define-from-file=$definesFile

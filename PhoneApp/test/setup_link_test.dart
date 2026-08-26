@@ -23,26 +23,29 @@ void main() {
     );
   });
 
-  test('sign-out keeps saved token; clear token wipes it', () async {
+  test('logout clears session and returns to setup', () async {
     SharedPreferences.setMockInitialValues({
       'baseUrl': 'https://dell-mini-pc.tailcbcc46.ts.net',
       'token': 'ody_saved',
       'username': 'belhun',
       'sessionCookie': 'cookie',
+      'setupComplete': true,
     });
     final prefs = await SharedPreferences.getInstance();
     final controller = AppController(prefs: prefs);
-    controller.baseUrl = 'https://dell-mini-pc.tailcbcc46.ts.net';
+    await controller.restore();
+    controller.baseUrl = 'https://your-host.tailXXXXXX.ts.net';
     controller.token = 'ody_saved';
     controller.sessionCookie = 'cookie';
-    await controller.disconnect();
+    await controller.logout();
     expect(controller.finance, isNull);
     expect(controller.token, 'ody_saved');
-    expect(prefs.getString('token'), 'ody_saved');
-    expect(prefs.getString('baseUrl'), 'https://dell-mini-pc.tailcbcc46.ts.net');
+    expect(controller.baseUrl, 'https://your-host.tailXXXXXX.ts.net');
+    expect(controller.username, 'belhun');
+    expect(controller.setupComplete, isFalse);
     expect(prefs.getString('sessionCookie'), isNull);
+    expect(prefs.getBool('setupComplete'), isFalse);
     await controller.clearSavedToken();
     expect(controller.token, isEmpty);
-    expect(prefs.getString('token'), isNull);
   });
 }

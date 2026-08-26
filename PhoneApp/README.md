@@ -23,16 +23,27 @@ Do not expose Odysseus to the public internet.
 
 ## Auth
 
-Preferred: an `ody_` API token with **`finance:read` and `finance:write`**.
+### First-time setup
 
-1. Open Odysseus in a browser (on the same Tailscale host).
-2. Admin → Tokens (or Settings → tokens).
-3. Create a token, enable Finance read + write. Profile `phone_finance` also selects those scopes.
-4. Paste the token into this app.
+Configure **server URL**, **username**, and **`ody_` API token** (pre-filled from deploy config or a setup link when available). Enter your **password** to sign in. Password is never stored on the device.
 
-Companion pairing tokens are **chat-only**. They get `403` on finance routes.
+After login, the app asks whether to enable **biometric unlock** (optional). If you decline, the app **stays signed in** and opens without a lock screen.
 
-Password login is also supported. It stores the `odysseus_session` cookie. That path is for native Android. Flutter **web** is cross-origin, so cookie login needs `ALLOWED_ORIGINS` to include the Flutter origin (for example `http://localhost:xxxxx`). Token auth avoids that.
+### Return visits
+
+| Biometric unlock | What happens |
+|------------------|--------------|
+| **On** (Android) | Biometric lock screen (fingerprint, face, or device PIN) |
+| **Off** | Auto login — session and token reused, no lock screen |
+| **Web** | Auto login; biometrics skipped |
+
+Toggle biometric unlock under **More → Security**. Turning it on requires your password once plus a biometric check. Turning it off returns to stay-signed-in mode.
+
+Token scopes: **`finance:read` and `finance:write`**. Mint from Odysseus gear → Phone app token.
+
+Companion pairing tokens are **chat-only** (`403` on finance).
+
+The legacy Connect screen remains for token-only reconnect. **Sign out** clears the session and returns to setup with fields pre-filled. Flutter **web** cookie login needs `ALLOWED_ORIGINS`; token auth avoids that.
 
 ## Run
 

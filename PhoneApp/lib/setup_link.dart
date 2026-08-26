@@ -3,11 +3,13 @@ class PhoneAppSetupLink {
     required this.url,
     this.token = '',
     this.user = '',
+    this.setupCode = '',
   });
 
   final String url;
   final String token;
   final String user;
+  final String setupCode;
 
   static const scheme = 'odyphone';
 
@@ -20,6 +22,7 @@ class PhoneAppSetupLink {
       url: url,
       token: uri.queryParameters['token']?.trim() ?? '',
       user: uri.queryParameters['user']?.trim() ?? '',
+      setupCode: uri.queryParameters['code']?.trim() ?? '',
     );
   }
 }

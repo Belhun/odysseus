@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 _REPO = Path(__file__).resolve().parent.parent
 _APP = _REPO / "PhoneApp"
 
@@ -30,8 +29,13 @@ def test_empty_token_does_not_password_login():
     assert "validateToken" in token_fn
 
 
-def test_io_factory_maps_mini_pc_magicdns():
-    io = _read("lib/ody_http_factory_io.dart")
-    assert "dell-mini-pc.tailcbcc46.ts.net" in io
-    assert "100.79.4.36" in io
-    assert "odysseus_session" in io
+def test_io_factory_uses_deploy_config_not_hardcoded_hosts():
+    io = (
+        _read("lib/ody_http_factory_io.dart")
+        + _read("lib/deploy_config.dart")
+        + _read("lib/connect_logic.dart")
+    )
+    assert "DeployConfig" in io
+    assert "dell-mini-pc" not in io
+    assert "tailcbcc46" not in io
+    assert "100.79.4.36" not in io

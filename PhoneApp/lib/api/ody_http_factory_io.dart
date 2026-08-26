@@ -7,13 +7,9 @@ import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 
 import '../debug_log.dart';
+import '../deploy_config.dart';
 
-/// When Android Private DNS is on, MagicDNS names like *.ts.net fail.
-/// TCP to the Tailscale IP still works. Dart HttpClient's connectionFactory
-/// does not TLS-wrap those sockets, so we speak HTTPS ourselves (curl --resolve).
-const magicDnsFallbackIps = <String, String>{
-  'dell-mini-pc.tailcbcc46.ts.net': '100.79.4.36',
-};
+Map<String, String> get magicDnsFallbackIps => DeployConfig.magicDnsIpOverrides;
 
 bool odyUsesRawHttps(Uri uri) => magicDnsFallbackIps.containsKey(uri.host);
 
