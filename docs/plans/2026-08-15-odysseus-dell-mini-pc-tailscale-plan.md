@@ -2,7 +2,7 @@
 
 Created: 2026-08-15
 
-Bring playground Odysseus up on `your-mini-host`, prove Tailscale access from this PC, then copy live data and fix Linux breakage. Do not do a one-shot dump.
+Bring playground Odysseus up on `dell-mini-pc`, prove Tailscale access from this PC, then copy live data and fix Linux breakage. Do not do a one-shot dump.
 
 ## Goal
 
@@ -17,10 +17,10 @@ Odysseus stays up on the Mini PC even when this Windows box is off. You reach it
 | Code to run | `belhun/playground` in this repo (356 local commits not on GitHub). |
 | Mini PC | Ubuntu Server, Docker 29 + Compose, Tailscale, user `belhun` (uid/gid 1000), docker group. |
 | Hardware | i5-7600T, 7.6 GB RAM, 419 GB free. No GPU. Do not serve local LLMs here. |
-| Tailnet name | `your-host.tailXXXXXX.ts.net` |
-| Tailscale IP | `100.x.y.z` |
+| Tailnet name | `dell-mini-pc.tailcbcc46.ts.net` |
+| Tailscale IP | `100.79.4.36` |
 | LAN IP (bulk copy) | `192.168.1.206` |
-| SSH | `ssh your-mini-host` |
+| SSH | `ssh dell-mini-pc` |
 
 Windows used `APP_BIND=0.0.0.0`. That also opens the LAN. The Mini PC keeps `APP_BIND=127.0.0.1` and uses Tailscale Serve instead. Do not enable Tailscale Funnel.
 
@@ -66,7 +66,7 @@ Phase 1 will look “empty” for chats and models. That is expected. Endpoint I
 ### Code
 
 - Bundle `belhun/playground` on this PC.
-- Copy the bundle over Tailscale (`scp` to `your-mini-host`).
+- Copy the bundle over Tailscale (`scp` to `dell-mini-pc`).
 - On the Mini PC: clone the bundle into `~/odysseus`, check out `belhun/playground`.
 - Do not copy `venv/`, `data/local/`, or Windows launch scripts as the runtime.
 
@@ -81,7 +81,7 @@ Write a Linux `.env` from the Windows one. Change these:
 - `AUTH_ENABLED=true`
 - `LOCALHOST_BYPASS=false`
 - `SECURE_COOKIES=true` (Serve is HTTPS)
-- `ALLOWED_ORIGINS=https://your-host.tailXXXXXX.ts.net`
+- `ALLOWED_ORIGINS=https://dell-mini-pc.tailcbcc46.ts.net`
 - Keep API keys you already have in `.env`; do not commit this file
 
 Copy the Phase 1 settings files into `~/odysseus/data/`.
@@ -104,7 +104,7 @@ Copy the Phase 1 settings files into `~/odysseus/data/`.
 
 URL to use from other tailnet devices:
 
-`https://your-host.tailXXXXXX.ts.net`
+`https://dell-mini-pc.tailcbcc46.ts.net`
 
 **Gate 1:** SSH session can hit loopback 7000. Serve is on. You have not copied `app.db` yet.
 
@@ -112,7 +112,7 @@ URL to use from other tailnet devices:
 
 From `belhuns-main` (this Windows box), Tailscale connected:
 
-- Open `https://your-host.tailXXXXXX.ts.net`
+- Open `https://dell-mini-pc.tailcbcc46.ts.net`
 - First HTTPS hit can sit 5–10s while the cert is issued
 - Log in with the copied `auth.json` account (or the first-boot admin password in `docker compose logs odysseus` if auth was not copied)
 - Confirm the shell loads. Chats/models may be empty. Theme/prefs should look familiar if `user_prefs.json` + `.app_key` copied.
@@ -186,4 +186,4 @@ Keep iterating until the Mini PC matches how you used Odysseus on Windows, minus
 
 ## Next action
 
-Phase 0 + Phase 1 on this machine and `your-mini-host`: bundle playground, rewrite `.env`, Compose up, Tailscale Serve, then you try the URL from this PC.
+Phase 0 + Phase 1 on this machine and `dell-mini-pc`: bundle playground, rewrite `.env`, Compose up, Tailscale Serve, then you try the URL from this PC.
