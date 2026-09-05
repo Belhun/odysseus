@@ -486,8 +486,14 @@ Key settings:
 | `ODYSSEUS_EMAIL_COMPOSE_UPLOAD_MAX_BYTES` | `26214400` | Email compose attachment cap in bytes (25 MB). |
 | `ODYSSEUS_STT_MAX_AUDIO_BYTES` | `26214400` | Speech-to-text audio cap in bytes (25 MB). |
 | `ODYSSEUS_ICS_MAX_BYTES` | `10485760` | Calendar `.ics` import cap in bytes (10 MB). |
+| `ODYSSEUS_PERF` | `true` | Enable performance event emission and background samplers. Set `false` to disable. |
+| `ODYSSEUS_PERF_SAMPLE_INTERVAL` | `30` | Idle process/GPU snapshot interval in seconds. |
+| `ODYSSEUS_PERF_TASK_INTERVAL` | `2` | Per-task resource sample interval in seconds while a scheduled task is running. |
+| `ODYSSEUS_CONTAINER_STATS` | `true` | Docker container stats sampler (requires Docker socket in Compose). |
 
 All upload-limit vars are validated (must be a positive integer) and optional; an invalid value fails fast at startup.
+
+For setup, validation, and testing of the performance-tracking feature, see [performance-tracking.md](./performance-tracking.md).
 
 ### Built-in MCP servers (optional setup)
 

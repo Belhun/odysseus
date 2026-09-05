@@ -72,6 +72,8 @@ class EmbeddingClient:
         self, texts: List[str], normalize_embeddings: bool = True
     ) -> np.ndarray:
         """Encode texts via the API. Returns (N, dim) float32 array."""
+        import time as _time
+        t0 = _time.perf_counter()
         if not texts:
             return np.array([], dtype="float32")
 
@@ -90,6 +92,18 @@ class EmbeddingClient:
         if self._dim is None and vecs.size > 0:
             self._dim = vecs.shape[1]
 
+        try:
+            from core.perf_emit import emit
+            emit(
+                "embedding.batch",
+                backend="http",
+                lane="custom",
+                batch_size=len(texts),
+                dimension=int(vecs.shape[1]) if vecs.size else None,
+                latency_ms=round((_time.perf_counter() - t0) * 1000, 2),
+            )
+        except Exception:
+            pass
         return vecs
 
     def _embed_batch(self, batch: List[str]) -> List[List[float]]:
@@ -195,6 +209,8 @@ class FastEmbedClient:
         self, texts: List[str], normalize_embeddings: bool = True
     ) -> np.ndarray:
         """Encode texts locally. Returns (N, dim) float32 array."""
+        import time as _time
+        t0 = _time.perf_counter()
         if not texts:
             return np.array([], dtype="float32")
 
@@ -208,6 +224,18 @@ class FastEmbedClient:
         if self._dim is None and vecs.size > 0:
             self._dim = vecs.shape[1]
 
+        try:
+            from core.perf_emit import emit
+            emit(
+                "embedding.batch",
+                backend="onnx",
+                lane="fastembed",
+                batch_size=len(texts),
+                dimension=int(vecs.shape[1]) if vecs.size else None,
+                latency_ms=round((_time.perf_counter() - t0) * 1000, 2),
+            )
+        except Exception:
+            pass
         return vecs
 
 

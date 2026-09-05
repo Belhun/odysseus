@@ -52,6 +52,16 @@ python -m py_compile app.py routes/*.py src/*.py
 node --check static/js/<file-you-changed>.js
 ```
 
+Changes to performance tracking should also pass:
+
+```bash
+python -m pytest tests/test_perf_tracking.py -q
+pip install psutil   # recommended on Windows
+python tests/perf_integration_check.py
+```
+
+See [docs/performance-tracking.md](docs/performance-tracking.md) for full setup and manual validation steps.
+
 For Docker-related changes:
 
 ```bash
