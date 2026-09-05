@@ -138,8 +138,46 @@ def test_gmessages_proxy_requires_admin(monkeypatch, tmp_path):
     app = FastAPI()
     app.include_router(setup_phonepi_routes())
     client = TestClient(app)
-    res = client.get("/gmessages/")
+    res = client.get("/gmessages/", headers={"Accept": "text/html"})
     assert res.status_code == 503
+    assert "Google Messages" in res.text
+
+
+def test_gmessages_proxy_serves_html(monkeypatch, tmp_path):
+    monkeypatch.setenv("PHONEPI_ENABLED", "true")
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    monkeypatch.setenv("ODYSSEUS_DATA_DIR", str(tmp_path))
+
+    import httpx
+
+    class FakeResponse:
+        status_code = 200
+        content = b"<html><script>fetch(`/api/status`)</script></html>"
+        headers = {"content-type": "text/html; charset=utf-8"}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def request(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("src.gmessages_proxy._ensure_bridge_running", lambda: True)
+    monkeypatch.setattr("src.gmessages_proxy.httpx.AsyncClient", lambda **kwargs: FakeClient())
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routes.phonepi_routes import setup_phonepi_routes
+
+    app = FastAPI()
+    app.include_router(setup_phonepi_routes())
+    client = TestClient(app)
+    res = client.get("/gmessages/", headers={"Accept": "text/html"})
+    assert res.status_code == 200
+    assert "/gmessages/api/status" in res.text
 
 
 def test_phonepi_proxy_rejects_missing_token(monkeypatch, tmp_path):
