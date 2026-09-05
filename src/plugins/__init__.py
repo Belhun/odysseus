@@ -1,0 +1,1 @@
+"""Odysseus optional plugin registry."""

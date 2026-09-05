@@ -6,7 +6,7 @@ import uiModule from './ui.js';
 import markdownModule from './markdown.js';
 import * as spinnerModule from './spinner.js';
 import { makeWindowDraggable } from './windowDrag.js';
-import { topPortalZ } from './toolWindowZOrder.js';
+import { nextToolWindowZ, topPortalZ } from './toolWindowZOrder.js';
 import { sortModelIds } from './modelSort.js';
 import { ordinalSuffix } from './util/ordinal.js';
 import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
@@ -598,6 +598,7 @@ const _CATEGORY_MAP = {
   email_auto_translate:       'Email',
   learn_sender_signatures:    'Email',
   check_email_urgency:        'Email',
+  sync_local_emails:          'Email',
   daily_brief:                'Assistant',
   test_skills:                'Skills',
   audit_skills:               'Skills',
@@ -1741,14 +1742,17 @@ async function _showRunHistory(taskId, taskName) {
     html += '<div class="task-runs-list">';
     for (const run of runs) {
       const statusClass = run.status === 'success' ? 'task-run-success' : (run.status === 'error' || run.status === 'failed') ? 'task-run-error' : 'task-run-running';
-      html += `<div class="task-run-item ${statusClass}">
+      const perfBadge = _renderPerfBadge(run.metrics);
+      html += `<div class="task-run-item ${statusClass}" data-task-id="${_esc(taskId)}" data-run-id="${_esc(run.id || '')}">
         <div class="task-run-item-header">
           ${_statusDot(run.status === 'success' ? 'active' : run.status)}
           <span>${run.status}</span>
           ${run.model ? `<span class="task-run-model" style="font-size:10px;opacity:0.5;">${_esc(run.model.split('/').pop())}</span>` : ''}
+          ${perfBadge}
           <span class="task-run-time" title="${run.started_at ? _esc(_relativeTime(run.started_at)) : ''}">${run.started_at ? _absoluteTime(run.started_at) : ''}</span>
         </div>
         <div class="task-run-result">${_esc(run.result ? (run.result.length > 300 ? run.result.slice(0, 300) + '…' : run.result) : run.error || '—')}</div>
+        ${run.metrics && run.id ? '<div class="task-log-perf-detail" data-task-id="' + _esc(taskId) + '" data-run-id="' + _esc(run.id) + '"></div>' : ''}
       </div>`;
     }
     html += '</div>';
@@ -1761,17 +1765,22 @@ async function _showRunHistory(taskId, taskName) {
     _renderMainView();
   });
 
-  // Click to expand/collapse result
+  // Click to expand/collapse result + load perf sparkline
   body.querySelectorAll('.task-run-item').forEach((item, i) => {
     const resultEl = item.querySelector('.task-run-result');
     const run = runs[i];
-    if (!run.result || run.result.length <= 300) return;
-    let expanded = false;
-    resultEl.style.cursor = 'pointer';
-    resultEl.addEventListener('click', () => {
-      expanded = !expanded;
-      resultEl.textContent = expanded ? run.result : run.result.slice(0, 300) + '…';
-    });
+    const canExpand = !!(run.result && run.result.length > 300);
+    if (canExpand) {
+      let expanded = false;
+      resultEl.style.cursor = 'pointer';
+      resultEl.addEventListener('click', () => {
+        expanded = !expanded;
+        resultEl.textContent = expanded ? run.result : run.result.slice(0, 300) + '…';
+        if (expanded) _loadPerfSparkline(item);
+      });
+    } else if (run.metrics && run.id) {
+      _loadPerfSparkline(item);
+    }
   });
 }
 
@@ -2106,6 +2115,8 @@ async function _renderActivityView() {
         sessionId: r.session_id || '',
         researchId: r.research_id || '',
         output_target: r.output_target || 'session',
+        runId: r.id || '',
+        metrics: r.metrics || null,
       };
     });
     _buildChips();
@@ -2177,6 +2188,78 @@ function _fmtElapsed(ms) {
   return h + 'h ' + (m % 60) + 'm';
 }
 
+function _fmtRamMb(mb) {
+  if (mb == null || Number.isNaN(mb)) return '';
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+  return Math.round(mb) + ' MB';
+}
+
+function _renderPerfBadge(metrics) {
+  if (!metrics || typeof metrics !== 'object') return '';
+  const parts = [];
+  const cpu = metrics.tree_cpu_pct_peak ?? metrics.cpu_pct_peak;
+  if (cpu != null && cpu > 0) parts.push(Math.round(cpu) + '% CPU');
+  const ram = metrics.tree_rss_mb_peak ?? metrics.rss_mb_peak;
+  if (ram != null && ram > 0) parts.push(_fmtRamMb(ram));
+  if (metrics.gpu_util_peak > 0) parts.push(Math.round(metrics.gpu_util_peak) + '% GPU');
+  if (metrics.duration_ms != null) parts.push(_fmtElapsed(metrics.duration_ms));
+  if (!parts.length) return '';
+  const shared = metrics.concurrent_max > 1
+    ? ' title="CPU/RAM shared with other concurrent runs"'
+    : '';
+  return `<span class="task-log-perf-badge"${shared}>${_escHtml(parts.join(' · '))}</span>`;
+}
+
+function _renderPerfSparkline(samples) {
+  if (!samples || !samples.length) return '';
+  const cpus = samples.map(s => {
+    const tree = s.tree || {};
+    const proc = s.process || {};
+    return tree.cpu_pct ?? proc.cpu_pct ?? 0;
+  });
+  const max = Math.max(...cpus, 1);
+  const w = 120;
+  const h = 24;
+  const pad = 1;
+  const step = cpus.length > 1 ? w / (cpus.length - 1) : w;
+  const pts = cpus.map((v, i) => {
+    const x = (i * step).toFixed(1);
+    const y = (h - pad - (v / max) * (h - 2 * pad)).toFixed(1);
+    return `${x},${y}`;
+  }).join(' ');
+  return `<svg class="task-log-perf-sparkline-svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="${pts}"/></svg>`;
+}
+
+async function _fetchRunSamples(taskId, runId) {
+  if (!taskId || !runId) return [];
+  try {
+    const res = await fetch(`${API_BASE}/api/tasks/${taskId}/runs/${runId}/samples`, {
+      credentials: 'same-origin',
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.samples || [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function _loadPerfSparkline(row) {
+  const slot = row.querySelector('.task-log-perf-detail');
+  if (!slot || slot.dataset.loaded === '1') return;
+  const taskId = slot.dataset.taskId;
+  const runId = slot.dataset.runId;
+  if (!taskId || !runId) return;
+  slot.dataset.loaded = 'loading';
+  const samples = await _fetchRunSamples(taskId, runId);
+  if (!samples.length) {
+    slot.remove();
+    return;
+  }
+  slot.innerHTML = _renderPerfSparkline(samples);
+  slot.dataset.loaded = '1';
+}
+
 // Single 1-second interval ticks all running rows' elapsed counters.
 // Started lazily when a running row appears, cleared when none remain.
 let _activityTimerInterval = null;
@@ -2228,11 +2311,15 @@ function _wireActivityRows(list) {
     // Click anywhere on the row to toggle expand.
     // Buttons inside still get their own handlers via stopPropagation.
     if (!row.classList.contains('is-skipped')) {
-      row.addEventListener('click', () => row.classList.toggle('expanded'));
+      row.addEventListener('click', () => {
+        row.classList.toggle('expanded');
+        if (row.classList.contains('expanded')) _loadPerfSparkline(row);
+      });
     }
     row.querySelector('.task-log-row-toggle')?.addEventListener('click', (e) => {
       e.stopPropagation();
       row.classList.toggle('expanded');
+      if (row.classList.contains('expanded')) _loadPerfSparkline(row);
     });
     row.querySelector('.task-log-open-chat')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2567,6 +2654,10 @@ function _renderActivityEntry(entry) {
       </div>
     `;
   }
+  const perfBadge = _renderPerfBadge(entry.metrics);
+  const perfDetail = (entry.metrics && entry.runId && entry.taskId)
+    ? `<div class="task-log-perf-detail" data-task-id="${_escHtml(entry.taskId)}" data-run-id="${_escHtml(entry.runId)}"></div>`
+    : '';
   return `
     <div class="task-log-row${rowStatusClass}${long ? ' is-long' : ''}${_isRunning ? ' is-running' : ''}" data-kind="${_escHtml(entry.kind)}" data-entry-idx="${entryIdx}" style="${styleVars}">
       <div class="task-log-row-head">
@@ -2575,9 +2666,11 @@ function _renderActivityEntry(entry) {
         <span class="task-log-name">${_escHtml(entry.taskName)}</span>${failedTag}${_taskAiMark(entry)}
         ${repeatBadge}
         <span style="flex:1"></span>
+        ${perfBadge}
         ${rightHtml}
       </div>
       ${(_isRunning && !hasRunningProgress) ? '' : `<div class="task-log-row-body">${resultHtml}</div>`}
+      ${perfDetail}
       ${promptHtml}
       <div class="task-log-row-actions">
         ${long ? '<button class="task-log-row-toggle" type="button">Show more</button>' : '<span></span>'}
@@ -2711,13 +2804,19 @@ function _renderMainView() {
 
 // ---- Modal ----
 
+function _raiseTasksModal(modal) {
+  if (!modal) return;
+  modal.style.setProperty('z-index', String(nextToolWindowZ({ exclude: modal })), 'important');
+}
+
 export function openTasks(focusId, opts) {
   startNotificationPolling();
   const o = opts || {};
   const openActivityForFailure = _taskFailurePending && !focusId && o.filter === undefined;
   _setTaskFailurePending(false);
   if (_open) {
-    // Already open — just focus the requested task / apply filter.
+    // Already open — surface above any other tool window, then focus/filter.
+    _raiseTasksModal(document.getElementById('tasks-modal'));
     if (openActivityForFailure) _switchTab('activity');
     if (o.filter !== undefined) { _taskFilter = o.filter; _renderList(); }
     if (focusId) _focusTask(focusId);
@@ -2761,6 +2860,7 @@ export function openTasks(focusId, opts) {
     </div>
   `;
   document.body.appendChild(modal);
+  _raiseTasksModal(modal);
 
   // Tab routing
   modal.querySelectorAll('.tasks-tab').forEach(btn => {

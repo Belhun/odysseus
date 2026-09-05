@@ -81,6 +81,7 @@ _COMMON_TOOL_NAMES = {
     "list_sessions",
     "ls",
     "manage_calendar",
+    "manage_finance",
     "manage_contact",
     "manage_documents",
     "manage_endpoints",

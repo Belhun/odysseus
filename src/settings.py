@@ -188,6 +188,17 @@ DEFAULT_SETTINGS = {
         "Newsletters, marketing, automated digests, and FYI-only updates are "
         "NOT urgent."
     ),
+    # Local email mirror (background sync_local_emails task + read_local_emails tool).
+    "email_local_sync_enabled": True,
+    "email_local_sync_folders": ["__ALL_MAIL__"],
+    "email_local_sync_backfill_batch": 500,
+    "email_local_sync_flag_refresh_window": 100,
+    "email_local_sync_max_attachment_bytes": 15_728_640,
+    "email_local_sync_attachment_budget_bytes": 402_653_184,
+    "email_local_sync_max_sync_seconds": 180,
+    "email_local_sync_account_delay_ms": 500,
+    "email_local_sync_chunk_delay_ms": 150,
+    "email_local_sync_single_pass_mime": False,
     # Keyboard shortcuts (action: key combination)
     "keybinds": {
         "search": "ctrl+k",
@@ -209,6 +220,8 @@ DEFAULT_FEATURES = {
     "rag": True,
     "sensitive_filter": True,
     "gallery": True,
+    "finance": False,   # optional plugin — enabled on Integrations install
+    "sysforge": False,  # optional Business Management plugin — Integrations install
 }
 
 
@@ -275,7 +288,58 @@ _PER_USER_KEYS = {
     "default_endpoint_id", "default_model", "default_model_fallbacks",
     "utility_endpoint_id", "utility_model", "utility_model_fallbacks",
     "research_endpoint_id", "research_model",
+    # Local email mirror: per-user read routing + sync folder rules.
+    "email_local_only",
+    "email_local_sync_folders",
+    "email_local_sync_backfill_batch",
 }
+
+
+def get_email_local_settings(owner: str = "") -> dict[str, Any]:
+    """Merge per-user local-email prefs with global sync defaults."""
+    global_settings = load_settings()
+    folders = get_user_setting(
+        "email_local_sync_folders",
+        owner,
+        global_settings.get("email_local_sync_folders") or ["__ALL_MAIL__"],
+    )
+    if not isinstance(folders, list) or not folders:
+        folders = ["__ALL_MAIL__"]
+    backfill = get_user_setting(
+        "email_local_sync_backfill_batch",
+        owner,
+        global_settings.get("email_local_sync_backfill_batch", 500),
+    )
+    try:
+        backfill = int(backfill)
+    except (TypeError, ValueError):
+        backfill = 500
+    backfill = max(1, min(500, backfill))
+    return {
+        "email_local_sync_enabled": bool(
+            global_settings.get("email_local_sync_enabled", True)
+        ),
+        "email_local_sync_folders": [str(f) for f in folders if f],
+        "email_local_sync_backfill_batch": backfill,
+        "email_local_sync_flag_refresh_window": int(
+            global_settings.get("email_local_sync_flag_refresh_window", 100)
+        ),
+        "email_local_sync_max_attachment_bytes": int(
+            global_settings.get("email_local_sync_max_attachment_bytes", 15_728_640)
+        ),
+        "email_local_sync_attachment_budget_bytes": int(
+            global_settings.get("email_local_sync_attachment_budget_bytes", 402_653_184)
+        ),
+        "email_local_sync_max_sync_seconds": int(
+            global_settings.get("email_local_sync_max_sync_seconds", 180)
+        ),
+        "email_local_sync_account_delay_ms": int(
+            global_settings.get("email_local_sync_account_delay_ms", 500)
+        ),
+        "email_local_sync_chunk_delay_ms": int(
+            global_settings.get("email_local_sync_chunk_delay_ms", 150)
+        ),
+    }
 
 
 def get_user_setting(key: str, owner: str = "", default: Any = None) -> Any:

@@ -14,6 +14,10 @@ import time
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+# Instrument asyncio.to_thread before other modules import it.
+from core.async_thread import install as _install_perf_to_thread
+_install_perf_to_thread()
+
 
 def register_static_mime_types() -> None:
     """Force stable JS module MIME types across platforms.
@@ -243,6 +247,10 @@ app.add_middleware(_RequestTimeoutMiddleware)
 app.add_middleware(_InteractiveActivityMiddleware)
 app.add_middleware(_SlowRequestLogMiddleware)
 
+# ========= PERFORMANCE TRACKING =========
+from core.perf_middleware import PerfMiddleware
+app.add_middleware(PerfMiddleware)
+
 # ========= AUTH =========
 from routes.auth_routes import setup_auth_routes, SESSION_COOKIE
 
@@ -267,7 +275,7 @@ if AUTH_ENABLED:
         "/api/version",
         "/login",
     }
-    AUTH_EXEMPT_PREFIXES = ["/static"]
+    AUTH_EXEMPT_PREFIXES = ["/static", "/api/sysforge/companion/phone"]
     # Dynamic paths whose own handler proves identity via a path-embedded
     # secret instead of the session/bearer auth. The route handler at
     # routes/task_routes.py validates the per-task `webhook_token` itself
@@ -492,6 +500,26 @@ class _RevalidatingStatic(StaticFiles):
             resp.headers["Cache-Control"] = "no-cache"
         return resp
 
+
+_finance_static_dir = abs_join(BASE_DIR, "integrations/finance/static")
+if os.path.isdir(_finance_static_dir):
+    # Mount before /static — Starlette matches mounts in order; the broad
+    # /static handler would otherwise swallow /static/plugins/finance/*.
+    app.mount(
+        "/static/plugins/finance",
+        _RevalidatingStatic(directory=_finance_static_dir),
+        name="finance_plugin_static",
+    )
+
+_sysforge_static_dir = abs_join(BASE_DIR, "integrations/sysforge/static")
+if os.path.isdir(_sysforge_static_dir):
+    # Mount before /static — Starlette matches mounts in order; the broad
+    # /static handler would otherwise swallow /static/plugins/sysforge/*.
+    app.mount(
+        "/static/plugins/sysforge",
+        _RevalidatingStatic(directory=_sysforge_static_dir),
+        name="sysforge_plugin_static",
+    )
 
 app.mount("/static", _RevalidatingStatic(directory=STATIC_DIR), name="static")
 
@@ -832,6 +860,8 @@ logger.info("Webhook & API token routes initialized")
 # Notes (Google Keep-style notes/todos)
 from routes.note_routes import setup_note_routes
 app.include_router(setup_note_routes(task_scheduler, upload_handler=upload_handler))
+from routes.dossier_routes import setup_dossier_routes
+app.include_router(setup_dossier_routes())
 
 # Email
 from routes.email_routes import setup_email_routes
@@ -858,6 +888,15 @@ app.include_router(setup_vault_routes())
 # Contacts (CardDAV)
 from routes.contacts.contacts_routes import setup_contacts_routes
 app.include_router(setup_contacts_routes())
+
+from routes.plugin_routes import setup_plugin_routes
+app.include_router(setup_plugin_routes())
+
+from integrations.finance.routes import setup_finance_routes
+app.include_router(setup_finance_routes())
+
+from integrations.sysforge.routes import setup_sysforge_routes
+app.include_router(setup_sysforge_routes())
 
 from companion import setup_companion_routes
 app.include_router(setup_companion_routes())
@@ -902,6 +941,14 @@ async def serve_memory(request: Request):
 
 @app.get("/gallery")
 async def serve_gallery(request: Request):
+    return await serve_index(request)
+
+@app.get("/finance")
+async def serve_finance(request: Request):
+    return await serve_index(request)
+
+@app.get("/business")
+async def serve_business(request: Request):
     return await serve_index(request)
 
 @app.get("/tasks")
@@ -1047,6 +1094,10 @@ async def _startup_event():
             await register_builtin_servers(mcp_manager)
         except BaseException as e:
             logger.warning(f"Built-in MCP registration failed (non-critical): {type(e).__name__}: {e}")
+        # Do not wrap connect_all_enabled in asyncio.wait_for. mcp.client.stdio
+        # uses an internal anyio task group; cross-task cancellation from
+        # wait_for raises "Attempted to exit cancel scope in a different task
+        # than it was entered in" and can destabilize the event loop.
         try:
             await mcp_manager.connect_all_enabled()
         except asyncio.TimeoutError:
@@ -1242,7 +1293,23 @@ async def _startup_event():
     # cookbook_serve entry in BUILTIN_ACTIONS + src/cookbook_serve_lifecycle.py
     # removes the feature.
     from src.cookbook_serve_lifecycle import cookbook_serve_lifecycle_loop
-    _startup_tasks.append(asyncio.create_task(cookbook_serve_lifecycle_loop()))
+    _startup_tasks.append(asyncio.create_task(cookbook_serve_lifecycle_loop(), name="startup.cookbook_serve_lifecycle"))
+
+    # Performance tracking background samplers
+    try:
+        from core.process_sampler import start_process_sampler
+        from core.container_stats import start_container_sampler
+        from core.gpu_sampler import start_gpu_ollama_sampler
+        _perf_interval = float(os.getenv("ODYSSEUS_PERF_SAMPLE_INTERVAL", "30"))
+        _perf_task_interval = float(os.getenv("ODYSSEUS_PERF_TASK_INTERVAL", "2"))
+        _startup_tasks.append(start_process_sampler(_perf_interval, _perf_task_interval))
+        ct = start_container_sampler(max(_perf_interval, 60.0))
+        if ct:
+            _startup_tasks.append(ct)
+        _startup_tasks.append(start_gpu_ollama_sampler(_perf_interval))
+        logger.info("Performance tracking samplers started (ODYSSEUS_PERF=%s)", os.getenv("ODYSSEUS_PERF", "true"))
+    except Exception as e:
+        logger.warning("Performance tracking samplers failed to start: %s", e)
 
     logger.info("Application startup complete")
 
@@ -1269,6 +1336,15 @@ async def _shutdown_event():
         await mcp_manager.disconnect_all()
     except Exception as e:
         logger.warning(f"MCP shutdown error: {e}")
+    try:
+        from core.process_sampler import stop_process_sampler
+        from core.container_stats import stop_container_sampler
+        from core.gpu_sampler import stop_gpu_ollama_sampler
+        stop_process_sampler()
+        stop_container_sampler()
+        stop_gpu_ollama_sampler()
+    except Exception:
+        pass
     logger.info("Application shutdown complete")
 
 

@@ -241,6 +241,14 @@ def _task_to_dict(t: ScheduledTask, include_last_run_result: bool = False) -> di
 
 
 def _run_to_dict(r: TaskRun) -> dict:
+    metrics = None
+    raw = getattr(r, "metrics_json", None)
+    if raw:
+        try:
+            import json as _json
+            metrics = _json.loads(raw)
+        except Exception:
+            metrics = None
     return {
         "id": r.id,
         "task_id": r.task_id,
@@ -251,6 +259,7 @@ def _run_to_dict(r: TaskRun) -> dict:
         "error": r.error,
         "tokens_used": r.tokens_used,
         "model": r.model,
+        "metrics": metrics,
     }
 
 
@@ -978,6 +987,29 @@ def setup_task_routes(task_scheduler) -> APIRouter:
             return {"runs": [_run_to_dict(r) for r in runs], "total": total}
         finally:
             db.close()
+
+    @router.get("/{task_id}/runs/{run_id}/samples")
+    async def get_run_samples(request: Request, task_id: str, run_id: str):
+        """Per-run resource sample series (CPU/RAM/GPU over the run window)."""
+        user = _owner(request)
+        db = SessionLocal()
+        try:
+            task = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
+            if not task:
+                raise HTTPException(404, "Task not found")
+            if user and task.owner != user:
+                raise HTTPException(403, "Access denied")
+        finally:
+            db.close()
+        from core.perf_emit import tail_events, read_file_tail
+        rows = tail_events(1000, event_prefix="task.run.resource_sample")
+        samples = [e for e in rows if e.get("run_id") == run_id]
+        if not samples:
+            samples = [
+                e for e in read_file_tail(2000)
+                if e.get("event") == "task.run.resource_sample" and e.get("run_id") == run_id
+            ]
+        return {"run_id": run_id, "count": len(samples), "samples": samples}
 
     @router.get("/meta/output-targets")
     async def list_output_targets(request: Request):

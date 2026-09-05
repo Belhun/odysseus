@@ -247,6 +247,7 @@ HOUSEKEEPING_DEFAULTS = {
     "extract_email_events": {"name": "Email Calendar Events",    "schedule": "cron",  "scheduled_time": None,    "cron_expression": "0 */1 * * *", "ship_paused": True, "legacy_names": ["Email → Calendar Events"]},
     "classify_events":      {"name": "Calendar Classify Events", "schedule": "cron",  "scheduled_time": None,    "cron_expression": "0 6,18 * * *", "ship_paused": True, "legacy_names": ["Classify Calendar Events"]},
     "check_email_urgency":   {"name": "Email Tags",               "schedule": "cron",  "scheduled_time": None,    "cron_expression": "0 * * * *", "ship_paused": True, "old_cron_expressions": ["*/15 * * * *"], "legacy_names": ["Email Triage", "Urgent Email"]},
+    "sync_local_emails":     {"name": "Email Local Sync",         "schedule": "cron",  "scheduled_time": None,    "cron_expression": "*/20 * * * *", "ship_paused": True},
     "audit_skills":          {"name": "Skills Audit",             "trigger_type": "event", "trigger_event": "skill_added", "trigger_count": 5, "schedule": None, "scheduled_time": None, "cron_expression": None, "legacy_names": ["Audit Skills"]},
 }
 
@@ -811,6 +812,14 @@ class TaskScheduler:
     ):
         from core.database import SessionLocal, ScheduledTask, TaskRun
 
+        import time as _perf_time
+        _perf_t0 = _perf_time.perf_counter()
+        _perf_registered = False
+        _perf_tokens = None
+        _perf_task_name = ""
+        _perf_task_type = ""
+        _trigger = "schedule"
+
         db = SessionLocal()
         try:
             task = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
@@ -885,6 +894,46 @@ class TaskScheduler:
             # previous llm/research run's model. The executors set it once the
             # model is resolved.
             self._last_run_model = None
+            from core.perf_context import (
+                run_id_var, task_id_var, workload_kind_var, workload_name_var,
+            )
+            from core.perf_workload import emit_task_lifecycle
+            from core import perf_runs
+            _trigger = task.trigger_type or "schedule"
+            _perf_task_name = task.name
+            _perf_task_type = task_type
+            # Keep run_id live in contextvars for the WHOLE execution so child
+            # events (LLM calls, embeddings, subprocesses) and the resource
+            # sampler attribute back to this run. Reset in the method finally.
+            _perf_tokens = (
+                run_id_var.set(run_id),
+                task_id_var.set(task_id),
+                workload_kind_var.set("scheduler"),
+                workload_name_var.set(f"task:{task.name}"),
+            )
+            perf_runs.register(
+                run_id,
+                task_id=task_id,
+                task_name=task.name,
+                task_type=task_type,
+                action=task.action or "",
+            )
+            _perf_registered = True
+            emit_task_lifecycle(
+                "started",
+                run_id=run_id,
+                task_id=task_id,
+                task_name=task.name,
+                task_type=task_type,
+                action=task.action or "",
+                trigger=_trigger,
+            )
+            # Immediate baseline sample so even very short runs get >=1 point.
+            try:
+                from core.process_sampler import sample_process, _attribute_to_active_runs
+                _attribute_to_active_runs(sample_process())
+            except Exception:
+                pass
             foreground_cancel = {"hit": False}
             foreground_monitor = None
             if gate_foreground:
@@ -1153,6 +1202,50 @@ class TaskScheduler:
             except Exception:
                 logger.exception("Task %s error-path failed unexpectedly", task_id)
         finally:
+            # Finalize per-task performance metrics on EVERY exit path
+            # (success, error, abort, noop, defer). Best-effort; never raises.
+            if _perf_registered:
+                try:
+                    from core import perf_runs
+                    from core.perf_workload import emit_task_lifecycle
+                    import json as _json
+                    _dur_ms = (_perf_time.perf_counter() - _perf_t0) * 1000
+                    _final_status = "unknown"
+                    _mdb = SessionLocal()
+                    try:
+                        _rr = _mdb.query(TaskRun).filter(TaskRun.id == run_id).first()
+                        if _rr is not None:
+                            _final_status = _rr.status or "unknown"
+                        _agg = perf_runs.complete(run_id, _dur_ms, _final_status)
+                        if _rr is not None and _agg is not None:
+                            _rr.metrics_json = _json.dumps(_agg)
+                            _mdb.commit()
+                    finally:
+                        _mdb.close()
+                    emit_task_lifecycle(
+                        "completed" if _final_status == "success" else _final_status,
+                        run_id=run_id,
+                        task_id=task_id,
+                        task_name=_perf_task_name,
+                        task_type=_perf_task_type,
+                        action="",
+                        trigger=_trigger,
+                        duration_ms=round(_dur_ms, 2),
+                    )
+                except Exception:
+                    logger.debug("perf finalize failed for run %s", run_id, exc_info=True)
+                finally:
+                    if _perf_tokens:
+                        try:
+                            from core.perf_context import (
+                                run_id_var, task_id_var, workload_kind_var, workload_name_var,
+                            )
+                            run_id_var.reset(_perf_tokens[0])
+                            task_id_var.reset(_perf_tokens[1])
+                            workload_kind_var.reset(_perf_tokens[2])
+                            workload_name_var.reset(_perf_tokens[3])
+                        except Exception:
+                            pass
             db.close()
             handle = self._task_handles.get(task_id)
             if handle is asyncio.current_task():
@@ -1180,6 +1273,7 @@ class TaskScheduler:
         "tidy_research",
         "test_skills",
         "audit_skills",
+        "sync_local_emails",
     })
 
     _MODEL_BACKED_ACTIONS = frozenset({
@@ -1610,6 +1704,12 @@ class TaskScheduler:
             _global_disabled = get_setting("disabled_tools", [])
             if isinstance(_global_disabled, list):
                 disabled_tools.update(_global_disabled)
+        except Exception:
+            pass
+
+        try:
+            from src.tool_security import live_imap_read_disabled_tools
+            disabled_tools.update(live_imap_read_disabled_tools(task.owner))
         except Exception:
             pass
 

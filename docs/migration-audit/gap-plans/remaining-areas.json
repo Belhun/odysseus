@@ -1,0 +1,133 @@
+{
+  "updated": "2026-07-19",
+  "plugin_version": "0.17.0",
+  "source_of_truth": "STATUS.md",
+  "notes": "Parity MVP shop loop is complete. All shippable leftover slices from this file are Done. remaining[] is empty — only deferred epics and deeper polish remain. People-dossier is host and Done — excluded.",
+  "remaining": [],
+  "recently_shipped": [
+    {
+      "id": "screw-map-review-0.16.1",
+      "title": "Screw-map S3/library REVIEW tighten",
+      "shipped": "2026-07-19",
+      "notes": "Plugin 0.16.1: migration 0031 source-map UNIQUE; block zero-photo publish; DeviceModel sync on project update; max_results caps on browse/lookup."
+    },
+    {
+      "id": "future-ui-in-business-shortcuts",
+      "title": "In-Business host shortcut actions",
+      "shipped": "2026-07-19",
+      "notes": "Host keybinds sysforge_home / sysforge_clients / sysforge_calculator (unbound by default). Closes future-ui-mru-shell-polish shippable work."
+    },
+    {
+      "id": "screw-maps-canvas-depth",
+      "title": "Screw-map canvas polish (zoom/pan, notes)",
+      "shipped": "2026-07-19",
+      "notes": "Wheel zoom + middle/Alt pan; note-marker place/edit UI. Image delete/reorder skipped (not on desktop). S5 still deferred."
+    },
+    {
+      "id": "backup-json-document-binaries",
+      "title": "JSON export: invoice document binaries",
+      "shipped": "2026-07-19",
+      "notes": "invoiceDocuments[].contentBase64 embed on export; import restores under documents/. Metadata-only JSON remains valid."
+    },
+    {
+      "id": "projects-display-code",
+      "title": "Projects DisplayCode human-readable IDs",
+      "shipped": "2026-07-19",
+      "notes": "Auto YYMMDD-ABBR-CAT-SEQ on create; unique index 0032; hub/detail/search. Manual override / reprint labels deferred."
+    },
+    {
+      "id": "projects-rich-notes-p4",
+      "title": "Projects P4 rich notes (light)",
+      "shipped": "2026-07-19",
+      "notes": "Markdown toolbar (bold/italic/code/link) + live preview. Full Obsidian/WYSIWYG and PDF/screenshot embed deferred."
+    },
+    {
+      "id": "projects-inventory-light-p6",
+      "title": "Projects P6 inventory light",
+      "shipped": "2026-07-19",
+      "notes": "PartStock (0033); catalog on-hand edit; project part badges; soft reserve on create / release on archive. Draft-invoice reserve / PO / Snipe-IT deferred."
+    }
+  ],
+  "deferred_epics": [
+    {
+      "id": "roles-rbac",
+      "title": "Roles / RBAC / multi-user permissions",
+      "source": "invoice-ops-pdf-payments-merge out of scope; STATUS invoice-ops out of scope",
+      "priority": "low",
+      "scope_summary": "Full roles, users, and permission gates for Business (Invoice-Roadmap v3+ / MASTER §7 Later).",
+      "exclude": "Not next. Invoice-ops A–E (PDF, email, payments, merge, sales CSV) already Done."
+    },
+    {
+      "id": "quickbooks-sync",
+      "title": "QuickBooks / external accounting sync",
+      "source": "invoice-ops out of scope; STATUS remaining backlog",
+      "priority": "low",
+      "scope_summary": "Two-way or export sync with QuickBooks or similar external accounting tools.",
+      "exclude": "Not next. Prefer CSV/sales report already shipped before any accounting sync."
+    },
+    {
+      "id": "screw-maps-s5-mobile",
+      "title": "Screw-map S5 mobile companion",
+      "source": "screw-maps-s0-s2 deferred; STATUS screw-map depth",
+      "priority": "low",
+      "scope_summary": "LAN QR, inbox folder, and relay companion for phone capture while annotating maps on desktop/web.",
+      "exclude": "Not next. Tablet browser on shop floor is the substitute. Canvas zoom/pan/notes shipped; image delete/reorder skipped (not on desktop)."
+    },
+    {
+      "id": "screw-map-image-delete-reorder",
+      "title": "Screw-map image delete / reorder",
+      "source": "screw-maps-canvas-depth skipped; STATUS screw-map depth",
+      "priority": "low",
+      "scope_summary": "Delete or reorder screw-map images after upload. Desktop SysForge has neither; intentionally skipped with canvas polish.",
+      "exclude": "Not shippable parity. Only revisit if desktop adds it first or product explicitly asks."
+    },
+    {
+      "id": "multi-jurisdiction-tax",
+      "title": "Multi-jurisdiction tax engines",
+      "source": "invoice-ops out of scope; STATUS remaining backlog",
+      "priority": "low",
+      "scope_summary": "Tax regions / multi-rate engines beyond single shop `tax_rate_bps`.",
+      "exclude": "Not next. Single-rate Business settings tax already Done."
+    },
+    {
+      "id": "recurring-invoices",
+      "title": "Recurring invoices / automation reminders",
+      "source": "invoice-ops out of scope; STATUS remaining backlog",
+      "priority": "low",
+      "scope_summary": "Scheduled recurring invoices and reminder automations (v3+).",
+      "exclude": "Not next. Core invoice create/edit/payments loop is Done."
+    },
+    {
+      "id": "host-integrations-phase-10",
+      "title": "Host integrations (Snipe-IT, Wazuh, NetBox, n8n)",
+      "source": "STATUS Host / integrations; MASTER Phase 10",
+      "priority": "low",
+      "scope_summary": "Managed-IT and automation integrations outside the Business plugin shop loop.",
+      "exclude": "Separate product track. Not Business parity leftovers. People-dossier is host and Done — do not reopen here."
+    },
+    {
+      "id": "future-ui-nav-themes-profiles",
+      "title": "Nav persist across reload + Avalonia themes/profiles",
+      "source": "future-ui-mru-shell-polish leftovers; VI2 locked no; STATUS Future UI out of scope",
+      "priority": "low",
+      "scope_summary": "Persist Business nav history across full page reload, plus Avalonia-faithful themes/user profiles / plugin marketplace visions.",
+      "exclude": "VI2 = no for nav persist. Themes stay Odysseus global. In-Business shortcuts shipped; this epic stays parked."
+    },
+    {
+      "id": "projects-notes-embed-wysiwyg",
+      "title": "Projects notes: Obsidian/WYSIWYG + embeds",
+      "source": "projects-rich-notes-p4 deferred depth; STATUS Projects polish leftovers",
+      "priority": "low",
+      "scope_summary": "Full Obsidian-style or WYSIWYG project notes with PDF/screenshot inline embeds beyond the markdown toolbar + preview shipped in 0.17.0.",
+      "exclude": "Not next. P4 light (toolbar + preview) already Done."
+    },
+    {
+      "id": "projects-inventory-depth",
+      "title": "Draft-invoice stock reserve / PO / Snipe-IT",
+      "source": "projects-inventory-light-p6 deferred depth; STATUS Projects polish leftovers",
+      "priority": "low",
+      "scope_summary": "Reserve stock from draft invoice lines, purchase orders, and Snipe-IT asset sync beyond PartStock soft reserve/release.",
+      "exclude": "Not next. PartStock inventory light already Done in 0.17.0."
+    }
+  ]
+}

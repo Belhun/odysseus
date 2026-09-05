@@ -6,6 +6,7 @@ These handle the actual execution logic for each tool type.
 """
 
 import logging
+from datetime import datetime
 from typing import Dict, Optional
 
 from src.tool_utils import get_mcp_manager  # re-exported: tests patch src.tool_implementations.get_mcp_manager
@@ -60,8 +61,14 @@ from src.tools.cookbook import (  # noqa: F401
 from src.tools.search import do_search_chats  # noqa: F401
 # Notes domain extracted to src/tools/notes.py (slice 1, #4082/#4071).
 from src.tools.notes import do_manage_notes  # noqa: F401
+from src.tools.archive import do_manage_archive  # noqa: F401
+from src.tools.dossier import do_manage_dossier  # noqa: F401
+from src.tools.dossier_search import do_search_dossier  # noqa: F401
 # Calendar domain extracted to src/tools/calendar.py (slice 1, #4082/#4071).
 from src.tools.calendar import do_manage_calendar  # noqa: F401
+from src.tools.finance import do_manage_finance  # noqa: F401
+from src.tools.sysforge import do_manage_sysforge  # noqa: F401
+from src.tools.stage_upload import do_stage_upload  # noqa: F401
 # Image domain extracted to src/tools/image.py (slice 1, #4082/#4071).
 from src.tools.image import do_edit_image  # noqa: F401
 # Research domain extracted to src/tools/research.py (slice 1, #4082/#4071).
@@ -113,3 +120,258 @@ def get_active_email() -> Optional[Dict[str, str]]:
 def clear_active_email() -> None:
     global _active_email_ref
     _active_email_ref = None
+
+
+def _format_untrusted_email_block(label: str, body: str) -> str:
+    from src.prompt_security import UNTRUSTED_CONTEXT_HEADER
+    text = body or ""
+    return (
+        f"{UNTRUSTED_CONTEXT_HEADER}\n"
+        f"Source: {label}\n\n"
+        "<<<UNTRUSTED_SOURCE_DATA>>>\n"
+        f"{text}\n"
+        "<<<END_UNTRUSTED_SOURCE_DATA>>>"
+    )
+
+
+async def do_read_local_emails(content: str, owner: Optional[str] = None) -> Dict:
+    """Query the local email mirror (list, search, or full body by row id / uid)."""
+    import asyncio
+    from routes.calendar_routes import parse_due_for_user
+    from routes.email_local_store import (
+        get_local_email,
+        get_local_email_by_uid,
+        query_local_emails,
+        resolve_account_id,
+        search_local_emails,
+    )
+
+    try:
+        args = _parse_tool_args(content)
+    except ValueError:
+        return {"error": "Invalid JSON arguments", "exit_code": 1}
+
+    folder = args.get("folder") or "INBOX"
+    account_sel = args.get("account")
+    account_id = resolve_account_id(account_sel, owner=owner or "") if account_sel else None
+    if account_sel and not account_id:
+        return {"error": f"Email account not found for {account_sel!r}", "exit_code": 1}
+
+    q = (args.get("q") or "").strip()
+    if q:
+        try:
+            limit = max(1, min(500, int(args.get("limit") or 20)))
+        except (TypeError, ValueError):
+            return {"error": f"Invalid limit: {args.get('limit')!r}", "exit_code": 1}
+        try:
+            offset = max(0, int(args.get("offset") or 0))
+        except (TypeError, ValueError):
+            return {"error": f"Invalid offset: {args.get('offset')!r}", "exit_code": 1}
+        emails, total, resolved_folder = await asyncio.to_thread(
+            search_local_emails,
+            owner or "",
+            q,
+            account_id=account_id,
+            folder=folder,
+            limit=limit,
+            offset=offset,
+        )
+        if not emails:
+            return {"output": f"No local emails matched {q!r}.", "exit_code": 0}
+        list_lines = []
+        for i, r in enumerate(emails, 1):
+            read_mark = "read" if r.get("is_read") else "unread"
+            att = " 📎" if r.get("has_attachments") else ""
+            list_lines.append(
+                f"{i}. UID {r.get('uid')} account={account_id or ''} — "
+                f"{r.get('subject', '(no subject)')} "
+                f"— {r.get('from_name') or r.get('from_address')} — "
+                f"{r.get('date_display', '')} ({read_mark}){att}"
+            )
+            if r.get("snippet"):
+                list_lines.append(f"   {r['snippet'][:200]}")
+        header = f"Local search ({resolved_folder}, q={q!r}, total={total}):"
+        output = header + "\n" + _format_untrusted_email_block(
+            "local email search",
+            "\n".join(list_lines),
+        )
+        output += (
+            "\n\nUse read_local_emails with full=true and uid=<IMAP UID> "
+            "for full body + attachment paths."
+        )
+        return {"output": output, "exit_code": 0}
+
+    if args.get("full"):
+        if args.get("uid") is not None:
+            row = await asyncio.to_thread(
+                get_local_email_by_uid,
+                owner or "",
+                account_id,
+                folder,
+                args["uid"],
+            )
+            if not row:
+                return {"error": f"Local email uid {args['uid']!r} not found", "exit_code": 1}
+            untrusted_lines = [
+                f"UID: {row['uid']}",
+                f"Account id: {account_id or ''}",
+                f"Folder: {row.get('folder', folder)}",
+                f"Subject: {row.get('subject', '')}",
+                f"From: {row.get('from_name', '')} <{row.get('from_address', '')}>",
+                f"Date: {row.get('date', '')}",
+            ]
+            if row.get("attachments"):
+                untrusted_lines.append(f"\nAttachments ({len(row['attachments'])}):")
+                for a in row["attachments"]:
+                    extra = f" → {a['local_path']}" if a.get("local_path") else ""
+                    untrusted_lines.append(
+                        f"  - [{a.get('index')}] {a.get('filename')} "
+                        f"({a.get('content_type')}, {a.get('size', 0)} bytes){extra}"
+                    )
+            body_parts = []
+            if row.get("body"):
+                body_parts.append(row["body"])
+            if row.get("body_html") and row.get("body_html") not in (row.get("body") or ""):
+                body_parts.append(f"[HTML body]\n{row['body_html']}")
+            if body_parts:
+                untrusted_lines.append("")
+                untrusted_lines.append("\n\n---\n\n".join(body_parts))
+            output = _format_untrusted_email_block(
+                "local email",
+                "\n".join(untrusted_lines),
+            )
+            return {"output": output, "exit_code": 0}
+        if args.get("id") is None:
+            return {"error": "full=true requires id or uid", "exit_code": 1}
+        try:
+            row_id = int(args["id"])
+        except (TypeError, ValueError):
+            return {"error": f"Invalid id: {args.get('id')!r}", "exit_code": 1}
+        row = await asyncio.to_thread(get_local_email, owner or "", row_id)
+        if not row:
+            return {"error": f"Local email id {args['id']} not found", "exit_code": 1}
+        untrusted_lines = [
+            f"Local id: {row['id']}",
+            f"UID: {row['uid']}",
+            f"Account id: {row['account_id']}",
+            f"Folder: {row['folder']}",
+            f"Subject: {row.get('subject', '')}",
+            f"From: {row.get('from_name', '')} <{row.get('from_addr', '')}>",
+            f"Date: {row.get('date_raw', '')}",
+        ]
+        if row.get("attachments"):
+            untrusted_lines.append(f"\nAttachments ({len(row['attachments'])}):")
+            for a in row["attachments"]:
+                extra = ""
+                if a.get("skipped_reason"):
+                    extra = f" [skipped: {a['skipped_reason']}]"
+                elif a.get("local_path"):
+                    extra = f" → {a['local_path']}"
+                untrusted_lines.append(
+                    f"  - [{a.get('idx')}] {a.get('filename')} "
+                    f"({a.get('content_type')}, {a.get('size', 0)} bytes){extra}"
+                )
+        body_parts = []
+        if row.get("body_text"):
+            body_parts.append(row["body_text"])
+        if row.get("body_html") and row.get("body_html") not in (row.get("body_text") or ""):
+            body_parts.append(f"[HTML body]\n{row['body_html']}")
+        if body_parts:
+            untrusted_lines.append("")
+            untrusted_lines.append("\n\n---\n\n".join(body_parts))
+        output = _format_untrusted_email_block(
+            "local email",
+            "\n".join(untrusted_lines),
+        )
+        return {"output": output, "exit_code": 0}
+
+    try:
+        limit = max(1, min(500, int(args.get("limit") or 10)))
+    except (TypeError, ValueError):
+        return {"error": f"Invalid limit: {args.get('limit')!r}", "exit_code": 1}
+    try:
+        offset = max(0, int(args.get("offset") or 0))
+    except (TypeError, ValueError):
+        return {"error": f"Invalid offset: {args.get('offset')!r}", "exit_code": 1}
+    since_epoch = None
+    until_epoch = None
+    if args.get("since"):
+        try:
+            since_epoch = datetime.fromisoformat(parse_due_for_user(str(args["since"]))).timestamp()
+        except Exception as e:
+            return {"error": f"Invalid since date: {e}", "exit_code": 1}
+    if args.get("until"):
+        try:
+            until_epoch = datetime.fromisoformat(parse_due_for_user(str(args["until"]))).timestamp()
+        except Exception as e:
+            return {"error": f"Invalid until date: {e}", "exit_code": 1}
+
+    rows = await asyncio.to_thread(
+        query_local_emails,
+        owner or "",
+        account_id=account_id,
+        folder=folder,
+        limit=limit,
+        offset=offset,
+        since=since_epoch,
+        until=until_epoch,
+    )
+    if not rows:
+        return {"output": "No local emails found for that query.", "exit_code": 0}
+    list_lines = []
+    for i, r in enumerate(rows, 1):
+        read_mark = "read" if r.get("is_read") else "unread"
+        att = " 📎" if r.get("has_attachments") else ""
+        list_lines.append(
+            f"{i}. [id={r['id']}] UID {r['uid']} account={r.get('account_id')} — "
+            f"{r.get('subject', '(no subject)')} "
+            f"— {r.get('from_name') or r.get('from_addr')} — {r.get('date_raw', '')} ({read_mark}){att}"
+        )
+        if r.get("snippet"):
+            list_lines.append(f"   {r['snippet'][:200]}")
+    header = f"Local emails ({folder}, limit={limit}, offset={offset}):"
+    output = header + "\n" + _format_untrusted_email_block(
+        "local email list",
+        "\n".join(list_lines),
+    )
+    output += "\n\nUse read_local_emails with full=true and uid=<IMAP UID> (or id=<local row id>) for full body + attachment paths."
+    return {"output": output, "exit_code": 0}
+
+
+async def do_sync_local_emails(content: str, owner: Optional[str] = None) -> Dict:
+    """Trigger a local email mirror sync on demand."""
+    import asyncio
+    from routes.email_local_store import resolve_account_id, sync_all
+
+    try:
+        args = _parse_tool_args(content)
+    except ValueError:
+        return {"error": "Invalid JSON arguments", "exit_code": 1}
+
+    account_sel = args.get("account")
+    account_id = resolve_account_id(account_sel, owner=owner or "") if account_sel else None
+    if account_sel and not account_id:
+        return {"error": f"Email account not found for {account_sel!r}", "exit_code": 1}
+    accounts = [account_id] if account_id else None
+    full = bool(args.get("full", False))
+    result = await asyncio.to_thread(
+        sync_all,
+        owner or "",
+        accounts=accounts,
+        full=full,
+        max_sync_seconds=0 if full else None,
+    )
+    if result.get("busy"):
+        return {
+            "output": "Local email sync skipped: another sync is already running for this owner.",
+            "busy": True,
+            "exit_code": 0,
+        }
+    if not result.get("ok"):
+        return {"error": result.get("error") or "sync failed", "exit_code": 1}
+    from routes.email_local_store import format_sync_all_log
+
+    return {
+        "output": format_sync_all_log(result, duration_seconds=result.get("duration_seconds")),
+        "exit_code": 0,
+    }

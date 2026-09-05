@@ -733,6 +733,7 @@ class TaskRun(Base):
     error       = Column(Text, nullable=True)
     tokens_used = Column(Integer, nullable=True)
     steps       = Column(Text, nullable=True)             # JSON log of agent tool calls
+    metrics_json = Column(Text, nullable=True)            # JSON perf aggregates for the run
     model       = Column(String, nullable=True)           # model that actually ran (resolved at execution)
 
     task = relationship("ScheduledTask", backref=backref("runs", cascade="all, delete-orphan",
@@ -1047,6 +1048,30 @@ def _migrate_add_task_run_model_column():
             conn.close()
         except Exception:
             pass
+
+def _migrate_add_task_run_metrics_json_column():
+    """Add metrics_json column to task_runs for performance aggregates."""
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("PRAGMA table_info(task_runs)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if columns and "metrics_json" not in columns:
+            conn.execute("ALTER TABLE task_runs ADD COLUMN metrics_json TEXT")
+            conn.commit()
+            logging.getLogger(__name__).info("Migrated: added 'metrics_json' column to task_runs")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"task_runs metrics_json migration failed: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 
 def _migrate_add_supports_tools_column():
     """Add supports_tools column to model_endpoints if it doesn't exist."""
@@ -1701,6 +1726,126 @@ def _migrate_add_assistant_columns():
 
 
 
+class DossierPerson(TimestampMixin, Base):
+    """Person dossier (friend and/or client) for conversation knowledge."""
+    __tablename__ = "dossier_people"
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    display_name = Column(String, nullable=False, default="")
+    # JSON list, e.g. ["friend", "client"]
+    labels = Column(Text, nullable=False, default="[]")
+    carddav_uid = Column(String, nullable=True, index=True)
+    sysforge_client_id = Column(String, nullable=True, index=True)
+    notes = Column(Text, nullable=True)
+
+    situations = relationship(
+        "DossierSituation", back_populates="person", cascade="all, delete-orphan"
+    )
+    plans = relationship(
+        "DossierPlan", back_populates="person", cascade="all, delete-orphan"
+    )
+    facts = relationship(
+        "DossierKeyFact", back_populates="person", cascade="all, delete-orphan"
+    )
+    timeline_events = relationship(
+        "DossierTimelineEvent", back_populates="person", cascade="all, delete-orphan"
+    )
+    archive_items = relationship(
+        "DossierArchiveItem", back_populates="person"
+    )
+
+
+class DossierSituation(TimestampMixin, Base):
+    """First-class situation/case linked to a person."""
+    __tablename__ = "dossier_situations"
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    person_id = Column(String, ForeignKey("dossier_people.id"), nullable=False, index=True)
+    title = Column(String, nullable=False, default="")
+    status = Column(String, nullable=False, default="active")  # active | closed | archived
+    summary = Column(Text, nullable=True)
+
+    person = relationship("DossierPerson", back_populates="situations")
+    plans = relationship("DossierPlan", back_populates="situation")
+    facts = relationship("DossierKeyFact", back_populates="situation")
+    archive_items = relationship("DossierArchiveItem", back_populates="situation")
+
+
+class DossierArchiveItem(TimestampMixin, Base):
+    """Raw conversation archive item with tool provenance (citation backbone)."""
+    __tablename__ = "dossier_archive_items"
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    # Required provenance: tool name, or paste/import
+    source_tool = Column(String, nullable=False, index=True)
+    external_id = Column(String, nullable=True, index=True)
+    locator = Column(String, nullable=True)
+    body = Column(Text, nullable=False, default="")
+    captured_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    person_id = Column(String, ForeignKey("dossier_people.id"), nullable=True, index=True)
+    situation_id = Column(String, ForeignKey("dossier_situations.id"), nullable=True, index=True)
+    content_hash = Column(String, nullable=True, index=True)
+
+    person = relationship("DossierPerson", back_populates="archive_items")
+    situation = relationship("DossierSituation", back_populates="archive_items")
+
+
+class DossierPlan(TimestampMixin, Base):
+    """Citeable plan with how-we-got-here context."""
+    __tablename__ = "dossier_plans"
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    person_id = Column(String, ForeignKey("dossier_people.id"), nullable=False, index=True)
+    situation_id = Column(String, ForeignKey("dossier_situations.id"), nullable=True, index=True)
+    title = Column(String, nullable=False, default="")
+    summary = Column(Text, nullable=False, default="")
+    how_we_got_here = Column(Text, nullable=True)
+    # JSON list of archive item ids
+    source_archive_ids = Column(Text, nullable=False, default="[]")
+    origin = Column(String, nullable=True)  # odysseus_chat | paste | import | manual
+
+    person = relationship("DossierPerson", back_populates="plans")
+    situation = relationship("DossierSituation", back_populates="plans")
+
+
+class DossierKeyFact(TimestampMixin, Base):
+    """Short durable fact on a person/situation (not general memory)."""
+    __tablename__ = "dossier_key_facts"
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    person_id = Column(String, ForeignKey("dossier_people.id"), nullable=False, index=True)
+    situation_id = Column(String, ForeignKey("dossier_situations.id"), nullable=True, index=True)
+    label = Column(String, nullable=False, default="")
+    value = Column(Text, nullable=False, default="")
+    # JSON list of archive item ids
+    source_archive_ids = Column(Text, nullable=False, default="[]")
+
+    person = relationship("DossierPerson", back_populates="facts")
+    situation = relationship("DossierSituation", back_populates="facts")
+
+
+class DossierTimelineEvent(TimestampMixin, Base):
+    """Timeline entry — auto from ingest/saves or manual."""
+    __tablename__ = "dossier_timeline_events"
+
+    id = Column(String, primary_key=True, index=True)
+    owner = Column(String, nullable=False, index=True)
+    person_id = Column(String, ForeignKey("dossier_people.id"), nullable=False, index=True)
+    situation_id = Column(String, ForeignKey("dossier_situations.id"), nullable=True, index=True)
+    event_type = Column(String, nullable=False, default="note")
+    summary = Column(Text, nullable=False, default="")
+    ref_kind = Column(String, nullable=True)  # archive | plan | fact | link
+    ref_id = Column(String, nullable=True, index=True)
+    occurred_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+    person = relationship("DossierPerson", back_populates="timeline_events")
+
+
 class Note(TimestampMixin, Base):
     """A Google Keep-style note or checklist."""
     __tablename__ = "notes"
@@ -1936,6 +2081,7 @@ def init_db():
     _migrate_add_provider_auth_id_column()
     _migrate_add_supports_tools_column()
     _migrate_add_task_run_model_column()
+    _migrate_add_task_run_metrics_json_column()
     _migrate_add_owner_column()
     _migrate_add_document_archived_column()
     _migrate_add_last_message_at_column()
@@ -1968,6 +2114,7 @@ def init_db():
     _migrate_add_caldav_sync_columns()
     _migrate_add_calendar_recurrence_exdates()
     _migrate_chat_messages_fts()
+    _migrate_dossier_archive_fts()
     _migrate_encrypt_email_passwords()
     _migrate_encrypt_signatures()
     _migrate_encrypt_endpoint_keys()
@@ -2082,6 +2229,92 @@ def _migrate_chat_messages_fts():
     finally:
         try:
             conn.close()
+        except Exception:
+            pass
+
+
+def _migrate_dossier_archive_fts():
+    """Create FTS5 index + triggers for dossier_archive_items (SQLite)."""
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if db_path == ":memory:":
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        # Table may not exist yet on very old DBs before create_all; create_all
+        # runs first in init_db so this is normally present.
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "dossier_archive_items" not in tables:
+            return
+        try:
+            conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS temp._odysseus_dossier_fts5_probe "
+                "USING fts5(content)"
+            )
+            conn.execute("DROP TABLE IF EXISTS temp._odysseus_dossier_fts5_probe")
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                f"dossier_archive FTS migration skipped; FTS5 unavailable: {e}"
+            )
+            return
+
+        conn.executescript(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS dossier_archive_fts USING fts5(
+                body,
+                item_id UNINDEXED,
+                owner UNINDEXED
+            );
+
+            DROP TRIGGER IF EXISTS dossier_archive_fts_ai;
+            DROP TRIGGER IF EXISTS dossier_archive_fts_ad;
+            DROP TRIGGER IF EXISTS dossier_archive_fts_au;
+
+            CREATE TRIGGER IF NOT EXISTS dossier_archive_fts_ai
+            AFTER INSERT ON dossier_archive_items BEGIN
+                INSERT INTO dossier_archive_fts(body, item_id, owner)
+                VALUES (COALESCE(new.body, ''), new.id, new.owner);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS dossier_archive_fts_ad
+            AFTER DELETE ON dossier_archive_items BEGIN
+                DELETE FROM dossier_archive_fts WHERE item_id = old.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS dossier_archive_fts_au
+            AFTER UPDATE ON dossier_archive_items BEGIN
+                DELETE FROM dossier_archive_fts WHERE item_id = old.id;
+                INSERT INTO dossier_archive_fts(body, item_id, owner)
+                VALUES (COALESCE(new.body, ''), new.id, new.owner);
+            END;
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO dossier_archive_fts(body, item_id, owner)
+            SELECT COALESCE(a.body, ''), a.id, a.owner
+            FROM dossier_archive_items a
+            WHERE NOT EXISTS (
+                SELECT 1 FROM dossier_archive_fts fts
+                WHERE fts.item_id = a.id
+            )
+            """
+        )
+        conn.commit()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"dossier_archive FTS migration failed: {e}")
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
         except Exception:
             pass
 

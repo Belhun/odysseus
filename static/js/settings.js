@@ -1846,6 +1846,10 @@ const SHORTCUT_DEFAULTS = {
   open_notes:     '',
   open_tasks:     '',
   open_theme:     '',
+  open_sysforge:  '',
+  sysforge_home:  '',
+  sysforge_clients: '',
+  sysforge_calculator: '',
 };
 
 const SHORTCUT_ICONS = {
@@ -1869,6 +1873,10 @@ const SHORTCUT_ICONS = {
   open_notes:     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h10l4 4v14H5z"/><path d="M15 3v5h5"/><path d="M8 17.5 15.5 10l2.5 2.5L10.5 20H8z"/></svg>',
   open_tasks:     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M9 16l2 2 4-4"/></svg>',
   open_theme:     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 0 0 20 5 5 0 0 0 5-5 3 3 0 0 0-3-3h-2a3 3 0 0 1-3-3 5 5 0 0 1 5-5"/></svg>',
+  open_sysforge:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-6h6v6"/></svg>',
+  sysforge_home:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>',
+  sysforge_clients: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  sysforge_calculator: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="8" y2="10"/><line x1="12" y1="10" x2="12" y2="10"/><line x1="16" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="8" y2="14"/><line x1="12" y1="14" x2="12" y2="14"/><line x1="16" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="8" y2="18"/><line x1="12" y1="18" x2="12" y2="18"/><line x1="16" y1="18" x2="16" y2="18"/></svg>',
 };
 
 const SHORTCUT_LABELS = {
@@ -1892,13 +1900,17 @@ const SHORTCUT_LABELS = {
   open_notes:     'Open Notes',
   open_tasks:     'Open Tasks',
   open_theme:     'Open Theme',
+  open_sysforge:  'Open Business',
+  sysforge_home:  'Business dashboard',
+  sysforge_clients: 'Business clients',
+  sysforge_calculator: 'Business calculator',
 };
 
 const SHORTCUT_CATEGORIES = [
   { name: 'Navigation', keys: ['search', 'toggle_sidebar', 'focus_input', 'settings'] },
   { name: 'Sessions', keys: ['new_session', 'fav_session', 'delete_session'] },
   { name: 'Tools', keys: ['incognito', 'tts', 'cancel'] },
-  { name: 'Open Tools', keys: ['open_calendar', 'open_compare', 'open_cookbook', 'open_research', 'open_gallery', 'open_library', 'open_memory', 'open_notes', 'open_tasks', 'open_theme'] },
+  { name: 'Open Tools', keys: ['open_calendar', 'open_compare', 'open_cookbook', 'open_research', 'open_gallery', 'open_library', 'open_memory', 'open_notes', 'open_tasks', 'open_theme', 'open_sysforge', 'sysforge_home', 'sysforge_clients', 'sysforge_calculator'] },
 ];
 
 function _formatKeyCaps(combo) {
@@ -1946,6 +1958,23 @@ async function initShortcuts() {
     if (settings.keybinds) keybinds = { ...keybinds, ...settings.keybinds };
   } catch (e) {}
 
+  // Hide Open Business + in-Business actions when the plugin feature is off.
+  let features = {};
+  try {
+    const fr = await fetch('/api/auth/features', { credentials: 'same-origin' });
+    features = fr.ok ? await fr.json() : {};
+  } catch (e) {}
+
+  function _categoryKeys(keys) {
+    return keys.filter((action) => {
+      // Hide Open Business + in-Business actions when the plugin is inactive.
+      if (action === 'open_sysforge' || action.startsWith('sysforge_')) {
+        return Boolean(features.sysforge);
+      }
+      return true;
+    });
+  }
+
   function _findConflicts() {
     const comboMap = {};
     for (const [action, combo] of Object.entries(keybinds)) {
@@ -1969,7 +1998,7 @@ async function initShortcuts() {
       catHeader.textContent = cat.name;
       listEl.appendChild(catHeader);
 
-      for (const action of cat.keys) {
+      for (const action of _categoryKeys(cat.keys)) {
         if (!(action in keybinds)) continue;
         const combo = keybinds[action];
         // Unbound shortcuts (empty combo) still render so the user can
@@ -2339,8 +2368,10 @@ function initAll() {
   initAccount();
   initIntegrations();
   initEmailSettings();
+  initLocalEmailRules();
   initEmailAccountsSettings();
   initReminderSettings();
+  initPluginIntegrations();
   initUnifiedIntegrations();
 }
 
@@ -2416,7 +2447,7 @@ async function initReminderSettings() {
     const res = await fetch('/api/email/accounts', { credentials: 'same-origin' });
     if (res.ok) {
       const d = await res.json();
-      emailAccounts = (d.accounts || []).filter(a => a.smtp_host && a.smtp_user && a.has_smtp_password);
+      emailAccounts = (d.accounts || []).filter(a => a.enabled !== false && a.smtp_host && a.smtp_user && a.has_smtp_password);
     }
   } catch (_) {}
   let smtpConfigured = emailAccounts.length > 0;
@@ -2520,7 +2551,7 @@ async function initReminderSettings() {
       const res = await fetch('/api/email/accounts', { credentials: 'same-origin' });
       if (res.ok) {
         const d = await res.json();
-        emailAccounts = (d.accounts || []).filter(a => a.smtp_host && a.smtp_user && a.has_smtp_password);
+        emailAccounts = (d.accounts || []).filter(a => a.enabled !== false && a.smtp_host && a.smtp_user && a.has_smtp_password);
       }
     } catch (_) {}
     smtpConfigured = emailAccounts.length > 0;
@@ -2825,6 +2856,8 @@ async function initEmailAccountsSettings() {
   if (tasksBtn && tasksBtn.dataset.bound !== '1') {
     tasksBtn.dataset.bound = '1';
     tasksBtn.addEventListener('click', async () => {
+      // Close settings first so Tasks isn't hidden behind this modal.
+      if (modalEl && !modalEl.classList.contains('hidden')) close();
       try {
         const mod = await import('./tasks.js');
         const openTasks = mod.openTasks || (mod.default && mod.default.openTasks);
@@ -2833,6 +2866,43 @@ async function initEmailAccountsSettings() {
       } catch (_) {
         document.getElementById('tool-tasks-btn')?.click();
       }
+    });
+  }
+  const localOnlyToggle = el('set-email-local-only');
+  const localOnlyMsg = el('set-email-local-only-msg');
+  if (localOnlyToggle && localOnlyToggle.dataset.bound !== '1') {
+    localOnlyToggle.dataset.bound = '1';
+    (async () => {
+      try {
+        const emailApi = await import('./emailApi.js');
+        localOnlyToggle.checked = await emailApi.loadLocalOnlyMode();
+      } catch (_) {}
+    })();
+    localOnlyToggle.addEventListener('change', async () => {
+      const on = localOnlyToggle.checked;
+      try {
+        const emailApi = await import('./emailApi.js');
+        await emailApi.setLocalOnlyMode(on);
+        if (localOnlyMsg) {
+          localOnlyMsg.textContent = on ? 'Local only on' : 'Local only off';
+          localOnlyMsg.style.color = 'var(--green,#50fa7b)';
+          setTimeout(() => { if (localOnlyMsg) localOnlyMsg.textContent = ''; }, 2000);
+        }
+        const libToggle = document.getElementById('email-lib-local-only');
+        if (libToggle) libToggle.checked = on;
+        try {
+          window.dispatchEvent(new CustomEvent('odysseus:email-local-only-changed', { detail: { on } }));
+        } catch (_) {}
+      } catch (e) {
+        localOnlyToggle.checked = !on;
+        if (localOnlyMsg) {
+          localOnlyMsg.textContent = 'Save failed';
+          localOnlyMsg.style.color = 'var(--red)';
+        }
+      }
+    });
+    window.addEventListener('odysseus:email-local-only-changed', (e) => {
+      if (e.detail && typeof e.detail.on === 'boolean') localOnlyToggle.checked = e.detail.on;
     });
   }
   const listEl = el('set-email-accounts-list');
@@ -3280,6 +3350,127 @@ async function initEmailSettings() {
   });
 }
 
+async function initLocalEmailRules() {
+  const card = el('set-local-email-rules-card');
+  if (!card) return;
+
+  const folderSel = el('set-local-sync-folders');
+  const backfillIn = el('set-local-backfill-batch');
+  const maxAttIn = el('set-local-max-attachment-mb');
+  const budgetIn = el('set-local-attachment-budget-mb');
+  const syncNote = el('set-local-sync-enabled-note');
+  const msg = el('set-local-email-rules-msg');
+
+  const PRESETS = [
+    { value: '__ALL_MAIL__', label: 'All Mail (recommended)' },
+    { value: 'INBOX', label: 'INBOX' },
+    { value: 'Sent', label: 'Sent' },
+  ];
+
+  const populateFolders = (imapFolders, selected) => {
+    if (!folderSel) return;
+    const selectedSet = new Set(Array.isArray(selected) ? selected : []);
+    folderSel.innerHTML = '';
+    const addOpt = (value, label) => {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      opt.selected = selectedSet.has(value);
+      folderSel.appendChild(opt);
+    };
+    PRESETS.forEach(p => addOpt(p.value, p.label));
+    (imapFolders || []).forEach(f => {
+      const name = f.name || f;
+      if (!name || PRESETS.some(p => p.value === name)) return;
+      addOpt(name, name);
+    });
+  };
+
+  try {
+    const [prefsRes, settingsRes, foldersRes] = await Promise.all([
+      fetch('/api/prefs/email_local_sync_folders', { credentials: 'same-origin' }),
+      fetch('/api/auth/settings', { credentials: 'same-origin' }),
+      fetch('/api/email/folders', { credentials: 'same-origin' }).catch(() => null),
+    ]);
+    let selectedFolders = ['__ALL_MAIL__'];
+    if (prefsRes.ok) {
+      const prefData = await prefsRes.json();
+      if (Array.isArray(prefData.value) && prefData.value.length) {
+        selectedFolders = prefData.value;
+      }
+    }
+    let globalSettings = {};
+    if (settingsRes.ok) {
+      globalSettings = await settingsRes.json();
+    }
+    if (syncNote) {
+      const enabled = globalSettings.email_local_sync_enabled !== false;
+      syncNote.textContent = enabled
+        ? 'Enabled globally (admin can disable in app settings)'
+        : 'Disabled globally — enable email_local_sync_enabled in admin settings';
+    }
+    let imapFolders = [];
+    if (foldersRes && foldersRes.ok) {
+      const fd = await foldersRes.json();
+      imapFolders = fd.folders || [];
+    }
+    populateFolders(imapFolders, selectedFolders);
+
+    const backfillPref = await fetch('/api/prefs/email_local_sync_backfill_batch', { credentials: 'same-origin' });
+    if (backfillPref.ok) {
+      const bd = await backfillPref.json();
+      if (backfillIn && bd.value != null) backfillIn.value = bd.value;
+    } else if (backfillIn) {
+      backfillIn.value = globalSettings.email_local_sync_backfill_batch || 500;
+    }
+
+    const maxBytes = globalSettings.email_local_sync_max_attachment_bytes || 15_728_640;
+    const budgetBytes = globalSettings.email_local_sync_attachment_budget_bytes || 402_653_184;
+    if (maxAttIn) maxAttIn.value = Math.round(maxBytes / (1024 * 1024));
+    if (budgetIn) budgetIn.value = Math.round(budgetBytes / (1024 * 1024));
+  } catch (_) {
+    populateFolders([], ['__ALL_MAIL__']);
+  }
+
+  el('set-local-email-rules-save')?.addEventListener('click', async () => {
+    if (msg) msg.textContent = 'Saving…';
+    try {
+      const selected = folderSel
+        ? Array.from(folderSel.selectedOptions).map(o => o.value).filter(Boolean)
+        : ['__ALL_MAIL__'];
+      const folders = selected.length ? selected : ['__ALL_MAIL__'];
+      const backfill = parseInt(backfillIn?.value, 10) || 500;
+      await fetch('/api/prefs/email_local_sync_folders', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: folders }),
+      });
+      await fetch('/api/prefs/email_local_sync_backfill_batch', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: Math.max(1, Math.min(500, backfill)) }),
+      });
+      const maxMb = parseInt(maxAttIn?.value, 10) || 15;
+      const budgetMb = parseInt(budgetIn?.value, 10) || 384;
+      await fetch('/api/auth/settings', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email_local_sync_max_attachment_bytes: maxMb * 1024 * 1024,
+          email_local_sync_attachment_budget_bytes: budgetMb * 1024 * 1024,
+        }),
+      });
+      if (msg) msg.textContent = '✓ Saved';
+    } catch (e) {
+      if (msg) msg.textContent = 'Failed to save';
+    }
+    setTimeout(() => { if (msg) msg.textContent = ''; }, 3000);
+  });
+}
+
 async function initIntegrations() {
   const listEl = el('integrations-list');
   const formCard = el('integration-form-card');
@@ -3557,6 +3748,135 @@ python3 ~/.claude/skills/odysseus/scripts/odysseus_api.py capabilities`,
   },
 };
 
+let _pluginsInited = false;
+
+async function initPluginIntegrations() {
+  if (_pluginsInited) return;
+  _pluginsInited = true;
+  const listEl = el('plugin-integrations-list');
+  if (!listEl) return;
+
+  async function renderPlugins() {
+    try {
+      const res = await fetch('/api/plugins/catalog', { credentials: 'same-origin' });
+      if (!res.ok) {
+        listEl.innerHTML = '';
+        return;
+      }
+      const data = await res.json();
+      const plugins = data.plugins || [];
+      if (!plugins.length) {
+        listEl.innerHTML = '';
+        return;
+      }
+      const pluginIcons = {
+        finance: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
+        sysforge: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-6h6v6"/></svg>',
+      };
+      listEl.innerHTML = `
+        <div style="font-size:11px;font-weight:600;opacity:0.55;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.4px;">Optional plugins</div>
+        ${plugins.map((p) => {
+          const installed = !!p.installed;
+          const btnLabel = installed ? 'Installed' : 'Install';
+          const btnDisabled = installed ? 'disabled' : '';
+          const icon = pluginIcons[p.id] || pluginIcons.sysforge;
+          return `<div class="intg-card plugin-card" data-plugin-id="${p.id}" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb, var(--fg) 3%, transparent);margin-bottom:8px;">
+            <span style="color:var(--accent, var(--red));flex-shrink:0">${icon}</span>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;font-weight:600">${p.name || p.id}</div>
+              <div style="font-size:11px;opacity:0.55;line-height:1.35">${p.description || ''}</div>
+              ${installed ? `<div style="font-size:10px;opacity:0.45;margin-top:2px;">v${p.installed_version || p.version}</div>` : ''}
+            </div>
+            <button type="button" class="admin-btn-sm plugin-install-btn" data-plugin-id="${p.id}" ${btnDisabled} style="white-space:nowrap;">${btnLabel}</button>
+            ${installed ? `<button type="button" class="admin-btn-sm plugin-uninstall-btn" data-plugin-id="${p.id}" style="white-space:nowrap;opacity:0.7;">Uninstall</button>` : ''}
+          </div>`;
+        }).join('')}`;
+      listEl.querySelectorAll('.plugin-install-btn:not([disabled])').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const pluginId = btn.dataset.pluginId;
+          btn.disabled = true;
+          btn.textContent = 'Installing…';
+          try {
+            const r = await fetch(`/api/plugins/${pluginId}/install`, { method: 'POST', credentials: 'same-origin' });
+            const body = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(body.detail || 'Install failed');
+            const restartMsg = body.reload_required
+              ? 'Restart the Odysseus server, then reload this page.'
+              : 'Reload this page to use the new feature.';
+            const already = body.already_installed ? ' (already installed)' : '';
+            uiModule.showToast(`Installed v${body.version || ''}${already} — ${restartMsg}`, 10000);
+            if (!body.reload_required && window.syncPluginNavVisibility) {
+              try {
+                const fr = await fetch('/api/auth/features', { credentials: 'same-origin' });
+                if (fr.ok) window.syncPluginNavVisibility(await fr.json());
+              } catch (_) {}
+            }
+            await renderPlugins();
+          } catch (err) {
+            uiModule.showToast(err.message || String(err), 5000);
+            btn.disabled = false;
+            btn.textContent = 'Install';
+          }
+        });
+      });
+      listEl.querySelectorAll('.plugin-uninstall-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const pluginId = btn.dataset.pluginId;
+          if (!await window.styledConfirm(`Uninstall ${pluginId}? Your data can be kept on disk.`, { confirmText: 'Uninstall', danger: true })) return;
+          const r = await fetch(`/api/plugins/${pluginId}/uninstall`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ remove_data: false }),
+          });
+          const body = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            uiModule.showToast(body.detail || 'Uninstall failed', 5000);
+            return;
+          }
+          // Hide plugin nav immediately — do not wait for a full page reload.
+          if (window.syncPluginNavVisibility) {
+            try {
+              const fr = await fetch('/api/auth/features', { credentials: 'same-origin' });
+              const features = fr.ok ? await fr.json() : {};
+              const cfg = window.PLUGIN_NAV?.[pluginId];
+              if (cfg) features[cfg.feature] = false;
+              window.syncPluginNavVisibility(features);
+            } catch (_) {
+              const cfg = window.PLUGIN_NAV?.[pluginId];
+              if (cfg) {
+                (cfg.ids || []).forEach((id) => {
+                  const node = el(id);
+                  if (node) node.style.display = 'none';
+                });
+                window._pluginFeaturesOff?.add(pluginId);
+              }
+            }
+          }
+          // Close open plugin modals so uninstall doesn't leave a dangling panel.
+          try {
+            if (pluginId === 'finance') {
+              const mod = await import('/static/plugins/finance/js/index.js');
+              (mod.closeFinance || mod.default?.closeFinance)?.();
+            } else if (pluginId === 'sysforge') {
+              const mod = await import('/static/plugins/sysforge/js/index.js');
+              (mod.closeSysforge || mod.default?.closeSysforge)?.();
+            }
+          } catch (_) {}
+          uiModule.showToast(body.reload_required
+            ? 'Uninstalled — restart the Odysseus server, then reload this page.'
+            : 'Uninstalled — plugin removed from navigation.', 8000);
+          await renderPlugins();
+        });
+      });
+    } catch (_) {
+      listEl.innerHTML = '';
+    }
+  }
+
+  await renderPlugins();
+}
+
 let _unifiedInited = false;
 
 async function initUnifiedIntegrations() {
@@ -3568,6 +3888,18 @@ async function initUnifiedIntegrations() {
   const addBtn = el('unified-intg-add-btn');
   if (!listEl) return;
   let integrationNotice = '';
+
+  const _intgBtnStyle = 'display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));';
+
+  async function _finishIntgToggle(msgEl, label) {
+    if (msgEl) {
+      msgEl.textContent = label;
+      msgEl.style.color = 'var(--green,#50fa7b)';
+    }
+    formEl.style.display = 'none';
+    await renderList();
+    notifyIntegrationsChanged();
+  }
 
   // Hide the "+ Add Integration" button whenever the per-type create form
   // is open so it doesn't compete visually with the in-progress form.
@@ -3607,7 +3939,7 @@ async function initUnifiedIntegrations() {
     }
     // CalDAV — one card per account
     for (const acc of (calRes.accounts || [])) {
-      items.push({ type: 'caldav', id: acc.id, name: acc.label || 'Calendar (CalDAV)', detail: acc.url, enabled: true, data: acc });
+      items.push({ type: 'caldav', id: acc.id, name: acc.label || 'Calendar (CalDAV)', detail: acc.url, enabled: acc.enabled !== false, data: acc });
     }
     // Contacts import first, then the optional CardDAV sync account.
     const contactCount = Number(contactsRes.count || (contactsRes.contacts || []).length || 0);
@@ -3617,7 +3949,7 @@ async function initUnifiedIntegrations() {
         id: '__contacts__',
         name: 'Contacts Import',
         detail: `${contactCount} contact${contactCount === 1 ? '' : 's'}`,
-        enabled: true,
+        enabled: contactsRes.import_enabled !== false,
         data: contactsRes,
       });
     }
@@ -3627,7 +3959,7 @@ async function initUnifiedIntegrations() {
         id: '__carddav__',
         name: 'Contacts (CardDAV)',
         detail: cardRes.url,
-        enabled: true,
+        enabled: cardRes.enabled !== false,
         data: cardRes,
       });
     }
@@ -3822,9 +4154,10 @@ async function initUnifiedIntegrations() {
           <div class="settings-row"><label class="settings-label">API Key${_apiHint('The secret token the service issued you (generated in its admin panel / settings). Used to prove your identity on each request. Required for any Auth mode except None.')}</label><input id="uf-api-key" class="settings-input" type="password" placeholder="Token/key"></div>
           <div class="settings-row" style="margin-top:10px;align-items:center;justify-content:flex-end;gap:6px;">
             <span id="uf-api-msg" style="font-size:11px;flex:1;margin-right:8px"></span>
-            <button class="admin-btn-add" id="uf-api-test" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">Test</button>
-            <button class="admin-btn-add" id="uf-api-save" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));font-weight:600;">Save</button>
-            <button class="admin-btn-add" id="uf-api-cancel" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">Cancel</button>
+            <button class="admin-btn-add" id="uf-api-test" style="${_intgBtnStyle}">Test</button>
+            <button class="admin-btn-add" id="uf-api-save" style="${_intgBtnStyle}font-weight:600;">Save</button>
+            ${editId && editId !== 'new' ? `<button class="admin-btn-add" id="uf-api-disable" style="${_intgBtnStyle}"></button>` : ''}
+            <button class="admin-btn-add" id="uf-api-cancel" style="${_intgBtnStyle}">Cancel</button>
           </div>
         </div>
       </div>`;
@@ -3874,14 +4207,41 @@ async function initUnifiedIntegrations() {
 
     const preset = el('uf-api-preset'), name = el('uf-api-name'), url = el('uf-api-url'), auth = el('uf-api-auth'), header = el('uf-api-header'), key = el('uf-api-key'), ntfyHint = el('uf-api-ntfy-hint');
     let _editId = editId && editId !== 'new' ? editId : null;
+    let _apiEnabled = true;
     // Load existing
     if (_editId) {
       try {
         const r = await fetch('/api/auth/integrations', { credentials: 'same-origin' });
         const d = await r.json();
         const item = (d.integrations || []).find(i => i.id === _editId);
-        if (item) { name.value = item.name || ''; url.value = item.base_url || ''; auth.value = item.auth_type || 'none'; header.value = item.auth_header || ''; }
+        if (item) {
+          name.value = item.name || '';
+          url.value = item.base_url || '';
+          auth.value = item.auth_type || 'none';
+          header.value = item.auth_header || '';
+          _apiEnabled = item.enabled !== false;
+        }
       } catch (_) {}
+      const disableBtn = el('uf-api-disable');
+      if (disableBtn) {
+        disableBtn.textContent = _apiEnabled ? 'Disable' : 'Enable';
+        disableBtn.addEventListener('click', async () => {
+          const next = !_apiEnabled;
+          try {
+            const r = await fetch(`/api/auth/integrations/${_editId}`, {
+              method: 'PUT', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: next }),
+            });
+            if (!r.ok) throw new Error();
+            _apiEnabled = next;
+            await _finishIntgToggle(el('uf-api-msg'), next ? 'Enabled' : 'Disabled');
+          } catch (_) {
+            el('uf-api-msg').textContent = 'Failed';
+            el('uf-api-msg').style.color = 'var(--red)';
+          }
+        });
+      }
     }
     // Native <select>: the option `value` is the preset key directly, so
     // no typed-name → key lookup is needed (datalist-era leftover).
@@ -3959,6 +4319,7 @@ async function initUnifiedIntegrations() {
   // ── CalDAV form (supports add + edit per account) ──
   async function showCalDavForm(editId) {
     const isNew = !editId || editId === 'new';
+    let _caldavEnabled = true;
     formEl.innerHTML = `
       <div class="admin-card" style="margin-top:8px">
         <h2 style="font-size:13px;display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent, var(--red));flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>${isNew ? 'Add CalDAV Calendar' : 'Edit CalDAV Calendar'}</h2>
@@ -3969,9 +4330,10 @@ async function initUnifiedIntegrations() {
           <div class="settings-row"><label class="settings-label">Password</label><input id="uf-caldav-pass" class="settings-input" type="password" placeholder="${isNew ? '' : 'Leave blank to keep existing'}"></div>
           <div class="settings-row" style="margin-top:10px;align-items:center;justify-content:flex-end;gap:6px;">
             <span id="uf-caldav-msg" style="font-size:11px;flex:1;margin-right:8px"></span>
-            <button class="admin-btn-add" id="uf-caldav-test" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">Test</button>
-            <button class="admin-btn-add" id="uf-caldav-save" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));font-weight:600;">Save</button>
-            <button class="admin-btn-add" id="uf-caldav-cancel" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">Cancel</button>
+            <button class="admin-btn-add" id="uf-caldav-test" style="${_intgBtnStyle}">Test</button>
+            <button class="admin-btn-add" id="uf-caldav-save" style="${_intgBtnStyle}font-weight:600;">Save</button>
+            ${!isNew ? `<button class="admin-btn-add" id="uf-caldav-disable" style="${_intgBtnStyle}"></button>` : ''}
+            <button class="admin-btn-add" id="uf-caldav-cancel" style="${_intgBtnStyle}">Cancel</button>
           </div>
         </div>
       </div>`;
@@ -3985,6 +4347,7 @@ async function initUnifiedIntegrations() {
           el('uf-caldav-label').value = acc.label || '';
           el('uf-caldav-url').value = acc.url || '';
           el('uf-caldav-user').value = acc.username || '';
+          _caldavEnabled = acc.enabled !== false;
         }
       } catch (_) {}
     }
@@ -4015,6 +4378,28 @@ async function initUnifiedIntegrations() {
       msg.textContent = text;
       msg.style.color = ok ? 'var(--green, #50fa7b)' : 'var(--red)';
     };
+
+    if (!isNew) {
+      const disableBtn = el('uf-caldav-disable');
+      if (disableBtn) {
+        disableBtn.textContent = _caldavEnabled ? 'Disable' : 'Enable';
+        disableBtn.addEventListener('click', async () => {
+          const next = !_caldavEnabled;
+          try {
+            const r = await fetch(`/api/calendar/config/accounts/${editId}`, {
+              method: 'PUT', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: next }),
+            });
+            if (!r.ok) throw new Error();
+            _caldavEnabled = next;
+            await _finishIntgToggle(el('uf-caldav-msg'), next ? 'Enabled' : 'Disabled');
+          } catch (_) {
+            _setCalDavMsg('Failed', false);
+          }
+        });
+      }
+    }
 
     el('uf-caldav-save').addEventListener('click', async () => {
       _setCalDavMsg('Testing…', true);
@@ -4069,6 +4454,8 @@ async function initUnifiedIntegrations() {
 
   // ── CardDAV form + contacts manager ──
   async function showCardDavForm() {
+    let _carddavEnabled = true;
+    let _contactsImportEnabled = true;
     formEl.innerHTML = `
       <div class="admin-card" style="margin-top:8px">
         <h2 style="font-size:13px;display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent, var(--red));flex-shrink:0;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Contacts (CardDAV)</h2>
@@ -4078,11 +4465,12 @@ async function initUnifiedIntegrations() {
           <div class="settings-row"><label class="settings-label">Password</label><input id="uf-carddav-pass" class="settings-input" type="password"></div>
           <div class="settings-row" style="margin-top:10px;align-items:center;justify-content:flex-end;gap:6px;">
             <span id="uf-carddav-msg" style="font-size:11px;flex:1;margin-right:8px"></span>
-            <button class="admin-btn-add" id="uf-carddav-save" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));font-weight:600;">
+            <button class="admin-btn-add" id="uf-carddav-disable" style="${_intgBtnStyle}"></button>
+            <button class="admin-btn-add" id="uf-carddav-save" style="${_intgBtnStyle}font-weight:600;">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
               Save
             </button>
-            <button class="admin-btn-add" id="uf-carddav-cancel" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">
+            <button class="admin-btn-add" id="uf-carddav-cancel" style="${_intgBtnStyle}">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               Cancel
             </button>
@@ -4092,7 +4480,8 @@ async function initUnifiedIntegrations() {
       <div class="admin-card contacts-manager" style="margin-top:8px">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
           <h2 style="font-size:13px;margin:0;display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent, var(--red));flex-shrink:0;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Contacts Import <span id="cm-count" style="opacity:0.5;font-weight:normal;font-size:11px;"></span></h2>
-          <button class="admin-btn-sm" id="cm-import-btn" style="margin-left:auto;">Import</button>
+          <button class="admin-btn-sm" id="cm-import-disable" style="margin-left:auto;"></button>
+          <button class="admin-btn-sm" id="cm-import-btn">Import</button>
           <button class="admin-btn-sm" id="cm-export-vcf-btn">Export .vcf</button>
           <button class="admin-btn-sm" id="cm-export-csv-btn">Export .csv</button>
           <button class="admin-btn-sm" id="cm-add-toggle">+ Add</button>
@@ -4111,12 +4500,55 @@ async function initUnifiedIntegrations() {
     try {
       const r = await fetch('/api/contacts/config', { credentials: 'same-origin' }); const d = await r.json();
       el('uf-carddav-url').value = d.url || ''; el('uf-carddav-user').value = d.username || '';
+      _carddavEnabled = d.enabled !== false;
+      _contactsImportEnabled = d.import_enabled !== false;
       // Server masks the password as '***' when one is saved (or '' when
       // none). Surface that state via the input's placeholder so users
       // can tell their password is already on file without us echoing it.
       const passInput = el('uf-carddav-pass');
       if (passInput && d.password) passInput.placeholder = '(unchanged)';
     } catch (_) {}
+    const carddavDisableBtn = el('uf-carddav-disable');
+    if (carddavDisableBtn) {
+      const hasCarddav = !!(el('uf-carddav-url')?.value || '').trim();
+      carddavDisableBtn.style.display = hasCarddav ? '' : 'none';
+      carddavDisableBtn.textContent = _carddavEnabled ? 'Disable' : 'Enable';
+      carddavDisableBtn.addEventListener('click', async () => {
+        const next = !_carddavEnabled;
+        try {
+          await fetch('/api/contacts/config', {
+            method: 'PUT', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ carddav_enabled: next }),
+          });
+          _carddavEnabled = next;
+          carddavDisableBtn.textContent = next ? 'Disable' : 'Enable';
+          await _finishIntgToggle(el('uf-carddav-msg'), next ? 'Enabled' : 'Disabled');
+        } catch (_) {
+          el('uf-carddav-msg').textContent = 'Failed';
+          el('uf-carddav-msg').style.color = 'var(--red)';
+        }
+      });
+    }
+    const importDisableBtn = el('cm-import-disable');
+    if (importDisableBtn) {
+      importDisableBtn.textContent = _contactsImportEnabled ? 'Disable import' : 'Enable import';
+      importDisableBtn.addEventListener('click', async () => {
+        const next = !_contactsImportEnabled;
+        try {
+          await fetch('/api/contacts/config', {
+            method: 'PUT', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contacts_import_enabled: next }),
+          });
+          _contactsImportEnabled = next;
+          importDisableBtn.textContent = next ? 'Disable import' : 'Enable import';
+          await _renderContactsManager();
+          await renderList();
+          notifyIntegrationsChanged();
+        } catch (_) {}
+      });
+    }
     el('uf-carddav-cancel').addEventListener('click', () => { formEl.style.display = 'none'; });
     el('uf-carddav-save').addEventListener('click', async () => {
       const body = { carddav_url: el('uf-carddav-url').value, carddav_username: el('uf-carddav-user').value };
@@ -4461,6 +4893,7 @@ async function initUnifiedIntegrations() {
               </span>
               <span class="uf-email-save-label">${isEdit ? 'Save' : 'Create'}</span>
             </button>
+            ${isEdit ? `<button class="admin-btn-add" id="uf-email-disable" style="${_intgBtnStyle}"></button>` : ''}
             <button class="admin-btn-add" id="uf-email-cancel" style="display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent, var(--red));border-color:color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               Cancel
@@ -4695,6 +5128,29 @@ async function initUnifiedIntegrations() {
       el('uf-imap-port').value = 993;
       el('uf-smtp-port').value = 465;
       el('uf-smtp-security').value = 'ssl';
+    }
+    if (isEdit && existing) {
+      const disableBtn = el('uf-email-disable');
+      if (disableBtn) {
+        const emailEnabled = existing.enabled !== false;
+        disableBtn.textContent = emailEnabled ? 'Disable' : 'Enable';
+        disableBtn.addEventListener('click', async () => {
+          const next = !emailEnabled;
+          try {
+            const r = await fetch(`/api/email/accounts/${editId}`, {
+              method: 'PUT', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: next }),
+            });
+            const d = await r.json();
+            if (!d.ok) throw new Error(d.error || 'Failed');
+            await _finishIntgToggle(el('uf-email-msg'), next ? 'Enabled' : 'Disabled');
+          } catch (e) {
+            el('uf-email-msg').textContent = e.message || 'Failed';
+            el('uf-email-msg').style.color = 'var(--red)';
+          }
+        });
+      }
     }
     el('uf-email-cancel').addEventListener('click', () => { formEl.style.display = 'none'; });
 
@@ -5789,7 +6245,7 @@ export function close() {
   _tryOpen();
 })();
 
-const settingsModule = { open, close, initIntegrations, initUnifiedIntegrations, syncAdminVisibility, refreshAiModelEndpoints };
+const settingsModule = { open, close, initIntegrations, initPluginIntegrations, initUnifiedIntegrations, syncAdminVisibility, refreshAiModelEndpoints };
 
 
 export default settingsModule;

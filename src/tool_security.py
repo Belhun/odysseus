@@ -31,13 +31,27 @@ BUILTIN_EMAIL_TOOLS = frozenset({
     "download_attachment",
 })
 
+# Native agent tools for the local email mirror (routes/email_local_store.py).
+# Not part of the email MCP server — kept separate so BUILTIN_EMAIL_TOOLS stays
+# in sync with mcp_servers/email_server.py (see tests/test_email_registry_sync.py).
+LOCAL_EMAIL_TOOLS = frozenset({
+    "read_local_emails",
+    "sync_local_emails",
+})
+
+LIVE_IMAP_READ_TOOLS = frozenset({
+    "list_emails",
+    "read_email",
+    "search_emails",
+})
+
 
 # Tools regular/public users must not execute directly. These either expose
 # server/runtime access, sensitive user data, external messaging, persistent
 # state changes, or generic loopback/integration surfaces. All email tools are
 # included (SECURITY.md: email/MCP capabilities are privileged admin
 # functionality).
-NON_ADMIN_BLOCKED_TOOLS = BUILTIN_EMAIL_TOOLS | {
+NON_ADMIN_BLOCKED_TOOLS = BUILTIN_EMAIL_TOOLS | LOCAL_EMAIL_TOOLS | {
     "bash",
     "python",
     "manage_bg_jobs",
@@ -63,6 +77,9 @@ NON_ADMIN_BLOCKED_TOOLS = BUILTIN_EMAIL_TOOLS | {
     "resolve_contact",
     "manage_contact",
     "manage_calendar",
+    "manage_archive",
+    "manage_dossier",
+    "search_dossier",
     "vault_search",
     "vault_get",
     "vault_unlock",
@@ -110,6 +127,7 @@ PLAN_MODE_READONLY_TOOLS = {
     # classified — see the plan-mode partition test in
     # tests/test_email_registry_sync.py.
     "search_emails",
+    "read_local_emails",
     "list_served_models",
     "list_downloads",
     "list_cached_models",
@@ -150,6 +168,7 @@ _PLAN_MODE_KNOWN_MUTATORS = {
     # entirely on the MCP read-only inventory being present and current.
     "draft_email", "draft_email_reply", "ai_draft_email_reply",
     "download_attachment",
+    "sync_local_emails",
     "download_model", "serve_model",
     "stop_served_model", "cancel_download", "adopt_served_model", "serve_preset",
     "generate_image", "edit_image", "trigger_research", "manage_research",
@@ -264,3 +283,31 @@ def blocked_tools_for_owner(owner: Optional[str]) -> Set[str]:
     if owner_is_admin_or_single_user(owner):
         return set()
     return set(NON_ADMIN_BLOCKED_TOOLS)
+
+
+def is_email_local_only(owner: Optional[str]) -> bool:
+    """True when the user has Local only email mode enabled."""
+    try:
+        from src.settings import get_user_setting
+        return bool(get_user_setting("email_local_only", owner or "", False))
+    except Exception:
+        return False
+
+
+def local_only_live_email_block_message() -> str:
+    return (
+        "Local only email mode is enabled. Live IMAP read tools (list_emails, "
+        "read_email, search_emails) are blocked. Run sync_local_emails to refresh "
+        "the local mirror, then use read_local_emails with uid (IMAP UID, not the "
+        "local row id) for full bodies, or pass q to search the local store."
+    )
+
+
+def live_imap_read_disabled_tools(owner: Optional[str]) -> Set[str]:
+    """Policy names to deny when Local only mode is on."""
+    if not is_email_local_only(owner):
+        return set()
+    disabled: set[str] = set()
+    for tool in LIVE_IMAP_READ_TOOLS:
+        disabled.update(email_tool_policy_names(tool))
+    return disabled

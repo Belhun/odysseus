@@ -181,7 +181,21 @@ export function handleUIControl(uiData) {
         var ids = { memories: 'tool-memory-btn', skills: 'skills-btn', settings: 'open-settings-btn' };
         var btn = document.getElementById(ids[panel]);
         if (btn) btn.click();
-      }
+      } else if (panel === 'finance') {
+        var financeBtn = document.getElementById('tool-finance-btn');
+        if (financeBtn) financeBtn.click();
+      } else if (panel === 'business') {
+        import('/static/plugins/sysforge/js/index.js').then(function(mod) {
+          var openFn = mod.openSysforge || (mod.default && mod.default.openSysforge);
+          if (openFn) {
+            openFn().then(function() {
+              var nav = mod.navigateBusiness || (mod.default && mod.default.navigateBusiness);
+              if (nav && (uiData.route || uiData.entity_id)) {
+                nav(uiData.route || 'dashboard', uiData.entity_id);
+              }
+            });
+          }
+        }).catch(function(){});
 
     } else if (uiEvent === 'open_email_reply' || uiData.ui_event === 'open_email_reply') {
       try {

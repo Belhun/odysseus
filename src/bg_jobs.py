@@ -156,6 +156,22 @@ def launch(command: str, session_id: str, cwd: Optional[str] = None,
     jobs = _load()
     jobs[job_id] = rec
     _save(jobs)
+    try:
+        from core.perf_context import job_id_var, session_id_var
+        from core.perf_emit import emit
+        token_j = job_id_var.set(job_id)
+        token_s = session_id_var.set(session_id)
+        emit(
+            "bg_job.launched",
+            job_id=job_id,
+            pid=proc.pid,
+            command_preview=command[:200],
+            max_runtime_s=max_runtime_s,
+        )
+        job_id_var.reset(token_j)
+        session_id_var.reset(token_s)
+    except Exception:
+        pass
     return rec
 
 

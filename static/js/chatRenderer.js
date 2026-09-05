@@ -2112,6 +2112,15 @@ export function removeAskUserCards(root) {
   scope.querySelectorAll('.ask-user-card').forEach((node) => node.remove());
 }
 
+/** Set when the user answers an ask_user card that minted a confirmation token. */
+let _pendingConfirmationReply = null;
+
+export function consumePendingConfirmation() {
+  const pending = _pendingConfirmationReply;
+  _pendingConfirmationReply = null;
+  return pending;
+}
+
 /**
  * Render an ask_user payload as a durable choice card.
  *
@@ -2163,6 +2172,14 @@ export function renderAskUserCard(payload, options) {
 
   const send = (text) => {
     if (!text) return;
+    if (aq.confirmation_token) {
+      _pendingConfirmationReply = {
+        token: String(aq.confirmation_token),
+        choice: text,
+      };
+    } else {
+      _pendingConfirmationReply = null;
+    }
     card.remove();
     const input = uiModule.el('message');
     if (input) input.value = text;
@@ -2748,6 +2765,7 @@ const chatRenderer = {
   safeDisplayImageSrc,
   removeAskUserCards,
   renderAskUserCard,
+  consumePendingConfirmation,
   buildSourcesBox,
   buildFindingsBox,
   appendReportButton,

@@ -614,14 +614,15 @@ async def _execute_tool_block_impl(
     from src.tool_implementations import (
         do_search_chats, do_manage_tasks,
         do_manage_skills, do_api_call, do_manage_notes,
-        do_manage_calendar,
+        do_manage_archive, do_manage_dossier, do_search_dossier,
+        do_manage_calendar, do_manage_finance,
         do_download_model, do_serve_model, do_list_served_models, do_stop_served_model,
         do_tail_serve_output,
         do_list_downloads, do_cancel_download, do_search_hf_models, do_list_cached_models,
         do_list_serve_presets, do_serve_preset, do_adopt_served_model,
         do_list_cookbook_servers,
         do_edit_image, do_trigger_research, do_manage_research, do_resolve_contact,
-        do_manage_contact,
+        do_manage_contact, do_read_local_emails, do_sync_local_emails,
         do_vault_search, do_vault_get, do_vault_unlock,
         do_app_api,
     )
@@ -683,6 +684,21 @@ async def _execute_tool_block_impl(
         result = {"error": f"Tool '{tool}' is disabled by user.", "exit_code": 1}
         logger.info(f"Tool blocked by user: {tool}")
         return desc, result
+
+    from src.tool_security import (
+        LIVE_IMAP_READ_TOOLS,
+        is_email_local_only,
+        local_only_live_email_block_message,
+    )
+    if is_email_local_only(owner):
+        live_policy = {
+            n for t in LIVE_IMAP_READ_TOOLS for n in email_tool_policy_names(t)
+        }
+        if not policy_names.isdisjoint(live_policy):
+            desc = f"{tool}: BLOCKED (local-only email mode)"
+            result = {"error": local_only_live_email_block_message(), "exit_code": 1}
+            logger.info("Tool blocked by local-only email mode: %s owner=%r", tool, owner)
+            return desc, result
 
     if tool_policy and any(tool_policy.blocks(name) for name in policy_names):
         desc = f"{tool}: BLOCKED"
@@ -806,9 +822,29 @@ async def _execute_tool_block_impl(
     elif tool == "manage_notes":
         desc = "manage_notes"
         result = await do_manage_notes(content, owner=owner)
+    elif tool == "manage_archive":
+        desc = "manage_archive"
+        result = await do_manage_archive(content, owner=owner)
+    elif tool == "manage_dossier":
+        desc = "manage_dossier"
+        result = await do_manage_dossier(content, owner=owner)
+    elif tool == "search_dossier":
+        desc = "search_dossier"
+        result = await do_search_dossier(content, owner=owner)
     elif tool == "manage_calendar":
         desc = "manage_calendar"
         result = await do_manage_calendar(content, owner=owner)
+    elif tool == "manage_finance":
+        desc = "manage_finance"
+        result = await do_manage_finance(content, owner=owner, session_id=session_id)
+    elif tool == "manage_sysforge":
+        from src.tools.sysforge import do_manage_sysforge
+        desc = "manage_sysforge"
+        result = await do_manage_sysforge(content, owner=owner, session_id=session_id)
+    elif tool == "stage_upload":
+        from src.tools.stage_upload import do_stage_upload
+        desc = "stage_upload"
+        result = await do_stage_upload(content, owner=owner, session_id=session_id)
     elif tool == "download_model":
         desc = "download_model"
         result = await do_download_model(content, owner=owner)
@@ -869,6 +905,12 @@ async def _execute_tool_block_impl(
     elif tool == "manage_contact":
         desc = "manage_contact"
         result = await do_manage_contact(content, owner=owner)
+    elif tool == "read_local_emails":
+        desc = "read_local_emails"
+        result = await do_read_local_emails(content, owner=owner)
+    elif tool == "sync_local_emails":
+        desc = "sync_local_emails"
+        result = await do_sync_local_emails(content, owner=owner)
     elif tool == "vault_search":
         desc = "vault_search"
         result = await do_vault_search(content, owner=owner)
@@ -944,7 +986,9 @@ async def _execute_tool_block_impl(
     elif tool in dynamic_handlers:
         first_line = content.split(chr(10))[0][:80]
         desc = f"registry: {tool} {first_line}".strip()
-        res = await _direct_fallback(tool, content, progress_cb=progress_cb)
+        res = await _direct_fallback(
+            tool, content, progress_cb=progress_cb, session_id=session_id, owner=owner,
+        )
 
         if isinstance(res, tuple):
             desc, result = res
