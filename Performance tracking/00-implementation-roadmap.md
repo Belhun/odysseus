@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-27  
 **Branch:** `feat/performance-tracking`  
-**Status:** Planning only — no implementation code yet  
+**Status:** Core implementation landed on `feat/performance-tracking`; see [docs/performance-tracking.md](../docs/performance-tracking.md) for setup and testing  
 **Audience:** Engineers implementing attribution for `python.exe` CPU spikes and cross-process CPU/RAM/GPU correlation
 
 ---
